@@ -1135,6 +1135,10 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
         offline,
     );
     alephcore::gateway::handlers::voice_turn::register_cancel(server.handlers_mut());
+    alephcore::gateway::handlers::voice_turn::register_capture(
+        server.handlers_mut(),
+        Some(platform.clone()),
+    );
 
     alephcore::gateway::handlers::voice_turn::register_synthesis(
         server.handlers_mut(),

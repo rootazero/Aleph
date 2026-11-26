@@ -551,9 +551,13 @@ async fn panel_route_rejects_traversal() {
 #[tokio::test]
 async fn voice_turn_v1_ingress_is_server_derived() {
     use crate::gateway::handlers::voice_turn_tests::{
-        mount_synthesis_bytes, transcribe_request, transcribe_request_with_samples, SttFixture,
+        mount_synthesis_bytes, transcribe_request, transcribe_request_with_samples,
+        CaptureMediaFixture, SttFixture,
     };
-    use aleph_protocol::panel_voice::MAX_UTTERANCE_SAMPLES;
+    use aleph_protocol::panel_voice::{
+        MAX_UTTERANCE_SAMPLES, VOICE_TURN_CAPTURE_CANCEL_METHOD, VOICE_TURN_CAPTURE_FINISH_METHOD,
+        VOICE_TURN_CAPTURE_METHOD, VOICE_TURN_CAPTURE_READY_METHOD, VOICE_TURN_TRANSCRIBE_METHOD,
+    };
     use futures::{SinkExt, StreamExt};
     use serde_json::{json, Value};
     use std::sync::atomic::Ordering;
@@ -587,6 +591,8 @@ async fn voice_turn_v1_ingress_is_server_derived() {
     let (mut gateway, _, manager) = fixture(true);
     gateway.config.require_idempotency_key = true;
     provider.mount(gateway.handlers_mut());
+    let media = std::sync::Arc::new(CaptureMediaFixture::default());
+    media.mount(gateway.handlers_mut());
     let tts_calls = mount_synthesis_bytes(gateway.handlers_mut(), 786_000);
     let stop = CancellationToken::new();
     let app = gateway.native_tls_router(gateway.build_shared_state(), stop.clone());
@@ -654,6 +660,22 @@ async fn voice_turn_v1_ingress_is_server_derived() {
         }});
         let response = call(&mut socket, hello).await;
         assert!(response.get("result").is_some(), "{response}");
+        let capture_id = uuid::Uuid::new_v4();
+        for method in [VOICE_TURN_CAPTURE_METHOD, VOICE_TURN_CAPTURE_READY_METHOD,
+            VOICE_TURN_CAPTURE_FINISH_METHOD, VOICE_TURN_CAPTURE_CANCEL_METHOD] {
+            let response = call(&mut socket, json!({"jsonrpc":"2.0","id":"capture",
+                "method":method,"params":{"capture_id":capture_id}})).await;
+            assert_eq!(response["error"]["code"], crate::gateway::protocol::METHOD_NOT_FOUND);
+        }
+        let response = call(&mut socket, json!({"jsonrpc":"2.0","id":"indirect-capture",
+            "method":VOICE_TURN_TRANSCRIBE_METHOD,"params":{
+                "turn_id":uuid::Uuid::new_v4(),"capture_id":capture_id
+            }})).await;
+        assert_eq!(response["error"]["data"]["kind"], "permission_denied");
+        let capture_entered = media.entered.notified();
+        tokio::pin!(capture_entered);
+        assert!(futures::poll!(&mut capture_entered).is_pending());
+        assert_eq!(provider.calls(), 0);
         assert_eq!(
             call(&mut socket, transcribe_request_with_samples(MAX_UTTERANCE_SAMPLES)).await["result"]["text"],
             "fixture"

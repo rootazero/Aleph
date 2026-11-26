@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::runtime::Handle;
 use tokio::sync::{oneshot, watch};
@@ -33,6 +33,9 @@ use aleph_protocol::desktop_bridge::envelope::{Message, Request, RpcError};
 use aleph_protocol::desktop_bridge::errors::{
     ERR_BRIDGE_DISABLED, ERR_HELPER_CRASHED, ERR_NOT_IMPLEMENTED, ERR_PERMISSION_DENIED,
     ERR_PLATFORM, ERR_TIMEOUT, ERR_UNSUPPORTED_LANGUAGE,
+};
+use aleph_protocol::desktop_bridge::methods::media::{
+    METHOD_AUDIO_RECORD, METHOD_AUDIO_RECORD_START, METHOD_CAMERA_CLIP, METHOD_VOICE_CAPTURE_START,
 };
 use aleph_protocol::desktop_bridge::methods::perm::PermissionGuide;
 use aleph_protocol::desktop_bridge::methods::suggested_timeout_ms;
@@ -119,7 +122,7 @@ type InflightReply = Result<BridgeRemoteReply>;
 struct BoundReplyEnvelope {
     jsonrpc: String,
     id: u64,
-    #[serde(default, deserialize_with = "present_bound_result")]
+    #[serde(default, deserialize_with = "present_bound_value")]
     result: Option<serde_json::Value>,
     #[serde(default, deserialize_with = "present_bound_error")]
     error: Option<RpcError>,
@@ -132,6 +135,14 @@ where
     use serde::de::{value::MapAccessDeserializer, MapAccess, Visitor};
     use serde::Deserialize;
 
+    #[derive(Deserialize)]
+    struct BoundError {
+        code: i32,
+        message: String,
+        #[serde(default, deserialize_with = "present_bound_value")]
+        data: Option<serde_json::Value>,
+    }
+
     struct BoundErrorVisitor;
 
     impl<'de> Visitor<'de> for BoundErrorVisitor {
@@ -142,17 +153,25 @@ where
         }
 
         fn visit_map<A: MapAccess<'de>>(self, map: A) -> std::result::Result<RpcError, A::Error> {
-            // Keep RpcError's duplicate-field checks by decoding the original map.
-            RpcError::deserialize(MapAccessDeserializer::new(map))
+            let BoundError {
+                code,
+                message,
+                data,
+            } = BoundError::deserialize(MapAccessDeserializer::new(map))?;
+            Ok(RpcError {
+                code,
+                message,
+                data: data.filter(|value| !value.is_null()),
+            })
         }
     }
 
     deserializer.deserialize_map(BoundErrorVisitor).map(Some)
 }
 
-// Preserve result presence and reject duplicate keys in its direct object
-// before Value normalizes them. Nested data remains owned by the method.
-fn present_bound_result<'de, D>(
+// Preserve result presence and reject duplicate direct keys in result/error
+// data before Value normalizes them. Nested values are owned by the method.
+fn present_bound_value<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<serde_json::Value>, D::Error>
 where
@@ -307,12 +326,31 @@ impl GenerationReplies {
 pub struct SwiftBridge {
     binary_path: PathBuf,
     offline_speech_root: Option<PathBuf>,
+    #[cfg(all(test, unix))]
+    stdout_frame_limit: usize,
     state: Arc<Mutex<BridgeState>>,
     id_seq: AtomicU64,
 }
 
+/// Owns an active helper resource. Calls never attach to a replacement;
+/// dropping the binding schedules exact retirement, not a release proof.
+#[must_use]
+pub struct BoundBridgeGeneration {
+    bridge: Arc<SwiftBridge>,
+    generation: Arc<BridgeGeneration>,
+    released: bool,
+}
+
+/// What a same-generation reply proves about an attempted acquisition.
+pub enum BoundStartReply {
+    Active,
+    NotAcquired(DesktopError),
+    Unproven(DesktopError),
+}
+
 struct BridgeState {
     process: Option<BridgeProcess>,
+    retired_mic: Option<Arc<BridgeGeneration>>,
     gate: SpawnGate,
     disabled: bool,
 }
@@ -321,6 +359,8 @@ struct BridgeProcess {
     child: Child,
     generation: Arc<BridgeGeneration>,
     reaped: watch::Sender<bool>,
+    mic_claims: usize,
+    open_recording_dispatched: bool,
 }
 
 struct BridgeGeneration {
@@ -332,22 +372,91 @@ struct BridgeGeneration {
     drain_ready_replies: AtomicBool,
     reaped: watch::Receiver<bool>,
     runtime: Handle,
+    #[cfg(all(test, unix))]
+    pause_reaper: Mutex<Option<oneshot::Receiver<()>>>,
 }
 
 #[derive(Clone, Copy)]
 enum Retirement {
     StdoutClosed,
+    StdoutFrameRejected(&'static str),
     WriteLaneClosed { terminal_io_failure: bool },
     BoundAbandoned,
     BridgeDropped,
 }
 
+// Stdout multiplexes replies, so a frame cannot be trusted to identify its
+// method before it is read. Leave room for inline 8K RGBA PNG screenshots
+// (127 MiB raw), base64 expansion and Foundation escaping every slash.
+const MAX_STDOUT_FRAME_BYTES: usize = 384 * 1024 * 1024;
+const STDOUT_FRAME_TOO_LARGE: &str = "helper stdout frame reached byte limit without newline";
+
+// Keep the partial frame outside the future: retirement can cancel a read
+// before the old reader makes its final nonblocking drain of ready replies.
+async fn read_stdout_frame<'a>(
+    reader: &mut (impl AsyncBufRead + Unpin),
+    frame: &'a mut Vec<u8>,
+    limit: usize,
+) -> std::result::Result<Option<&'a str>, &'static str> {
+    loop {
+        let available = reader
+            .fill_buf()
+            .await
+            .map_err(|_| "helper stdout read failed")?;
+        if available.is_empty() {
+            return if frame.is_empty() {
+                Ok(None)
+            } else {
+                Err("helper stdout frame ended without newline")
+            };
+        }
+        let remaining = limit - frame.len();
+        let readable = &available[..available.len().min(remaining)];
+        let newline = readable.iter().position(|byte| *byte == b'\n');
+        let length = newline.unwrap_or(readable.len());
+        if length == remaining {
+            return Err(STDOUT_FRAME_TOO_LARGE);
+        }
+        let needed = frame.len() + length;
+        if needed > frame.capacity() {
+            let capacity = needed.max(frame.capacity().saturating_mul(2)).min(limit);
+            frame
+                .try_reserve_exact(capacity - frame.len())
+                .map_err(|_| "could not allocate helper stdout frame")?;
+        }
+        frame.extend_from_slice(&readable[..length]);
+        reader.consume(length + usize::from(newline.is_some()));
+        if newline.is_some() {
+            return std::str::from_utf8(frame)
+                .map(Some)
+                .map_err(|_| "helper stdout frame is not UTF-8");
+        }
+    }
+}
+
+impl BridgeProcess {
+    fn is_generation(&self, expected: &BridgeGeneration) -> bool {
+        std::ptr::eq(self.generation.as_ref(), expected)
+    }
+}
+
 impl BridgeState {
+    fn mic_process(&mut self, expected: &BridgeGeneration) -> Option<&mut BridgeProcess> {
+        if self
+            .retired_mic
+            .as_ref()
+            .is_some_and(|old| !*old.reaped.borrow())
+        {
+            return None;
+        }
+        self.process.as_mut().filter(|p| p.is_generation(expected))
+    }
+
     fn retire(&mut self, expected: &BridgeGeneration, reason: Retirement) {
         if !self
             .process
             .as_ref()
-            .is_some_and(|p| std::ptr::eq(p.generation.as_ref(), expected))
+            .is_some_and(|p| p.is_generation(expected))
         {
             return;
         }
@@ -355,9 +464,17 @@ impl BridgeState {
             mut child,
             generation,
             reaped,
+            mic_claims,
+            open_recording_dispatched,
         } = self.process.take().expect("matched generation");
+        if mic_claims != 0 || open_recording_dispatched {
+            // The microphone entry gate forbids arming another generation
+            // before this exact child is reaped, so there is at most one debt.
+            self.retired_mic = Some(Arc::clone(&generation));
+        }
         let (failure, charge_gate) = match reason {
             Retirement::StdoutClosed => (Some("helper stdout closed"), true),
+            Retirement::StdoutFrameRejected(detail) => (Some(detail), true),
             Retirement::WriteLaneClosed {
                 terminal_io_failure,
             } => {
@@ -382,7 +499,13 @@ impl BridgeState {
         // Detachment and reaper handoff have no suspension point. Dropping the
         // waiter, EOF racing retirement, or installing a replacement cannot
         // cancel this task or publish proof for the wrong child.
+        #[cfg(all(test, unix))]
+        let pause_reaper = generation.pause_reaper.lock().unwrap().take();
         generation.runtime.spawn(async move {
+            #[cfg(all(test, unix))]
+            if let Some(pause) = pause_reaper {
+                let _ = pause.await;
+            }
             if let Err(err) = child.start_kill() {
                 tracing::warn!(target: "bridge", "helper kill request failed: {err}");
             }
@@ -398,10 +521,44 @@ impl BridgeState {
     }
 }
 
+#[derive(Clone, Copy)]
+enum MicClaim {
+    UntilProvenReleased,
+    UntilReaped,
+}
+
+impl MicClaim {
+    fn for_legacy_request(request: &Request) -> Option<Self> {
+        match request.method.as_str() {
+            METHOD_AUDIO_RECORD => Some(Self::UntilProvenReleased),
+            METHOD_AUDIO_RECORD_START => Some(Self::UntilReaped),
+            METHOD_CAMERA_CLIP
+                if request.params.as_ref().and_then(|params| {
+                    params
+                        .get("with_audio")
+                        .and_then(serde_json::Value::as_bool)
+                }) == Some(true) =>
+            {
+                Some(Self::UntilProvenReleased)
+            }
+            _ => None,
+        }
+    }
+}
+
 enum WriteAttempt<'a> {
     Ordinary,
     OrdinaryRetry,
+    LegacyMic(MicClaim),
     Bound(&'a mut bool),
+    VoiceCaptureStart(&'a mut bool),
+}
+
+#[derive(Clone, Copy)]
+enum BoundTarget<'a> {
+    Current,
+    VoiceCaptureStart,
+    Pinned(&'a Arc<BridgeGeneration>),
 }
 
 struct StdinWriteOwner<'a> {
@@ -436,12 +593,14 @@ impl Drop for StdinWriteOwner<'_> {
         if self.stdin.is_some() {
             // Classify cancellation before closing stdin can trigger stdout EOF.
             let reason = match self.attempt {
-                WriteAttempt::Bound(_) => Retirement::BoundAbandoned,
-                WriteAttempt::Ordinary | WriteAttempt::OrdinaryRetry => {
-                    Retirement::WriteLaneClosed {
-                        terminal_io_failure: false,
-                    }
+                WriteAttempt::Bound(_) | WriteAttempt::VoiceCaptureStart(_) => {
+                    Retirement::BoundAbandoned
                 }
+                WriteAttempt::Ordinary
+                | WriteAttempt::OrdinaryRetry
+                | WriteAttempt::LegacyMic(_) => Retirement::WriteLaneClosed {
+                    terminal_io_failure: false,
+                },
             };
             self.bridge.retire(self.generation, reason);
         }
@@ -469,6 +628,31 @@ impl BridgeGeneration {
                     bridge.retire(self, Retirement::WriteLaneClosed { terminal_io_failure: false });
                     return Err(std::io::ErrorKind::BrokenPipe.into());
                 };
+                let mut attempt = attempt;
+                // Mark the resource before beginning I/O, under the same
+                // lock that detaches the child and publishes its reap proof.
+                let may_write = match &mut attempt {
+                    WriteAttempt::VoiceCaptureStart(armed) => {
+                        if bridge.begin_mic_claim(self, MicClaim::UntilProvenReleased) {
+                            **armed = true;
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    WriteAttempt::LegacyMic(kind) => {
+                        bridge.begin_mic_claim(self, *kind)
+                    }
+                    WriteAttempt::Bound(armed) => {
+                        **armed = true;
+                        true
+                    }
+                    _ => true,
+                };
+                if !may_write {
+                    *slot = Some(stdin);
+                    return Err(std::io::ErrorKind::BrokenPipe.into());
+                }
                 let mut owner = StdinWriteOwner {
                     bridge,
                     generation: self,
@@ -477,10 +661,6 @@ impl BridgeGeneration {
                     stdin: Some(stdin),
                 };
                 let stdin = owner.stdin.as_mut().expect("write owner holds stdin");
-                if let WriteAttempt::Bound(armed) = &mut owner.attempt {
-                    // Only a writer that can begin I/O can expose a resource to this helper.
-                    **armed = true;
-                }
                 let result = async {
                     stdin.write_all(line.as_bytes()).await?;
                     stdin.flush().await
@@ -534,6 +714,63 @@ impl Drop for BoundDispatch<'_> {
     }
 }
 
+impl BoundBridgeGeneration {
+    /// Call the helper that acquired the resource, retaining the binding on success.
+    pub async fn call<P: serde::Serialize, T>(
+        &mut self,
+        method: &str,
+        params: P,
+        cancel: &CancellationToken,
+        validate: impl FnOnce(BridgeRemoteReply) -> Result<T>,
+    ) -> Result<T> {
+        let (result, _) = self
+            .bridge
+            .dispatch_bound(
+                BoundTarget::Pinned(&self.generation),
+                method,
+                params,
+                rpc_timeout_for(method),
+                cancel,
+                |reply| {
+                    let result = validate(reply);
+                    (result.is_ok(), result)
+                },
+            )
+            .await?;
+        result
+    }
+
+    /// Consume the binding. Even a call abandoned before writing cannot leave
+    /// the already-acquired resource live: retire and reap on unproven release.
+    pub async fn finish<P: serde::Serialize, T>(
+        mut self,
+        method: &str,
+        params: P,
+        cancel: &CancellationToken,
+        proves_release: impl FnOnce(BridgeRemoteReply) -> Result<T>,
+    ) -> Result<T> {
+        let result = self.call(method, params, cancel, proves_release).await;
+        if result.is_err() {
+            self.bridge
+                .retire(&self.generation, Retirement::BoundAbandoned);
+            self.generation.wait_reaped().await;
+        } else {
+            self.bridge.clear_mic_claim(&self.generation);
+        }
+        self.released = true;
+        result
+    }
+}
+
+impl Drop for BoundBridgeGeneration {
+    fn drop(&mut self) {
+        if !self.released {
+            self.bridge
+                .retire(&self.generation, Retirement::BoundAbandoned);
+        }
+    }
+}
+
 impl Drop for SwiftBridge {
     fn drop(&mut self) {
         let mut state = self.state.lock().expect("bridge state lock");
@@ -558,8 +795,11 @@ impl SwiftBridge {
         Self {
             binary_path,
             offline_speech_root,
+            #[cfg(all(test, unix))]
+            stdout_frame_limit: MAX_STDOUT_FRAME_BYTES,
             state: Arc::new(Mutex::new(BridgeState {
                 process: None,
+                retired_mic: None,
                 gate: SpawnGate::new(5, Duration::from_mins(10)),
                 disabled: false,
             })),
@@ -648,29 +888,49 @@ impl SwiftBridge {
             drain_ready_replies: AtomicBool::new(false),
             reaped: proof,
             runtime: Handle::current(),
+            #[cfg(all(test, unix))]
+            pause_reaper: Mutex::new(None),
         });
         let reader_generation = Arc::clone(&generation);
         let state = Arc::downgrade(&self.state);
+        #[cfg(all(test, unix))]
+        let frame_limit = self.stdout_frame_limit;
+        #[cfg(not(all(test, unix)))]
+        let frame_limit = MAX_STDOUT_FRAME_BYTES;
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            loop {
-                let line = tokio::select! {
+            let mut stdout = BufReader::new(stdout);
+            let mut frame = Vec::new();
+            let frame_failure = loop {
+                let result = tokio::select! {
                     biased;
-                    () = reader_generation.retired.cancelled() => break,
-                    line = lines.next_line() => line,
+                    () = reader_generation.retired.cancelled() => break None,
+                    result = read_stdout_frame(&mut stdout, &mut frame, frame_limit) => result,
                 };
-                let Ok(Some(line)) = line else {
-                    tracing::warn!(target: "bridge", "reader loop exited (helper stdout closed)");
-                    if let Some(state) = state.upgrade() {
-                        state
-                            .lock()
-                            .expect("bridge state lock")
-                            .retire(&reader_generation, Retirement::StdoutClosed);
+                match result {
+                    Ok(Some(line)) => {
+                        reader_generation.replies.route_line(line);
+                        frame.clear();
+                        // Do not retain a screenshot-sized allocation for the
+                        // remainder of this helper's lifetime.
+                        if frame.capacity() > 1024 * 1024 {
+                            frame = Vec::new();
+                        }
                     }
-                    break;
-                };
-                reader_generation.replies.route_line(&line);
-            }
+                    status => {
+                        let failure = status.err();
+                        let reason = failure
+                            .map_or(Retirement::StdoutClosed, Retirement::StdoutFrameRejected);
+                        tracing::warn!(target: "bridge", detail = failure.unwrap_or("helper stdout closed"), "reader loop exited");
+                        if let Some(state) = state.upgrade() {
+                            state
+                                .lock()
+                                .expect("bridge state lock")
+                                .retire(&reader_generation, reason);
+                        }
+                        break failure;
+                    }
+                }
+            };
 
             if reader_generation
                 .drain_ready_replies
@@ -678,18 +938,24 @@ impl SwiftBridge {
             {
                 // Keep complete replies the old pipe already has available,
                 // but never wait for more bytes or for the reaper.
-                loop {
-                    let line = tokio::select! {
-                        biased;
-                        line = lines.next_line() => line,
-                        () = std::future::ready(()) => break,
-                    };
-                    let Ok(Some(line)) = line else { break };
-                    reader_generation.replies.route_line(&line);
-                }
-                reader_generation
-                    .replies
-                    .fail_unresolved("write stdin failed");
+                let failure = if let Some(detail) = frame_failure {
+                    detail
+                } else {
+                    loop {
+                        let result = tokio::select! {
+                            biased;
+                            result = read_stdout_frame(&mut stdout, &mut frame, frame_limit) => result,
+                            () = std::future::ready(()) => break "write stdin failed",
+                        };
+                        match result {
+                            Ok(Some(line)) => reader_generation.replies.route_line(line),
+                            Ok(None) => break "write stdin failed",
+                            Err(detail) => break detail,
+                        }
+                        frame.clear();
+                    }
+                };
+                reader_generation.replies.fail_unresolved(failure);
             }
         });
 
@@ -705,6 +971,8 @@ impl SwiftBridge {
             child,
             generation,
             reaped,
+            mic_claims: 0,
+            open_recording_dispatched: false,
         })
     }
 
@@ -714,7 +982,49 @@ impl SwiftBridge {
     }
 
     fn ensure_generation(&self) -> Result<Arc<BridgeGeneration>> {
+        self.ensure_generation_locked(&mut self.state.lock().expect("bridge state lock"))
+    }
+
+    async fn mic_generation(&self) -> Result<Arc<BridgeGeneration>> {
+        loop {
+            let old = {
+                let mut state = self.state.lock().expect("bridge state lock");
+                match state.retired_mic.as_ref() {
+                    Some(old) if !*old.reaped.borrow() => Arc::clone(old),
+                    _ => {
+                        state.retired_mic = None;
+                        return self.ensure_generation_locked(&mut state);
+                    }
+                }
+            };
+            old.wait_reaped().await;
+        }
+    }
+
+    fn begin_mic_claim(&self, expected: &BridgeGeneration, claim: MicClaim) -> bool {
         let mut state = self.state.lock().expect("bridge state lock");
+        let Some(process) = state.mic_process(expected) else {
+            return false;
+        };
+        if matches!(claim, MicClaim::UntilReaped) {
+            // Stop replies are not tied to a particular start, and another
+            // dispatched start can acquire across a stop. Only reaping proves
+            // all open-ended requests on this generation are finished.
+            process.open_recording_dispatched = true;
+        } else {
+            process.mic_claims += 1;
+        }
+        true
+    }
+
+    fn clear_mic_claim(&self, expected: &BridgeGeneration) {
+        let mut state = self.state.lock().expect("bridge state lock");
+        if let Some(process) = state.process.as_mut().filter(|p| p.is_generation(expected)) {
+            process.mic_claims -= 1;
+        }
+    }
+
+    fn ensure_generation_locked(&self, state: &mut BridgeState) -> Result<Arc<BridgeGeneration>> {
         if state.disabled {
             return Err(DesktopError::BridgeDisabled(
                 "restart threshold exceeded".into(),
@@ -769,7 +1079,7 @@ impl SwiftBridge {
         if !state
             .process
             .as_ref()
-            .is_some_and(|p| std::ptr::eq(p.generation.as_ref(), generation))
+            .is_some_and(|p| p.is_generation(generation))
         {
             return Err(DesktopError::BridgeFailed("bridge not running".into()));
         }
@@ -807,8 +1117,8 @@ impl SwiftBridge {
     }
 
     /// Send a JSON-RPC request and await the typed response, bounded by an
-    /// explicit per-call reply `timeout`. Keep the helper on reply timeout;
-    /// only a write failure is eligible for one gated retry.
+    /// explicit per-call reply `timeout`. Ordinary writes get one gated retry.
+    /// Microphone acquisitions wait for old capture reaping and never retry.
     pub async fn call_with_timeout<P, R>(
         &self,
         method: &str,
@@ -819,11 +1129,46 @@ impl SwiftBridge {
         P: serde::Serialize,
         R: serde::de::DeserializeOwned,
     {
-        let mut generation = self.ensure_generation()?;
+        if method == METHOD_VOICE_CAPTURE_START {
+            return Err(DesktopError::BridgeFailed(
+                "native capture requires bound start".into(),
+            ));
+        }
         let mut request = self.request(method, params)?;
+        if let Some(kind) = MicClaim::for_legacy_request(&request) {
+            let generation = tokio::time::timeout(timeout, self.mic_generation())
+                .await
+                .map_err(|_| {
+                    DesktopError::BridgeTimeout(format!(
+                        "'{method}' waiting for prior microphone release"
+                    ))
+                })??;
+            let line = encode(&request)?;
+            let pending = self
+                .send(
+                    &generation,
+                    request.id,
+                    &line,
+                    WriteAttempt::LegacyMic(kind),
+                )
+                .await?;
+            let result = Self::decode_reply(pending, timeout, method).await;
+            // The timed recorder finishes and the camera stops its session
+            // before the helper returns success for this particular request.
+            if result.is_ok() && matches!(kind, MicClaim::UntilProvenReleased) {
+                self.clear_mic_claim(&generation);
+            }
+            return result;
+        }
+        let mut generation = self.ensure_generation()?;
         for retry in [false, true] {
             let line = encode(&request)?;
-            match self.send(&generation, request.id, &line, retry).await {
+            let attempt = if retry {
+                WriteAttempt::OrdinaryRetry
+            } else {
+                WriteAttempt::Ordinary
+            };
+            match self.send(&generation, request.id, &line, attempt).await {
                 Ok(pending) => return Self::decode_reply(pending, timeout, method).await,
                 Err(err) => {
                     if retry {
@@ -843,14 +1188,18 @@ impl SwiftBridge {
         generation: &'a BridgeGeneration,
         id: u64,
         line: &str,
-        retry: bool,
+        attempt: WriteAttempt<'_>,
     ) -> Result<PendingReply<'a>> {
-        let reply = self.register(generation, id, ReplyKind::Ordinary)?;
-        let attempt = if retry {
-            WriteAttempt::OrdinaryRetry
+        let kind = if matches!(
+            attempt,
+            WriteAttempt::LegacyMic(MicClaim::UntilProvenReleased)
+        ) {
+            ReplyKind::Bound
         } else {
-            WriteAttempt::Ordinary
+            ReplyKind::Ordinary
         };
+        let reply = self.register(generation, id, kind)?;
+        let retry = matches!(attempt, WriteAttempt::OrdinaryRetry);
         generation.write(self, line, attempt).await.map_err(|e| {
             let operation = if retry {
                 "write stdin retry"
@@ -894,6 +1243,64 @@ impl SwiftBridge {
         cancel: &CancellationToken,
         proves_release: impl FnOnce(&BridgeRemoteReply) -> bool,
     ) -> Result<BridgeRemoteReply> {
+        let (reply, _) = self
+            .dispatch_bound(
+                BoundTarget::Current,
+                method,
+                params,
+                timeout,
+                cancel,
+                |reply| (proves_release(&reply), reply),
+            )
+            .await?;
+        Ok(reply)
+    }
+
+    /// Dispatch microphone capture activation once. Only an accepted
+    /// activation transfers ownership of the dispatched generation.
+    pub async fn call_bound_start<P: serde::Serialize>(
+        self: &Arc<Self>,
+        method: &str,
+        params: P,
+        cancel: &CancellationToken,
+        classify_activation: impl FnOnce(BridgeRemoteReply) -> BoundStartReply,
+    ) -> Result<BoundBridgeGeneration> {
+        let (result, generation) = self
+            .dispatch_bound(
+                BoundTarget::VoiceCaptureStart,
+                method,
+                params,
+                rpc_timeout_for(method),
+                cancel,
+                |reply| match classify_activation(reply) {
+                    BoundStartReply::Active => (true, Ok(())),
+                    BoundStartReply::NotAcquired(err) => (true, Err(err)),
+                    BoundStartReply::Unproven(err) => (false, Err(err)),
+                },
+            )
+            .await?;
+        if let Err(err) = result {
+            if let Some(generation) = generation {
+                self.clear_mic_claim(&generation);
+            }
+            return Err(err);
+        }
+        Ok(BoundBridgeGeneration {
+            bridge: Arc::clone(self),
+            generation: generation.expect("accepted activation was dispatched"),
+            released: false,
+        })
+    }
+
+    async fn dispatch_bound<P: serde::Serialize, T>(
+        &self,
+        target: BoundTarget<'_>,
+        method: &str,
+        params: P,
+        timeout: Duration,
+        cancel: &CancellationToken,
+        classify_reply: impl FnOnce(BridgeRemoteReply) -> (bool, T),
+    ) -> Result<(T, Option<Arc<BridgeGeneration>>)> {
         let cancelled = || DesktopError::BridgeFailed(format!("'{method}' cancelled"));
         let timed_out = || DesktopError::BridgeTimeout(format!("'{method}' deadline exceeded"));
         let deadline = Instant::now() + timeout;
@@ -901,6 +1308,14 @@ impl SwiftBridge {
             return Err(cancelled());
         }
         let request = self.request(method, params)?;
+        if MicClaim::for_legacy_request(&request).is_some()
+            || (method == METHOD_VOICE_CAPTURE_START
+                && !matches!(target, BoundTarget::VoiceCaptureStart))
+        {
+            return Err(DesktopError::BridgeFailed(
+                "microphone acquisition requires its own dispatch path".into(),
+            ));
+        }
         let line = encode(&request)?;
         if cancel.is_cancelled() {
             return Err(cancelled());
@@ -908,7 +1323,16 @@ impl SwiftBridge {
         if Instant::now() >= deadline {
             return Err(timed_out());
         }
-        let generation = self.ensure_generation()?;
+        let generation = match target {
+            BoundTarget::Pinned(generation) => Arc::clone(generation),
+            BoundTarget::Current => self.ensure_generation()?,
+            BoundTarget::VoiceCaptureStart => tokio::select! {
+                biased;
+                () = cancel.cancelled() => return Err(cancelled()),
+                () = tokio::time::sleep_until(deadline) => return Err(timed_out()),
+                generation = self.mic_generation() => generation?,
+            },
+        };
         if cancel.is_cancelled() {
             return Err(cancelled());
         }
@@ -926,20 +1350,33 @@ impl SwiftBridge {
             () = cancel.cancelled() => Err(cancelled()),
             () = tokio::time::sleep_until(deadline) => Err(timed_out()),
             reply = async {
+                let attempt = if matches!(target, BoundTarget::VoiceCaptureStart) {
+                    WriteAttempt::VoiceCaptureStart(&mut dispatch.armed)
+                } else {
+                    WriteAttempt::Bound(&mut dispatch.armed)
+                };
                 generation
-                    .write(self, &line, WriteAttempt::Bound(&mut dispatch.armed))
+                    .write(self, &line, attempt)
                     .await
                     .map_err(|e| DesktopError::BridgeFailed(format!("write stdin: {e}")))?;
                 pending.receive().await
             } => reply,
         };
         drop(pending);
-        if dispatch.armed && !reply.as_ref().is_ok_and(proves_release) {
+        let (accepted, result) = match reply {
+            Ok(reply) => {
+                let (accepted, value) = classify_reply(reply);
+                (accepted, Ok(value))
+            }
+            Err(err) => (false, Err(err)),
+        };
+        if dispatch.armed && !accepted {
             self.retire(&generation, Retirement::BoundAbandoned);
             generation.wait_reaped().await;
         }
         dispatch.armed = false;
-        reply
+        drop(dispatch);
+        result.map(|value| (value, accepted.then_some(generation)))
     }
 
     /// Send the Stage 0 `bridge.handshake` request and return the helper's
@@ -971,6 +1408,82 @@ impl SwiftBridge {
             )));
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod stdout_frame_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stdout_frame_rejects_at_byte_limit_without_eof_or_newline() {
+        let (mut tx, rx) = tokio::io::duplex(16);
+        let mut reader = BufReader::with_capacity(3, rx);
+        let mut frame = Vec::new();
+        tx.write_all(b"1234567").await.unwrap();
+        tokio::select! {
+            biased;
+            result = read_stdout_frame(&mut reader, &mut frame, 8) => panic!("rejected early: {result:?}"),
+            () = std::future::ready(()) => {},
+        }
+        assert_eq!(frame, b"1234567");
+        tx.write_all(b"8").await.unwrap();
+        tokio::select! {
+            biased;
+            result = read_stdout_frame(&mut reader, &mut frame, 8) => assert_eq!(result, Err(STDOUT_FRAME_TOO_LARGE)),
+            () = std::future::ready(()) => panic!("waited for EOF or newline at the limit"),
+        }
+        assert_eq!(frame, b"1234567");
+        assert!(frame.capacity() <= 8);
+    }
+
+    #[tokio::test]
+    async fn stdout_frame_accepts_limit_including_newline_but_not_partial_eof() {
+        let (mut tx, rx) = tokio::io::duplex(16);
+        let mut reader = BufReader::with_capacity(3, rx);
+        let mut frame = Vec::new();
+        tx.write_all(b"1234567\n{}").await.unwrap();
+        drop(tx);
+        assert_eq!(
+            read_stdout_frame(&mut reader, &mut frame, 8).await,
+            Ok(Some("1234567"))
+        );
+        frame.clear();
+        assert_eq!(
+            read_stdout_frame(&mut reader, &mut frame, 8).await,
+            Err("helper stdout frame ended without newline")
+        );
+    }
+}
+
+#[cfg(test)]
+mod mic_dispatch_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn generic_dispatch_cannot_bypass_mic_acquisition_tracking() {
+        let bridge = SwiftBridge::new(PathBuf::new());
+        let cancel = CancellationToken::new();
+        for (method, params) in [
+            (METHOD_AUDIO_RECORD_START, serde_json::json!({})),
+            (METHOD_AUDIO_RECORD, serde_json::json!({})),
+            (METHOD_CAMERA_CLIP, serde_json::json!({"with_audio": true})),
+            (METHOD_VOICE_CAPTURE_START, serde_json::json!({})),
+        ] {
+            let result = bridge
+                .call_bound(method, params, Duration::from_secs(1), &cancel, |_| true)
+                .await;
+            assert!(
+                matches!(result, Err(DesktopError::BridgeFailed(detail)) if detail == "microphone acquisition requires its own dispatch path")
+            );
+        }
+        let result = bridge
+            .call::<_, serde_json::Value>(METHOD_VOICE_CAPTURE_START, ())
+            .await;
+        assert!(
+            matches!(result, Err(DesktopError::BridgeFailed(detail)) if detail == "native capture requires bound start")
+        );
+        assert!(!bridge.is_running());
     }
 }
 
@@ -1330,6 +1843,543 @@ done
         )
     }
 
+    fn resource_binding_helper(dir: &tempfile::TempDir) -> PathBuf {
+        install_fake(
+            dir,
+            r#"#!/bin/sh
+set -eu
+d=${0%/*}
+log="$d/resource-requests"
+[ ! -f "$log" ] || log="$d/replacement-requests"
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$log"
+  case "$line" in
+    *fixture.pending*) continue ;;
+  esac
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+  printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
+done
+"#,
+        )
+    }
+
+    fn fixture_ack(reply: BridgeRemoteReply) -> Result<()> {
+        assert_eq!(reply.unwrap(), serde_json::json!({}));
+        Ok(())
+    }
+
+    fn fixture_activation(reply: BridgeRemoteReply) -> BoundStartReply {
+        use aleph_protocol::desktop_bridge::methods::media::voice_capture_start_rejected_for_legacy_busy;
+        match reply {
+            Ok(value) if value == serde_json::json!({}) => BoundStartReply::Active,
+            Err(error) if voice_capture_start_rejected_for_legacy_busy(&error) => {
+                BoundStartReply::NotAcquired(DesktopError::BridgeFailed("legacy busy".into()))
+            }
+            _ => BoundStartReply::Unproven(DesktopError::BridgeFailed("invalid reply".into())),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bound_generation_exact_start_refusal_preserves_ordinary_sibling() {
+        for (data, exact) in [
+            (r#"{"reason":"voice_capture_legacy_busy"}"#, true),
+            (r#"{"reason":"unknown"}"#, false),
+            (
+                r#"{"reason":"voice_capture_legacy_busy","extra":true}"#,
+                false,
+            ),
+            (
+                r#"{"reason":"unknown","reason":"voice_capture_legacy_busy"}"#,
+                false,
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let script = format!(
+                r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *fixture.start*) printf '{{"jsonrpc":"2.0","id":%s,"error":{{"code":-32004,"message":"busy","data":{data}}}}}\n' "$id" ;;
+    *) printf '{{"jsonrpc":"2.0","id":%s,"result":%s}}\n' "$id" "$$" ;;
+  esac
+done
+"#
+            );
+            let bridge = Arc::new(SwiftBridge::new(install_fake(&dir, &script)));
+            let old = bridge.ensure_generation().unwrap();
+            let pid = running_pid(&bridge, &old);
+            let cancel = CancellationToken::new();
+            let start = tokio::time::timeout(
+                FIXTURE_GUARD,
+                bridge.call_bound_start("fixture.start", (), &cancel, fixture_activation),
+            )
+            .await
+            .unwrap();
+            if exact {
+                assert!(
+                    matches!(start, Err(DesktopError::BridgeFailed(detail)) if detail == "legacy busy")
+                );
+                let ping: i32 = bridge
+                    .call_with_timeout("fixture.ping", (), FIXTURE_GUARD)
+                    .await
+                    .unwrap();
+                assert_eq!(ping, pid);
+                assert_eq!(running_pid(&bridge, &old), pid);
+                assert_eq!(
+                    bridge
+                        .state
+                        .lock()
+                        .unwrap()
+                        .process
+                        .as_ref()
+                        .unwrap()
+                        .mic_claims,
+                    0
+                );
+            } else {
+                assert!(start.is_err());
+                assert!(old.retired.is_cancelled());
+                assert_process_gone(pid);
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bound_generation_keeps_same_child_after_accepting_poll_and_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = Arc::new(SwiftBridge::new(resource_binding_helper(&dir)));
+        let cancel = CancellationToken::new();
+        let mut binding = tokio::time::timeout(
+            FIXTURE_GUARD,
+            bridge.call_bound_start("fixture.start", (), &cancel, fixture_activation),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let old = Arc::clone(&binding.generation);
+        let pid = running_pid(&bridge, &old);
+        tokio::time::timeout(FIXTURE_GUARD, async {
+            binding
+                .call("fixture.poll", (), &cancel, fixture_ack)
+                .await
+                .unwrap();
+            binding
+                .finish("fixture.finish", (), &cancel, fixture_ack)
+                .await
+                .unwrap();
+        })
+        .await
+        .unwrap();
+        assert_eq!(running_pid(&bridge, &old), pid);
+        let requests = std::fs::read_to_string(dir.path().join("resource-requests")).unwrap();
+        let methods: Vec<_> = requests
+            .lines()
+            .map(|line| decode_line::<Request>(line).unwrap().method)
+            .collect();
+        assert_eq!(methods, ["fixture.start", "fixture.poll", "fixture.finish"]);
+        assert!(!dir.path().join("replacement-requests").exists());
+
+        let (release_reaper, pause_reaper) = oneshot::channel();
+        *old.pause_reaper.lock().unwrap() = Some(pause_reaper);
+        bridge.retire(&old, Retirement::BoundAbandoned);
+        // A proven release leaves no capture barrier on a later retirement.
+        bridge
+            .call_with_timeout::<_, serde_json::Value>(METHOD_AUDIO_RECORD_START, (), FIXTURE_GUARD)
+            .await
+            .unwrap();
+        assert_process_exists(pid);
+        release_reaper.send(()).unwrap();
+        wait_reaped_and_gone(&old, pid).await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bound_generation_cancelled_poll_and_late_finish_never_touch_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = Arc::new(SwiftBridge::new(resource_binding_helper(&dir)));
+        let cancel = CancellationToken::new();
+        let mut binding = tokio::time::timeout(
+            FIXTURE_GUARD,
+            bridge.call_bound_start("fixture.start", (), &cancel, fixture_activation),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let old = Arc::clone(&binding.generation);
+        let old_pid = running_pid(&bridge, &old);
+        let old_log = dir.path().join("resource-requests");
+        let mut poll = Box::pin(binding.call("fixture.pending_poll", (), &cancel, fixture_ack));
+        tokio::select! {
+            result = &mut poll => panic!("poll returned before cancellation: {result:?}"),
+            marker = tokio::time::timeout(FIXTURE_GUARD, async {
+                while !std::fs::read_to_string(&old_log).unwrap().contains("fixture.pending_poll") {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }) => marker.unwrap(),
+        }
+        cancel.cancel();
+        tokio::select! {
+            biased;
+            result = &mut poll => panic!("poll returned before reaping: {result:?}"),
+            () = std::future::ready(()) => {},
+        }
+        assert!(old.retired.is_cancelled());
+        assert_process_exists(old_pid);
+        let replacement = bridge.ensure_generation().unwrap();
+        let replacement_pid = running_pid(&bridge, &replacement);
+        assert!(!Arc::ptr_eq(&old, &replacement));
+        let result = tokio::time::timeout(FIXTURE_GUARD, &mut poll)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, Err(DesktopError::BridgeFailed(detail)) if detail.contains("cancelled"))
+        );
+        drop(poll);
+        assert_process_gone(old_pid);
+        let fresh = CancellationToken::new();
+        let result = tokio::time::timeout(
+            FIXTURE_GUARD,
+            binding.finish("fixture.finish", (), &fresh, fixture_ack),
+        )
+        .await
+        .unwrap();
+        assert!(result.is_err());
+        let _: serde_json::Value = bridge
+            .call_with_timeout("fixture.ping", (), FIXTURE_GUARD)
+            .await
+            .unwrap();
+        assert_eq!(running_pid(&bridge, &replacement), replacement_pid);
+        let old_requests = std::fs::read_to_string(old_log).unwrap();
+        assert_eq!(old_requests.lines().count(), 2);
+        let replacement_requests =
+            std::fs::read_to_string(dir.path().join("replacement-requests")).unwrap();
+        assert_eq!(replacement_requests.lines().count(), 1);
+        assert!(replacement_requests.contains("fixture.ping"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bound_generation_dropped_start_after_dispatch_retires_without_cancel_rpc() {
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = Arc::new(SwiftBridge::new(resource_binding_helper(&dir)));
+        let old = bridge.ensure_generation().unwrap();
+        let pid = running_pid(&bridge, &old);
+        let cancel = CancellationToken::new();
+        let mut start = Box::pin(bridge.call_bound_start(
+            "fixture.pending_start",
+            (),
+            &cancel,
+            fixture_activation,
+        ));
+        let old_log = dir.path().join("resource-requests");
+        let request = tokio::select! {
+            _ = &mut start => panic!("start returned without activation"),
+            request = wait_for_fixture_line(&old_log) => request,
+        };
+        assert!(request.contains("fixture.pending_start"));
+        drop(start);
+        assert!(old.retired.is_cancelled());
+        assert!(!*old.reaped.borrow(), "drop must not claim release proof");
+        wait_reaped_and_gone(&old, pid).await;
+        assert_eq!(std::fs::read_to_string(old_log).unwrap(), request);
+        assert!(!dir.path().join("replacement-requests").exists());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bound_generation_drop_blocks_replacement_mic_until_exact_capture_child_is_reaped() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("input.wav"), b"fixture").unwrap();
+        let path = install_fake(
+            &dir,
+            r#"#!/bin/sh
+set -eu
+d=${0%/*}
+reply() {
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+  printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
+}
+if [ ! -f "$d/old-pid" ]; then
+  IFS= read -r line
+  exec 3< "$d/input.wav"
+  printf '%s\n' "$$" > "$d/old-pid"
+  printf '%s\n' "$line" > "$d/old-requests"
+  reply
+  while IFS= read -r line; do printf '%s\n' "$line" >> "$d/old-requests"; done
+else
+  read -r old_pid < "$d/old-pid"
+  while IFS= read -r line; do
+    printf '%s\n' "$line" >> "$d/replacement-requests"
+    case "$line" in
+      *media.audio.record*|*'"with_audio":true'*)
+        if kill -0 "$old_pid" 2>/dev/null; then exit 1; fi ;;
+    esac
+    reply
+  done
+fi
+"#,
+        );
+        let bridge = Arc::new(SwiftBridge::new(path));
+        let old = bridge.ensure_generation().unwrap();
+        let pid = running_pid(&bridge, &old);
+        let (release_reaper, pause_reaper) = oneshot::channel();
+        *old.pause_reaper.lock().unwrap() = Some(pause_reaper);
+        let cancel = CancellationToken::new();
+        let capture = tokio::time::timeout(
+            FIXTURE_GUARD,
+            bridge.call_bound_start("fixture.start", (), &cancel, fixture_activation),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        // A Drop is only retirement, not release. Retain the old generation
+        // Arc so its child remains blocked in read with FD 3 still open.
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("old-pid"))
+                .unwrap()
+                .trim(),
+            pid.to_string()
+        );
+        drop(capture);
+        assert!(old.retired.is_cancelled());
+        assert_process_exists(pid);
+
+        let replacement = bridge.ensure_generation().unwrap();
+        assert!(!Arc::ptr_eq(&old, &replacement));
+        let replacement_pid = running_pid(&bridge, &replacement);
+        assert_ne!(pid, replacement_pid);
+        let replacement_requests = dir.path().join("replacement-requests");
+        let mut waiting = [
+            (METHOD_AUDIO_RECORD, serde_json::json!({})),
+            (METHOD_AUDIO_RECORD_START, serde_json::json!({})),
+            (METHOD_CAMERA_CLIP, serde_json::json!({"with_audio": true})),
+        ]
+        .map(|(method, params)| {
+            Box::pin(bridge.call_with_timeout::<_, serde_json::Value>(
+                method,
+                params,
+                FIXTURE_GUARD,
+            ))
+        });
+        let mut native =
+            Box::pin(bridge.call_bound_start("fixture.start", (), &cancel, fixture_activation));
+        for waiter in &mut waiting {
+            tokio::select! {
+                biased;
+                result = waiter => panic!("legacy acquisition completed before capture reap: {result:?}"),
+                () = std::future::ready(()) => {},
+            }
+        }
+        tokio::select! {
+            biased;
+            _ = &mut native => panic!("native acquisition completed before capture reap"),
+            () = std::future::ready(()) => {},
+        }
+        // Same serialized write lane: an ordinary video-only clip must still
+        // reach the replacement and its log must expose any premature writes.
+        bridge
+            .call_with_timeout::<_, serde_json::Value>(
+                METHOD_CAMERA_CLIP,
+                serde_json::json!({"with_audio": false}),
+                FIXTURE_GUARD,
+            )
+            .await
+            .unwrap();
+        let requests = std::fs::read_to_string(&replacement_requests).unwrap();
+        assert_eq!(requests.lines().count(), 1);
+        assert!(requests.contains(r#""with_audio":false"#));
+        assert_process_exists(pid);
+        assert!(!*old.reaped.borrow());
+        cancel.cancel();
+        assert!(
+            matches!(native.await, Err(DesktopError::BridgeFailed(detail)) if detail.contains("cancelled"))
+        );
+        assert_eq!(running_pid(&bridge, &replacement), replacement_pid);
+
+        release_reaper.send(()).unwrap();
+        for waiter in waiting {
+            waiter.await.unwrap();
+        }
+        assert_process_gone(pid);
+        assert!(*old.reaped.borrow());
+        assert_eq!(running_pid(&bridge, &replacement), replacement_pid);
+        let old_requests = std::fs::read_to_string(dir.path().join("old-requests")).unwrap();
+        assert_eq!(old_requests.lines().count(), 1);
+        let requests = std::fs::read_to_string(replacement_requests).unwrap();
+        assert_eq!(requests.lines().count(), 4);
+        assert!(!requests.contains("fixture.start"));
+        let state = bridge.state.lock().unwrap();
+        let process = state.process.as_ref().unwrap();
+        assert_eq!(
+            process.mic_claims, 0,
+            "timed audio and camera proved release"
+        );
+        assert!(process.open_recording_dispatched);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bound_generation_native_start_waits_for_legacy_record_start_child_to_be_reaped() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("input.wav"), b"fixture").unwrap();
+        let path = install_fake(
+            &dir,
+            r#"#!/bin/sh
+set -eu
+d=${0%/*}
+reply() {
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+  printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
+}
+if [ ! -f "$d/old-pid" ]; then
+  IFS= read -r line
+  case "$line" in *media.audio.record_start*) ;; *) exit 1 ;; esac
+  exec 3< "$d/input.wav"
+  printf '%s\n' "$$" > "$d/old-pid"
+  printf '%s\n' "$line" > "$d/old-requests"
+  reply
+  while IFS= read -r line; do printf '%s\n' "$line" >> "$d/old-requests"; done
+else
+  read -r old_pid < "$d/old-pid"
+  while IFS= read -r line; do
+    printf '%s\n' "$line" >> "$d/replacement-requests"
+    case "$line" in
+      *media.audio.voice_capture_start*)
+        if kill -0 "$old_pid" 2>/dev/null; then exit 1; fi ;;
+    esac
+    reply
+  done
+fi
+"#,
+        );
+        let bridge = Arc::new(SwiftBridge::new(path));
+        let old = bridge.ensure_generation().unwrap();
+        let pid = running_pid(&bridge, &old);
+        let (release_reaper, pause_reaper) = oneshot::channel();
+        *old.pause_reaper.lock().unwrap() = Some(pause_reaper);
+        bridge
+            .call_with_timeout::<_, serde_json::Value>(METHOD_AUDIO_RECORD_START, (), FIXTURE_GUARD)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("old-pid"))
+                .unwrap()
+                .trim(),
+            pid.to_string()
+        );
+        bridge.retire(&old, Retirement::BoundAbandoned);
+        assert!(old.retired.is_cancelled());
+        assert_process_exists(pid);
+
+        let replacement = bridge.ensure_generation().unwrap();
+        let replacement_pid = running_pid(&bridge, &replacement);
+        assert!(!Arc::ptr_eq(&old, &replacement));
+        assert_ne!(pid, replacement_pid);
+        let cancel = CancellationToken::new();
+        let mut start = Box::pin(bridge.call_bound_start(
+            METHOD_VOICE_CAPTURE_START,
+            (),
+            &cancel,
+            fixture_activation,
+        ));
+        tokio::select! {
+            biased;
+            _ = &mut start => panic!("native start completed before legacy reap"),
+            () = std::future::ready(()) => {},
+        }
+        bridge
+            .call_with_timeout::<_, serde_json::Value>("fixture.ping", (), FIXTURE_GUARD)
+            .await
+            .unwrap();
+        let requests = dir.path().join("replacement-requests");
+        let before = std::fs::read_to_string(&requests).unwrap();
+        assert_eq!(before.lines().count(), 1);
+        assert!(before.contains("fixture.ping"));
+        assert_process_exists(pid);
+        assert!(!*old.reaped.borrow());
+
+        release_reaper.send(()).unwrap();
+        let binding = tokio::time::timeout(FIXTURE_GUARD, start)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_process_gone(pid);
+        assert!(*old.reaped.borrow());
+        assert!(Arc::ptr_eq(&binding.generation, &replacement));
+        assert_eq!(running_pid(&bridge, &replacement), replacement_pid);
+        let after = std::fs::read_to_string(&requests).unwrap();
+        assert_eq!(after.lines().count(), 2);
+        assert!(after.starts_with(&before));
+        assert!(after
+            .lines()
+            .last()
+            .unwrap()
+            .contains(METHOD_VOICE_CAPTURE_START));
+        let old_requests = std::fs::read_to_string(dir.path().join("old-requests")).unwrap();
+        assert_eq!(old_requests.lines().count(), 1);
+        assert!(old_requests.contains(METHOD_AUDIO_RECORD_START));
+        binding
+            .finish("fixture.finish", (), &cancel, fixture_ack)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bound_generation_unterminated_stdout_limit_retires_and_reaps_capture_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = install_fake(
+            &dir,
+            r#"#!/bin/sh
+set -eu
+log="${0%/*}/requests"
+IFS= read -r line
+printf '%s\n' "$line" >> "$log"
+id=$(printf '%s\n' "$line" | sed -n 's/.*"id":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
+IFS= read -r line
+printf '%s\n' "$line" >> "$log"
+# Write exactly the limit, with neither a delimiter nor EOF.
+printf '%128s' ''
+while IFS= read -r line; do printf '%s\n' "$line" >> "$log"; done
+"#,
+        );
+        let mut bridge = SwiftBridge::new(path);
+        bridge.stdout_frame_limit = 128;
+        let bridge = Arc::new(bridge);
+        let old = bridge.ensure_generation().unwrap();
+        let pid = running_pid(&bridge, &old);
+        let (release_reaper, pause_reaper) = oneshot::channel();
+        *old.pause_reaper.lock().unwrap() = Some(pause_reaper);
+        let cancel = CancellationToken::new();
+        let mut capture = tokio::time::timeout(
+            FIXTURE_GUARD,
+            bridge.call_bound_start("fixture.start", (), &cancel, fixture_activation),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let mut poll = Box::pin(capture.call("fixture.poll", (), &cancel, fixture_ack));
+        tokio::time::timeout(FIXTURE_GUARD, async {
+            tokio::select! {
+                biased;
+                result = &mut poll => panic!("capture returned before reaping: {result:?}"),
+                () = old.retired.cancelled() => {},
+            }
+        })
+        .await
+        .unwrap();
+        assert_process_exists(pid);
+        assert!(!*old.reaped.borrow());
+        assert!(!bridge.is_running());
+        release_reaper.send(()).unwrap();
+        let result = tokio::time::timeout(FIXTURE_GUARD, poll).await.unwrap();
+        assert!(
+            matches!(result, Err(DesktopError::BridgeFailed(detail)) if detail == STDOUT_FRAME_TOO_LARGE)
+        );
+        assert_process_gone(pid);
+        assert!(*old.reaped.borrow());
+        let requests = std::fs::read_to_string(dir.path().join("requests")).unwrap();
+        assert_eq!(requests.lines().count(), 2);
+        assert!(requests.contains("fixture.poll"));
+        assert!(!bridge.is_running());
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn call_bound_cancel_waits_for_exact_reaping_without_replay_on_replacement() {
         let dir = tempfile::tempdir().unwrap();
@@ -1526,7 +2576,7 @@ while IFS= read -r line; do :; done
         let line = encode(&request).unwrap();
         tokio::time::timeout(
             FIXTURE_GUARD,
-            bridge.send(generation, request.id, &line, false),
+            bridge.send(generation, request.id, &line, WriteAttempt::Ordinary),
         )
         .await
         .unwrap()
@@ -2000,6 +3050,52 @@ mod bound_reply_tests {
             .unwrap();
     }
 
+    #[cfg(any(unix, windows))]
+    #[tokio::test(flavor = "current_thread")]
+    async fn bound_generation_queued_start_cancel_and_drop_leave_unwritten_helper_running() {
+        #[cfg(unix)]
+        let binary = PathBuf::from("/bin/sh");
+        #[cfg(windows)]
+        let binary =
+            std::env::var_os("COMSPEC").map_or_else(|| PathBuf::from("cmd.exe"), PathBuf::from);
+        let bridge = Arc::new(SwiftBridge::new(binary));
+        let generation = bridge.ensure_generation().unwrap();
+        let stdin = generation.stdin.lock().await;
+        for explicit_cancel in [true, false] {
+            let cancel = CancellationToken::new();
+            let mut start = Box::pin(bridge.call_bound_start("fixture.start", (), &cancel, |_| {
+                panic!("unwritten start cannot be acknowledged")
+            }));
+            tokio::select! {
+                biased;
+                _ = &mut start => panic!("start did not queue"),
+                () = std::future::ready(()) => {},
+            }
+            assert_eq!(generation.replies.slots.lock().unwrap().len(), 1);
+            if explicit_cancel {
+                cancel.cancel();
+                tokio::select! {
+                    biased;
+                    result = &mut start => assert!(matches!(result, Err(DesktopError::BridgeFailed(detail)) if detail.contains("cancelled"))),
+                    () = std::future::ready(()) => panic!("queued start cancellation awaited reaping"),
+                }
+            }
+            drop(start);
+            assert!(generation.replies.slots.lock().unwrap().is_empty());
+            assert!(!generation.retired.is_cancelled());
+            assert!(Arc::ptr_eq(
+                &generation,
+                &bridge.ensure_generation().unwrap()
+            ));
+        }
+        assert!(stdin.is_some());
+        drop(stdin);
+        drop(bridge);
+        tokio::time::timeout(Duration::from_secs(8), generation.wait_reaped())
+            .await
+            .unwrap();
+    }
+
     #[test]
     fn bound_reply_envelope_rejects_missing_mismatched_and_duplicate_fields() {
         for line in [
@@ -2012,6 +3108,7 @@ mod bound_reply_tests {
             r#"{"jsonrpc":"2.0","id":7,"id":7,"result":null}"#,
             r#"{"jsonrpc":"2.0","id":7,"result":null,"result":true}"#,
             r#"{"jsonrpc":"2.0","id":7,"error":{"code":-1,"message":"a"},"error":{"code":-2,"message":"b"}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32004,"message":"busy","data":{"reason":"unknown","reason":"voice_capture_legacy_busy"}}}"#,
         ] {
             assert!(
                 matches!(
@@ -2103,6 +3200,8 @@ mod bound_reply_tests {
             drain_ready_replies: AtomicBool::new(false),
             reaped,
             runtime: Handle::current(),
+            #[cfg(unix)]
+            pause_reaper: Mutex::new(None),
         };
         generation.retired.cancel();
         drop(sender);

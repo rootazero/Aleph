@@ -1298,6 +1298,9 @@ impl HandlerRegistry {
         panel_context: Option<&crate::gateway::panel_project_context::PanelRequestContext>,
         voice_context: Option<voice_turn::VoiceRequestContext>,
     ) -> JsonRpcResponse {
+        let voice_events_live = voice_context
+            .as_ref()
+            .is_some_and(voice_turn::VoiceRequestContext::is_live);
         let response = match self.handlers.get(&request.method) {
             Some(RegisteredHandler::Plain(handler)) => match panel_context {
                 Some(context) if panel_capabilities::is_context_method(&request.method) => {
@@ -1316,7 +1319,7 @@ impl HandlerRegistry {
                 )
             }
         };
-        self.project_panel_snapshot(request, response)
+        self.project_panel_snapshot(request, response, voice_events_live)
     }
 
     fn memory_nebula_mounted(&self) -> bool {
@@ -1337,13 +1340,33 @@ impl HandlerRegistry {
         &self,
         request: &JsonRpcRequest,
         mut response: JsonRpcResponse,
+        voice_events_live: bool,
     ) -> JsonRpcResponse {
-        if request.method == aleph_protocol::panel::PANEL_UI_CAPABILITY_SNAPSHOT_METHOD
-            && response.error.is_none()
-            && self.memory_nebula_mounted()
+        use aleph_protocol::panel_voice::{
+            VOICE_TURN_CANCEL_METHOD, VOICE_TURN_SYNTHESIZE_METHOD, VOICE_TURN_TRANSCRIBE_METHOD,
+        };
+
+        if request.method != aleph_protocol::panel::PANEL_UI_CAPABILITY_SNAPSHOT_METHOD
+            || response.error.is_some()
         {
-            if let Some(result) = response.result.as_mut() {
+            return response;
+        }
+        if let Some(result) = response.result.as_mut() {
+            if self.memory_nebula_mounted() {
                 panel_capabilities::project_memory_nebula(result);
+            }
+            if voice_events_live
+                && [
+                    VOICE_TURN_TRANSCRIBE_METHOD,
+                    VOICE_TURN_SYNTHESIZE_METHOD,
+                    VOICE_TURN_CANCEL_METHOD,
+                    "chat.send",
+                    "chat.abort",
+                ]
+                .into_iter()
+                .all(|method| self.has_method(method))
+            {
+                panel_capabilities::project_voice(result);
             }
         }
         response

@@ -766,9 +766,15 @@ async fn voice_turn_ipc_ordinary_wire_budget_overflow_closes_peer() {
     blocked_voice_turn_ipc(BlockedPeerExit::OrdinaryOverflow).await;
 }
 
+#[tokio::test]
+async fn voice_capture_ipc_control_bypasses_full_wire_budget_and_query_lane() {
+    blocked_voice_turn_ipc(BlockedPeerExit::CaptureControls).await;
+}
+
 #[derive(Clone, Copy)]
 enum BlockedPeerExit {
     CancelThenDisconnect,
+    CaptureControls,
     Disconnect,
     OrdinaryOverflow,
 }
@@ -781,10 +787,17 @@ async fn blocked_voice_turn_ipc(exit: BlockedPeerExit) {
         lane::ChannelClass,
     };
     use aleph_client::local_ipc::MAX_INFLIGHT;
+    use aleph_protocol::panel_voice::{
+        VOICE_TURN_CAPTURE_CANCEL_METHOD, VOICE_TURN_CAPTURE_READY_METHOD,
+    };
 
     let (_root, endpoint) = fixture();
     let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
     gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    if matches!(exit, BlockedPeerExit::CaptureControls) {
+        Arc::new(crate::gateway::handlers::voice_turn_tests::CaptureMediaFixture::default())
+            .mount(gateway.handlers_mut());
+    }
     let provider = BlockedSttFixture::new(gateway.handlers_mut()).await;
     let lanes = gateway.lane_manager.clone();
     let (stop, shutdown) = oneshot::channel();
@@ -795,7 +808,7 @@ async fn blocked_voice_turn_ipc(exit: BlockedPeerExit) {
         send(&mut stream, hello(1, 1)).await;
         assert!(receive(&mut stream).await.get("result").is_some());
         let (count, frame_bytes) = match exit {
-            BlockedPeerExit::CancelThenDisconnect => {
+            BlockedPeerExit::CancelThenDisconnect | BlockedPeerExit::CaptureControls => {
                 let count = MAX_INFLIGHT;
                 let frame_bytes = super::WIRE_BUDGET / count as usize;
                 assert_eq!(frame_bytes * count as usize, super::WIRE_BUDGET);
@@ -824,6 +837,34 @@ async fn blocked_voice_turn_ipc(exit: BlockedPeerExit) {
                 provider.exited(1).await;
                 1
             }
+            BlockedPeerExit::CaptureControls => {
+                let capture_id = uuid::Uuid::new_v4();
+                for (id, method) in [
+                    ("ready-a", VOICE_TURN_CAPTURE_READY_METHOD),
+                    ("ready-b", VOICE_TURN_CAPTURE_READY_METHOD),
+                    ("cleanup", VOICE_TURN_CAPTURE_CANCEL_METHOD),
+                ] {
+                    send(
+                        &mut stream,
+                        json!({"jsonrpc":"2.0","id":id,"method":method,
+                        "params":{"capture_id":capture_id}}),
+                    )
+                    .await;
+                }
+                let mut replies = [
+                    receive(&mut stream).await,
+                    receive(&mut stream).await,
+                    receive(&mut stream).await,
+                ];
+                replies.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+                assert_eq!(replies[0]["id"], "cleanup");
+                assert_eq!(replies[0]["result"], json!({}));
+                for (reply, expected_id) in replies[1..].iter().zip(["ready-a", "ready-b"]) {
+                    assert_eq!(reply["id"], expected_id);
+                    assert_eq!(reply["error"]["data"]["kind"], "cancelled");
+                }
+                0
+            }
             BlockedPeerExit::OrdinaryOverflow => {
                 assert!(count < MAX_INFLIGHT, "exercise bytes, not request count");
                 send(&mut stream, blocked_stt_turn(count + 1)).await;
@@ -837,6 +878,319 @@ async fn blocked_voice_turn_ipc(exit: BlockedPeerExit) {
     })
     .await
     .expect("blocked IPC provider wait must end without releasing the fixture");
+    let _ = stop.send(());
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn voice_snapshot_ipc_requires_negotiated_live_events() {
+    use aleph_protocol::panel::{PanelUiCapabilitySnapshot, PANEL_UI_CAPABILITY_SNAPSHOT_METHOD};
+    use aleph_protocol::panel_voice::{
+        VOICE_TURN_CANCEL_METHOD, VOICE_TURN_SYNTHESIZE_METHOD, VOICE_TURN_TRANSCRIBE_METHOD,
+    };
+
+    let (_root, endpoint) = fixture();
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    // Only substitute the extension registry's snapshot. Dispatch, negotiation,
+    // and its voice projection must still run through the actual connection.
+    gateway
+        .handlers_mut()
+        .register(PANEL_UI_CAPABILITY_SNAPSHOT_METHOD, |request| async move {
+            crate::gateway::protocol::JsonRpcResponse::success(
+                request.id,
+                serde_json::to_value(PanelUiCapabilitySnapshot::new(1, Vec::new())).unwrap(),
+            )
+        });
+    for method in [
+        VOICE_TURN_CANCEL_METHOD,
+        VOICE_TURN_SYNTHESIZE_METHOD,
+        VOICE_TURN_TRANSCRIBE_METHOD,
+        "chat.send",
+        "chat.abort",
+    ] {
+        gateway
+            .handlers_mut()
+            .register(method, |request| async move {
+                crate::gateway::protocol::JsonRpcResponse::success(request.id, json!({}))
+            });
+    }
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let server = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+    timeout(Duration::from_secs(10), async {
+        for live_events in [true, false] {
+            let mut stream = connect(&endpoint).await;
+            let mut request = hello(1, 1);
+            if live_events {
+                request["params"]["features"] = json!(["live_events"]);
+            }
+            send(&mut stream, request).await;
+            let greeting = receive(&mut stream).await;
+            assert_eq!(
+                greeting["result"]["features"],
+                if live_events {
+                    json!(["live_events"])
+                } else {
+                    json!([])
+                }
+            );
+            send(
+                &mut stream,
+                json!({"jsonrpc":"2.0", "id":2, "method":PANEL_UI_CAPABILITY_SNAPSHOT_METHOD}),
+            )
+            .await;
+            let response = receive(&mut stream).await;
+            assert!(response.get("error").is_none(), "{response}");
+            let snapshot: PanelUiCapabilitySnapshot =
+                serde_json::from_value(response["result"].clone()).expect("Panel snapshot");
+            assert_eq!(
+                snapshot
+                    .declarations
+                    .iter()
+                    .any(|tab| { tab.descriptor.key.qualified() == "aleph:voice" }),
+                live_events
+            );
+        }
+    })
+    .await
+    .expect("v1 snapshot must respond on both sessions");
+    let _ = stop.send(());
+    server.await.unwrap().unwrap();
+}
+
+struct CaptureReplyProbe {
+    media: Arc<crate::gateway::handlers::voice_turn_tests::CaptureMediaFixture>,
+    releases_at_enqueue: Vec<(u64, usize)>,
+}
+
+thread_local! {
+    // This fixture and its spawned connection run on one current-thread runtime.
+    static CAPTURE_REPLY_PROBE: std::cell::RefCell<Option<CaptureReplyProbe>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+struct CaptureReplyProbeScope;
+
+impl Drop for CaptureReplyProbeScope {
+    fn drop(&mut self) {
+        let _ = CAPTURE_REPLY_PROBE.with(|probe| probe.replace(None));
+    }
+}
+
+pub(super) fn observe_capture_reply_queued(id: &Value) {
+    let Some(id @ (2 | 4)) = id.as_u64() else {
+        return;
+    };
+    CAPTURE_REPLY_PROBE.with(|slot| {
+        if let Some(probe) = slot.borrow_mut().as_mut() {
+            let released = probe
+                .media
+                .released
+                .load(std::sync::atomic::Ordering::SeqCst);
+            probe.releases_at_enqueue.push((id, released));
+        }
+    });
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn voice_capture_ipc_seals_before_reply_and_consumes_one_private_clip() {
+    use crate::gateway::{
+        handlers::voice_turn_tests::{fill_query_lane, CaptureMediaFixture, SttFixture},
+        lane::ChannelClass,
+    };
+    use aleph_protocol::panel_voice::{
+        VOICE_TURN_CAPTURE_FINISH_METHOD, VOICE_TURN_CAPTURE_METHOD,
+        VOICE_TURN_CAPTURE_READY_METHOD, VOICE_TURN_TRANSCRIBE_METHOD,
+    };
+    use std::sync::atomic::Ordering;
+
+    let (_root, endpoint) = fixture();
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    let media = Arc::new(CaptureMediaFixture::default());
+    media.mount(gateway.handlers_mut());
+    CAPTURE_REPLY_PROBE.with(|probe| {
+        assert!(probe
+            .replace(Some(CaptureReplyProbe {
+                media: media.clone(),
+                releases_at_enqueue: Vec::new(),
+            }))
+            .is_none());
+    });
+    let _probe_scope = CaptureReplyProbeScope;
+    let stt = SttFixture::new().await;
+    stt.mount(gateway.handlers_mut());
+    let lanes = gateway.lane_manager.clone();
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let server = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+    timeout(Duration::from_secs(20), async {
+        let mut stream = connect(&endpoint).await;
+        send(&mut stream, hello(1, 1)).await;
+        assert!(receive(&mut stream).await.get("result").is_some());
+        let clip = uuid::Uuid::new_v4();
+        let request = |id, method| {
+            json!({"jsonrpc":"2.0","id":id,"method":method,
+            "params":{"capture_id":clip}})
+        };
+        send(&mut stream, request(2, VOICE_TURN_CAPTURE_METHOD)).await;
+        media.entered.notified().await;
+        let query_permits = fill_query_lane(&lanes, ChannelClass::Desktop).await;
+        send(&mut stream, request(3, VOICE_TURN_CAPTURE_READY_METHOD)).await;
+        media.permit_samples.notify_one();
+        let ready = receive(&mut stream).await;
+        assert_eq!(ready["id"], 3);
+        assert_eq!(ready["result"], json!({"ready":true}));
+        send(&mut stream, request(4, VOICE_TURN_CAPTURE_FINISH_METHOD)).await;
+        media.sealing.notified().await;
+        assert_eq!(media.released.load(Ordering::SeqCst), 0);
+        let first_reply = {
+            let read_first = receive(&mut stream);
+            tokio::pin!(read_first);
+            assert!(
+                futures::poll!(&mut read_first).is_pending(),
+                "no result before release"
+            );
+            media.permit_release.notify_one();
+            read_first.await
+        };
+        let mut replies = [first_reply, receive(&mut stream).await];
+        assert_eq!(media.released.load(Ordering::SeqCst), 1);
+        replies.sort_by_key(|reply| reply["id"].as_u64().unwrap());
+        assert_eq!(replies[0]["id"], 2);
+        assert_eq!(
+            replies[0]["result"],
+            json!({"capture_id":clip,"limit_reached":false})
+        );
+        assert_eq!(replies[1]["id"], 4);
+        assert_eq!(replies[1]["result"], json!({}));
+        CAPTURE_REPLY_PROBE.with(|slot| {
+            let mut probe = slot.borrow_mut();
+            let releases = &mut probe.as_mut().unwrap().releases_at_enqueue;
+            releases.sort_unstable();
+            assert_eq!(releases, &[(2, 1), (4, 1)], "both replies require release");
+        });
+        drop(query_permits);
+
+        let mut other = connect(&endpoint).await;
+        send(&mut other, hello(1, 1)).await;
+        assert!(receive(&mut other).await.get("result").is_some());
+        send(
+            &mut other,
+            json!({"jsonrpc":"2.0","id":7,"method":VOICE_TURN_TRANSCRIBE_METHOD,
+            "params":{"turn_id":uuid::Uuid::new_v4(),"capture_id":clip}}),
+        )
+        .await;
+        assert_eq!(
+            receive(&mut other).await["error"]["data"]["kind"],
+            "invalid_audio"
+        );
+        assert_eq!(
+            stt.calls(),
+            0,
+            "a second socket cannot claim the sealed clip"
+        );
+
+        for id in [5, 6] {
+            send(
+                &mut stream,
+                json!({"jsonrpc":"2.0","id":id,"method":VOICE_TURN_TRANSCRIBE_METHOD,
+                "params":{"turn_id":uuid::Uuid::new_v4(),"capture_id":clip}}),
+            )
+            .await;
+            let reply = receive(&mut stream).await;
+            assert_eq!(reply["id"], id);
+            if id == 5 {
+                assert_eq!(reply["result"]["text"], "fixture");
+            } else {
+                assert_eq!(reply["error"]["data"]["kind"], "invalid_audio");
+            }
+        }
+        assert_eq!(stt.calls(), 1);
+    })
+    .await
+    .expect("capture controls and seal must still work with a full Query lane");
+    let _ = stop.send(());
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn voice_capture_ipc_disconnect_keeps_device_until_adapter_release() {
+    use crate::gateway::handlers::voice_turn_tests::CaptureMediaFixture;
+    use aleph_protocol::panel_voice::{
+        VOICE_TURN_CAPTURE_CANCEL_METHOD, VOICE_TURN_CAPTURE_FINISH_METHOD,
+        VOICE_TURN_CAPTURE_METHOD, VOICE_TURN_CAPTURE_READY_METHOD,
+    };
+    use std::sync::atomic::Ordering;
+
+    let (_root, endpoint) = fixture();
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    let media = Arc::new(CaptureMediaFixture::default());
+    media.mount(gateway.handlers_mut());
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let server = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+    timeout(Duration::from_secs(20), async {
+        let mut owner = connect(&endpoint).await;
+        let mut next = connect(&endpoint).await;
+        for stream in [&mut owner, &mut next] {
+            send(stream, hello(1, 1)).await;
+            assert!(receive(stream).await.get("result").is_some());
+        }
+        let request = |id, method, clip| {
+            json!({"jsonrpc":"2.0","id":id,"method":method,
+            "params":{"capture_id":clip}})
+        };
+        let first = uuid::Uuid::new_v4();
+        send(&mut owner, request(2, VOICE_TURN_CAPTURE_METHOD, first)).await;
+        media.entered.notified().await;
+        media.permit_samples.notify_one();
+        send(
+            &mut owner,
+            request(3, VOICE_TURN_CAPTURE_READY_METHOD, first),
+        )
+        .await;
+        assert_eq!(receive(&mut owner).await["result"]["ready"], true);
+        send(
+            &mut owner,
+            request(4, VOICE_TURN_CAPTURE_FINISH_METHOD, first),
+        )
+        .await;
+        media.sealing.notified().await;
+        drop(owner);
+        media.seal_cancelled.notified().await;
+        assert_eq!(media.released.load(Ordering::SeqCst), 0);
+
+        let second = uuid::Uuid::new_v4();
+        send(&mut next, request(2, VOICE_TURN_CAPTURE_METHOD, second)).await;
+        assert_eq!(
+            receive(&mut next).await["error"]["data"]["kind"],
+            "capture_unavailable"
+        );
+        media.permit_release.notify_one();
+        // On this current-thread runtime the adapter returns and the supervisor
+        // drops its non-async device permit before the test resumes.
+        media.release_completed.notified().await;
+        assert_eq!(media.released.load(Ordering::SeqCst), 1);
+
+        let third = uuid::Uuid::new_v4();
+        send(&mut next, request(3, VOICE_TURN_CAPTURE_METHOD, third)).await;
+        media.entered.notified().await;
+        send(
+            &mut next,
+            request(4, VOICE_TURN_CAPTURE_CANCEL_METHOD, third),
+        )
+        .await;
+        let mut replies = [receive(&mut next).await, receive(&mut next).await];
+        replies.sort_by_key(|reply| reply["id"].as_u64().unwrap());
+        assert_eq!(replies[0]["error"]["data"]["kind"], "cancelled");
+        assert_eq!(replies[1]["result"], json!({}));
+        assert_eq!(media.released.load(Ordering::SeqCst), 2);
+    })
+    .await
+    .expect("EOF must leave the device reserved until the old adapter returns");
     let _ = stop.send(());
     server.await.unwrap().unwrap();
 }

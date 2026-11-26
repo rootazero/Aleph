@@ -5,12 +5,51 @@ use async_trait::async_trait;
 use crate::media_types::{
     AudioDeviceInfo, AudioRecordConfig, AudioRecordResult, CameraClipConfig, CameraClipResult,
     CameraSnapConfig, CameraSnapResult, SpeechToTextConfig, SpeechToTextResult,
+    VoiceCaptureObservation,
 };
-use crate::Result;
+use crate::{CancellationToken, Result};
+
+/// Owns one native microphone capture. Keep it in a task that survives outer
+/// cancellation so it can await source teardown; dropping is not release proof.
+#[async_trait]
+pub trait VoiceCapture: Send {
+    /// Read the next contiguous frame levels after the absolute sample cursor.
+    async fn poll(
+        &mut self,
+        after_sample: u32,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<VoiceCaptureObservation>>;
+
+    /// Stop capture and return only the requested half-open range as WAV.
+    async fn seal(
+        self: Box<Self>,
+        first_sample: u32,
+        end_sample: u32,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<u8>>;
+
+    /// Stop capture and discard its audio, independent of caller cancellation.
+    async fn cancel(self: Box<Self>) -> Result<()>;
+}
 
 /// Camera capture and audio device management.
 #[async_trait]
 pub trait MediaCapability: Send + Sync {
+    /// Static platform support, not microphone permission or device readiness.
+    fn supports_voice_capture(&self) -> bool {
+        false
+    }
+
+    async fn voice_capture_begin(
+        &self,
+        cancel: CancellationToken,
+    ) -> Result<Box<dyn VoiceCapture>> {
+        let _ = cancel;
+        Err(crate::DesktopError::NotImplemented(
+            "native voice capture not available on this platform".into(),
+        ))
+    }
+
     /// Capture a photo from the default camera as JPEG.
     async fn camera_snap(&self, config: CameraSnapConfig) -> Result<CameraSnapResult> {
         let _ = config;

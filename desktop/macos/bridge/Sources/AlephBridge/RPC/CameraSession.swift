@@ -2,10 +2,25 @@ import AVFoundation
 import AppKit
 import Foundation
 
-/// Serializes AVCaptureSession access. A single hardware camera slot means we
-/// must gate snap / clip calls through an actor so concurrent RPC requests
-/// cannot race the capture pipeline.
+protocol CameraClipCapture {
+    func addAudioInput() -> Bool
+    // Returns or throws only after capture has stopped and its audio input is detached.
+    func record(duration: Double, isolation: isolated CameraSession) async throws -> String
+}
+
+/// Isolates camera setup; each request keeps its own capture session across awaits.
 actor CameraSession {
+    private let audioSession: AudioSession
+    private let makeClip: @Sendable () throws -> any CameraClipCapture
+
+    init(
+        audioSession: AudioSession,
+        makeClip: @escaping @Sendable () throws -> any CameraClipCapture = { try AVCameraClipCapture() }
+    ) {
+        self.audioSession = audioSession
+        self.makeClip = makeClip
+    }
+
     func snap(quality: Float) async throws -> (jpeg: Data, width: Int, height: Int) {
         guard let device = AVCaptureDevice.default(for: .video) else {
             throw RpcError(code: -32003, message: "No camera device found", data: nil)
@@ -70,6 +85,36 @@ actor CameraSession {
     }
 
     func clip(duration: Double, withAudio: Bool) async throws -> (path: String, duration: Double, hasAudio: Bool) {
+        let capture = try makeClip()
+        var lease: MicrophoneReservation.Ticket?
+        if withAudio, let ticket = await audioSession.reserveCameraMicrophone() {
+            if capture.addAudioInput() {
+                lease = ticket
+            } else {
+                await audioSession.releaseCameraMicrophone(ticket)
+            }
+        }
+
+        // Keep the exact ticket local across actor suspension and release only
+        // after the hardware boundary has completed cleanup (including errors).
+        let result: Result<String, Error>
+        do {
+            result = .success(try await capture.record(duration: duration, isolation: self))
+        } catch {
+            result = .failure(error)
+        }
+        if let lease { await audioSession.releaseCameraMicrophone(lease) }
+        return (try result.get(), duration, lease != nil)
+    }
+}
+
+private final class AVCameraClipCapture: CameraClipCapture {
+    private let session = AVCaptureSession()
+    private let movie = AVCaptureMovieFileOutput()
+    private let dir = mediaDir()
+    private var audioInput: AVCaptureDeviceInput?
+
+    init() throws {
         guard let video = AVCaptureDevice.default(for: .video) else {
             throw RpcError(code: -32003, message: "No camera device found", data: nil)
         }
@@ -84,15 +129,6 @@ actor CameraSession {
             )
         }
 
-        // Audio input is best-effort: if the user asked for audio but the
-        // device or permission is missing we record video-only rather than
-        // failing the whole call. `hasAudio` in the result reports the truth.
-        var audioInput: AVCaptureDeviceInput?
-        if withAudio, let audio = AVCaptureDevice.default(for: .audio) {
-            audioInput = try? AVCaptureDeviceInput(device: audio)
-        }
-
-        let session = AVCaptureSession()
         session.beginConfiguration()
         guard session.canAddInput(videoInput) else {
             session.commitConfiguration()
@@ -100,13 +136,6 @@ actor CameraSession {
         }
         session.addInput(videoInput)
 
-        var audioIncluded = false
-        if let audioInput, session.canAddInput(audioInput) {
-            session.addInput(audioInput)
-            audioIncluded = true
-        }
-
-        let movie = AVCaptureMovieFileOutput()
         guard session.canAddOutput(movie) else {
             session.commitConfiguration()
             throw RpcError(code: -32003, message: "Cannot add movie output", data: nil)
@@ -114,7 +143,6 @@ actor CameraSession {
         session.addOutput(movie)
         session.commitConfiguration()
 
-        let dir = mediaDir()
         do {
             try FileManager.default.createDirectory(
                 at: dir, withIntermediateDirectories: true
@@ -126,25 +154,45 @@ actor CameraSession {
                 data: nil
             )
         }
+    }
+
+    func addAudioInput() -> Bool {
+        guard let device = AVCaptureDevice.default(for: .audio),
+              let input = try? AVCaptureDeviceInput(device: device) else { return false }
+
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+        guard session.canAddInput(input) else { return false }
+        session.addInput(input)
+        audioInput = input
+        return true
+    }
+
+    func record(duration: Double, isolation: isolated CameraSession) async throws -> String {
         let url = dir.appendingPathComponent("camera_clip_\(timestampSuffix()).mov")
 
-        session.startRunning()
-        // Brief warm-up for auto-exposure (mirrors legacy Rust 300ms sleep).
-        try? await Task.sleep(nanoseconds: 300_000_000)
-
         let delegate = MovieRecordingDelegate()
-        movie.startRecording(to: url, recordingDelegate: delegate)
-
-        try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
-        movie.stopRecording()
-
         do {
+            session.startRunning()
+            defer {
+                withExtendedLifetime(delegate) {
+                    session.stopRunning()
+                    if let audioInput {
+                        session.beginConfiguration()
+                        session.removeInput(audioInput)
+                        session.commitConfiguration()
+                        self.audioInput = nil
+                    }
+                }
+            }
+            // Brief warm-up for auto-exposure (mirrors legacy Rust 300ms sleep).
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            movie.startRecording(to: url, recordingDelegate: delegate)
+
+            try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+            movie.stopRecording()
             try await delegate.waitForFinish(timeout: duration + 10)
-        } catch {
-            session.stopRunning()
-            throw error
         }
-        session.stopRunning()
 
         if !FileManager.default.fileExists(atPath: url.path) {
             throw RpcError(
@@ -154,7 +202,7 @@ actor CameraSession {
             )
         }
 
-        return (url.path, duration, audioIncluded)
+        return url.path
     }
 }
 

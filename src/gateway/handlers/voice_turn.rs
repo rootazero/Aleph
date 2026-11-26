@@ -31,6 +31,9 @@ use crate::gateway::voice::{
 use crate::generation::GenerationProviderRegistry;
 use crate::sync_primitives::Arc;
 
+mod capture;
+pub use capture::register_capture;
+
 const PCM_SAMPLE_BYTES: u32 = std::mem::size_of::<i16>() as u32;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -79,6 +82,10 @@ impl VoiceRequestContext {
         self.response_budget = self.response_budget.saturating_sub(bytes);
     }
 
+    pub(crate) fn is_live(&self) -> bool {
+        self.check_admission().is_ok()
+    }
+
     fn check_admission(&self) -> Result<(), VoiceErrorKind> {
         if self.ingress == VoiceIngress::Legacy || self.connection_id.is_empty() {
             return Err(VoiceErrorKind::PermissionDenied);
@@ -102,6 +109,7 @@ const MAX_CANCELLED_TURNS: usize = 32;
 pub(crate) struct VoiceTurnScopes {
     table: Mutex<TurnTable>,
     offline: TaskTracker,
+    capture: capture::ConnectionCapture,
 }
 
 #[derive(Default)]
@@ -379,6 +387,11 @@ fn decode_voice_wav(input: &str) -> Result<Vec<u8>, VoiceErrorKind> {
     let wav = STANDARD
         .decode(input)
         .map_err(|_| VoiceErrorKind::InvalidAudio)?;
+    validate_voice_wav(&wav)?;
+    Ok(wav)
+}
+
+fn validate_voice_wav(wav: &[u8]) -> Result<(), VoiceErrorKind> {
     let header = wav
         .get(..WAV_HEADER_BYTES)
         .ok_or(VoiceErrorKind::InvalidAudio)?;
@@ -406,7 +419,7 @@ fn decode_voice_wav(input: &str) -> Result<Vec<u8>, VoiceErrorKind> {
     if pcm_bytes == 0 {
         return Err(VoiceErrorKind::NoSpeech);
     }
-    Ok(wav)
+    Ok(())
 }
 
 pub fn register_transcription(
@@ -422,7 +435,8 @@ pub fn register_transcription(
             struct Params<'a> {
                 #[serde(rename = "turn_id")]
                 _turn_id: uuid::Uuid,
-                audio_base64: &'a str,
+                audio_base64: Option<&'a str>,
+                capture_id: Option<uuid::Uuid>,
                 language: Option<&'a str>,
             }
             let params = request
@@ -430,7 +444,14 @@ pub fn register_transcription(
                 .as_ref()
                 .and_then(|value| Params::deserialize(value).ok())
                 .ok_or(VoiceErrorKind::InvalidAudio)?;
-            let wav = decode_voice_wav(params.audio_base64)?;
+            let wav = match (params.audio_base64, params.capture_id) {
+                (Some(input), None) => decode_voice_wav(input)?,
+                (None, Some(capture_id)) if context.ingress == VoiceIngress::DesktopIpc => {
+                    context.turns.capture.consume(capture_id)?
+                }
+                (None, Some(_)) => return Err(VoiceErrorKind::PermissionDenied),
+                _ => return Err(VoiceErrorKind::InvalidAudio),
+            };
             let source = {
                 let cfg = until_cancelled(&context.cancellation, config.read()).await?;
                 resolve_stt_source(

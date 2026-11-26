@@ -17,6 +17,7 @@ mod pim;
 mod screen;
 mod sleep_inhibitor;
 mod system;
+mod voice_capture;
 
 pub use sleep_inhibitor::MacosPower;
 // Exposed for `tests/escape_listener_e2e.rs`, which proves the abort key is
@@ -34,7 +35,7 @@ use aleph_desktop::media_types::{
 use aleph_desktop::platform::EscapeAbort;
 use aleph_desktop::traits::{
     AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
-    PimCapability, PowerCapability, ScreenCapability, SystemCapability,
+    PimCapability, PowerCapability, ScreenCapability, SystemCapability, VoiceCapture,
 };
 use aleph_desktop::DesktopPlatform;
 use aleph_desktop::Result;
@@ -276,6 +277,18 @@ const OFFLINE_SPEECH_TIMEOUT: Duration = Duration::from_millis(
 // ---------------------------------------------------------------------------
 #[async_trait]
 impl MediaCapability for MacOSPlatform {
+    fn supports_voice_capture(&self) -> bool {
+        true
+    }
+
+    async fn voice_capture_begin(
+        &self,
+        cancel: aleph_desktop::CancellationToken,
+    ) -> Result<Box<dyn VoiceCapture>> {
+        let capture = voice_capture::MacVoiceCapture::begin(&self.bridge, &cancel).await?;
+        Ok(Box::new(capture))
+    }
+
     async fn camera_snap(&self, config: CameraSnapConfig) -> Result<CameraSnapResult> {
         use aleph_protocol::desktop_bridge::methods::media::{
             SnapParams, SnapResult, METHOD_CAMERA_SNAP,

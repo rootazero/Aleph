@@ -487,6 +487,7 @@ async fn serve(
         expected,
         binding,
         cancellation,
+        events.is_some(),
     );
     let executor = rpc::RpcExecutor {
         middleware: ctx.middleware_chain.clone(),

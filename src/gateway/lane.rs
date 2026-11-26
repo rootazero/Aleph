@@ -89,6 +89,9 @@ impl Lane {
             aleph_protocol::panel_voice::VOICE_TURN_TRANSCRIBE_METHOD
             | aleph_protocol::panel_voice::VOICE_TURN_SYNTHESIZE_METHOD
             | aleph_protocol::panel_voice::VOICE_TURN_CANCEL_METHOD => Some(Self::Query),
+            method if aleph_protocol::panel_voice::is_native_capture_method(method) => {
+                Some(Self::Query)
+            }
             "panel.capabilities.snapshot" | "graph.query" | "graph.node_detail" => {
                 Some(Self::Query)
             }

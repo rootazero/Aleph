@@ -7,6 +7,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::desktop_bridge::envelope::RpcError;
+use crate::desktop_bridge::errors::ERR_TIMEOUT;
+
 pub const METHOD_CAMERA_SNAP: &str = "media.camera.snap";
 pub const METHOD_CAMERA_CLIP: &str = "media.camera.clip";
 
@@ -17,6 +20,28 @@ pub const METHOD_AUDIO_RECORD: &str = "media.audio.record";
 /// unsigned macOS builds, so capture happens natively in the helper instead).
 pub const METHOD_AUDIO_RECORD_START: &str = "media.audio.record_start";
 pub const METHOD_AUDIO_RECORD_STOP: &str = "media.audio.record_stop";
+pub const METHOD_VOICE_CAPTURE_START: &str = "media.audio.voice_capture_start";
+pub const METHOD_VOICE_CAPTURE_POLL: &str = "media.audio.voice_capture_poll";
+pub const METHOD_VOICE_CAPTURE_SEAL: &str = "media.audio.voice_capture_seal";
+pub const METHOD_VOICE_CAPTURE_CANCEL: &str = "media.audio.voice_capture_cancel";
+
+pub const VOICE_CAPTURE_FRAME_SAMPLES: u32 = 800;
+pub const VOICE_CAPTURE_MAX_POLL_FRAMES: usize = 16;
+
+/// Only this start refusal proves the helper never acquired the microphone:
+/// the legacy recorder held it before voice capture could reserve the source.
+pub fn voice_capture_start_rejected_for_legacy_busy(error: &RpcError) -> bool {
+    error.code == ERR_TIMEOUT
+        && error
+            .data
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|data| {
+                data.len() == 1
+                    && data.get("reason").and_then(serde_json::Value::as_str)
+                        == Some("voice_capture_legacy_busy")
+            })
+}
 // `METHOD_AUDIO_MIC_METER` ("media.audio.mic_meter"), its params/result types,
 // its deadline and its idle timeout were removed on 2026-08-09 together with
 // the whole mic-meter limb — see `aleph_desktop::traits::media`. Both halves of
@@ -59,6 +84,10 @@ pub const TIMEOUT_OVERRIDES_MS: &[(&str, u64)] = &[
     (METHOD_CAMERA_SNAP, TIMEOUT_MS_SNAP),
     (METHOD_AUDIO_LIST_DEVICES, TIMEOUT_MS_LIST_DEVICES),
     (METHOD_AUDIO_RECORD_STOP, TIMEOUT_MS_RECORD_STOP),
+    (METHOD_VOICE_CAPTURE_START, 15_000),
+    (METHOD_VOICE_CAPTURE_POLL, 5_000),
+    (METHOD_VOICE_CAPTURE_SEAL, 15_000),
+    (METHOD_VOICE_CAPTURE_CANCEL, 15_000),
     (METHOD_SPEECH_CANCEL, TIMEOUT_MS_SPEECH_CANCEL),
 ];
 
@@ -145,6 +174,57 @@ pub struct RecordStartResult {}
 /// [`RecordAudioResult`] (file path + actual elapsed duration + format).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct RecordStopParams {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VoiceCaptureStartParams {
+    pub capture_id: String,
+    pub sample_rate_hz: u32,
+    pub frame_samples: u32,
+    pub max_clip_samples: u32,
+}
+
+/// An empty object acknowledges activation for start and teardown for cancel.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceCaptureAck {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VoiceCapturePollParams {
+    pub capture_id: String,
+    pub after_sample: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceCapturePollResult {
+    pub observations: Vec<VoiceCaptureFrame>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceCaptureFrame {
+    pub end_sample: u32,
+    pub rms: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VoiceCaptureSealParams {
+    pub capture_id: String,
+    pub first_sample: u32,
+    pub end_sample: u32,
+}
+
+/// Returned only after the source is detached.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceCaptureSealResult {
+    pub wav_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VoiceCaptureCancelParams {
+    pub capture_id: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TranscribeFileParams {

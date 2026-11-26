@@ -11,7 +11,9 @@ use aleph_client::local_ipc::{
     parse_payload, parse_request_payload, parse_voice_response_payload, read_frame, write_frame,
     HELLO_TIMEOUT, MAX_FRAME_BYTES, MAX_INFLIGHT,
 };
-use aleph_protocol::panel_voice::VOICE_TURN_CANCEL_METHOD;
+use aleph_protocol::panel_voice::{
+    is_capture_control, is_native_capture_method, VOICE_TURN_CANCEL_METHOD,
+};
 use aleph_protocol::system_hello::{Feature, HelloLimits};
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use serde_json::Value;
@@ -54,6 +56,8 @@ pub(in crate::gateway::server) use windows::{bind, serve};
 
 const MAX_CONNECTIONS: usize = 8;
 const WIRE_BUDGET: usize = 16 * 1024 * 1024;
+const CAPTURE_CONTROL_SLOTS: usize = 3;
+const CAPTURE_CONTROL_BYTES: usize = 4096;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const NO_NETWORK_ORIGIN: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
@@ -185,18 +189,24 @@ async fn serve_peer(
         ConnectionContext::from_shared(&state, ChannelClass::Desktop, NO_NETWORK_ORIGIN, false);
     let cancellation = stop.child_token();
     let _cancel_on_close = cancellation.clone().drop_guard();
-    let peer = DispatchPeer::desktop(state.connections.clone(), id.clone(), store, cancellation);
+    // Subscribed before the hello reply is written, so no frame published
+    // after the client learns it may expect events is missed.
+    let mut events = granted
+        .contains(&Feature::LiveEvents)
+        .then(|| V1EventFeed::subscribe(&ctx, id.clone(), None, MAX_FRAME_BYTES as usize));
+    let peer = DispatchPeer::desktop(
+        state.connections.clone(),
+        id.clone(),
+        store,
+        cancellation,
+        events.is_some(),
+    );
     let executor = rpc::RpcExecutor {
         middleware: ctx.middleware_chain.clone(),
         lanes: ctx.lane_manager.clone(),
         idempotency: ctx.idempotency_guard.clone(),
         class: ctx.channel_class,
     };
-    // Subscribed before the hello reply is written, so no frame published
-    // after the client learns it may expect events is missed.
-    let mut events = granted
-        .contains(&Feature::LiveEvents)
-        .then(|| V1EventFeed::subscribe(&ctx, id.clone(), None, MAX_FRAME_BYTES as usize));
     let result = tokio::select! {
         biased;
         _ = stop.cancelled() => Ok(()),
@@ -204,7 +214,9 @@ async fn serve_peer(
             send(&mut write, &serialize(&hello)?).await?;
             // Ordinary jobs own their slot through write acknowledgment. One
             // live event and one control reply have independent slots.
-            let (writes, mut outgoing) = Writes::<IpcWrite>::queue(MAX_INFLIGHT as usize + 2);
+            // Ordinary replies, capture controls, turn cancel and one event.
+            let (writes, mut outgoing) =
+                Writes::<IpcWrite>::queue(MAX_INFLIGHT as usize + CAPTURE_CONTROL_SLOTS + 2);
             let writer = async {
                 while let Some(item) = outgoing.recv().await {
                     send(&mut write, &item.frame.text).await?;
@@ -286,7 +298,10 @@ async fn serve_requests(
 ) -> io::Result<()> {
     let mut jobs = FuturesUnordered::new();
     let budget = std::sync::Arc::new(Semaphore::new(WIRE_BUDGET));
-    let mut active: Vec<Value> = Vec::new();
+    let capture_control_budget = std::sync::Arc::new(Semaphore::new(
+        CAPTURE_CONTROL_SLOTS * CAPTURE_CONTROL_BYTES,
+    ));
+    let mut active: Vec<(Value, bool)> = Vec::new();
     let mut pending_replies: Vec<(Value, oneshot::Receiver<()>)> = Vec::new();
     let mut pending_control: Option<(Value, oneshot::Receiver<()>)> = None;
     let mut pending_event: Option<oneshot::Receiver<()>> = None;
@@ -316,6 +331,8 @@ async fn serve_requests(
                         let response: String = response?;
                         let text = ipc_response(response, &id, voice_synthesis)?;
                         let ack = enqueue(writes, IpcWrite { text, _input_permit: Some(permit) })?;
+                        #[cfg(test)]
+                        tests::observe_capture_reply_queued(&id);
                         pending_replies.push((id, ack));
                     }
                 }
@@ -349,7 +366,7 @@ async fn serve_requests(
         let id = request.id.clone().expect("validated request id");
         pending_replies.retain_mut(|(id, ack)| {
             if ack.try_recv().is_ok() {
-                active.retain(|entry| entry != id);
+                active.retain(|(entry, _)| entry != id);
                 return false;
             }
             true
@@ -360,7 +377,7 @@ async fn serve_requests(
         {
             pending_control = None;
         }
-        if active.contains(&id)
+        if active.iter().any(|(entry, _)| entry == &id)
             || pending_control
                 .as_ref()
                 .is_some_and(|(pending, _)| pending == &id)
@@ -384,15 +401,33 @@ async fn serve_requests(
             pending_control = Some((id, ack));
             continue;
         }
-        if active.len() >= MAX_INFLIGHT as usize {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "IPC request limit exceeded",
-            ));
-        }
-        // A staged ordinary frame must acquire its complete byte budget now
-        // or close the peer, never wait while it owns the only reader.
-        let permit = budget
+        // Readiness and teardown can wait on the device, so they must not
+        // block the reader. Reserve limited capacity outside the ordinary
+        // jobs budget, including until each control reply is written.
+        let capture_control = is_capture_control(&request.method);
+        let in_flight = active
+            .iter()
+            .filter(|(_, control)| *control == capture_control)
+            .count();
+        let pool = if capture_control {
+            if in_flight >= CAPTURE_CONTROL_SLOTS || text.len() > CAPTURE_CONTROL_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "IPC capture control limit exceeded",
+                ));
+            }
+            &capture_control_budget
+        } else {
+            if in_flight >= MAX_INFLIGHT as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "IPC request limit exceeded",
+                ));
+            }
+            &budget
+        };
+        // Never wait for byte budget while owning the only reader.
+        let permit = pool
             .clone()
             .try_acquire_many_owned(text.len() as u32)
             .map_err(|_| {
@@ -401,7 +436,7 @@ async fn serve_requests(
                     "IPC request byte budget exceeded",
                 )
             })?;
-        active.push(id.clone());
+        active.push((id.clone(), capture_control));
         jobs.push(async move {
             let result = execute(executor, peer, &text, &request).await;
             let voice_synthesis =
@@ -423,7 +458,7 @@ async fn execute(
     text: &str,
     request: &JsonRpcRequest,
 ) -> io::Result<String> {
-    if !super::v1_mounted(&request.method) {
+    if !super::v1_mounted(&request.method) && !is_native_capture_method(&request.method) {
         return serialize(&JsonRpcResponse::error(
             request.id.clone(),
             METHOD_NOT_FOUND,

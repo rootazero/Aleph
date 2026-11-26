@@ -1,6 +1,6 @@
 //! Shared ordinary JSON-RPC execution; transport control stays with the adapter.
 
-use aleph_protocol::panel_voice::VOICE_TURN_CANCEL_METHOD;
+use aleph_protocol::panel_voice::{is_capture_control, VOICE_TURN_CANCEL_METHOD};
 use std::{net::IpAddr, sync::Arc, time::Duration};
 use tracing::{debug, warn};
 
@@ -118,7 +118,9 @@ impl RpcExecutor {
         let dispatch = || async {
             // Only bound v1 transports schedule this control separately. It
             // still runs the same live authority and middleware checks.
-            if req.method == VOICE_TURN_CANCEL_METHOD && peer.is_voice_bound() {
+            if (req.method == VOICE_TURN_CANCEL_METHOD && peer.is_voice_bound())
+                || (is_capture_control(&req.method) && peer.is_desktop_voice_bound())
+            {
                 return dispatch::dispatch_for_peer(text, &self.middleware, peer, req, start, None)
                     .await;
             }

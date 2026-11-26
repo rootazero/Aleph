@@ -197,6 +197,9 @@ serde_ignored = "0.1"
 similar = { version = "3", default-features = false, features = ["std", "text"] }
 thiserror = "2.0"
 aleph-protocol = { path = "shared/protocol" }
+# Share the same sample-clock voice controller with the Panel without pulling
+# the UI crate's default WASM dependencies into the server.
+shared-ui-logic = { path = "shared/ui_logic", default-features = false }
 # Pure error + UTF-8 text helper authority. The directional dependency is
 # one-way: alephcore → aleph-slot-api. The new crate must NOT take a
 # `path = ".."` back into alephcore, and Task 1 explicitly forbids the
@@ -440,14 +443,8 @@ tempfile = "3.8"
 filetime = "0.2"
 serial_test = "4"
 aleph-protocol = { path = "shared/protocol" }
-# Test-only: `src/tools/presentation_census.rs` calls the REAL `display_name`
-# / `DISPLAY_NAMES` instead of scraping their source. `default-features =
-# false` is required — this crate's `default` is `["wasm"]` and would pull
-# wasm-bindgen / web-sys into alephcore's test build. With defaults off it
-# adds no new crates to the graph (same spelling `interfaces/tui` uses), and
-# there is no cycle: shared-ui-logic depends on aleph-protocol, never on
-# alephcore. The `panel` feature also lets the Gateway's Nebula declaration
-# test verify the declaration against the real Panel projection.
+# Enable the production dependency's Panel projection only in tests for the
+# presentation census and the Gateway's Nebula declaration.
 shared-ui-logic = { path = "shared/ui_logic", default-features = false, features = ["panel"] }
 proptest = "1.12"
 rand = "0.10"

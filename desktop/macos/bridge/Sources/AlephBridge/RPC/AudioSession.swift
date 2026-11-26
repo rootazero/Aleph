@@ -14,6 +14,188 @@ struct AudioDeviceInfo {
 /// instances in principle but the hardware input path is single-tenant in
 /// practice; we gate record() calls through an actor to match camera.
 actor AudioSession {
+    typealias RequestVoicePermission = @Sendable (@escaping @Sendable (Bool) -> Void) -> Void
+    typealias OpenVoiceDevice = @Sendable (Int, @escaping @Sendable () -> Void) throws -> any VoiceCaptureDevice
+
+    private struct VoiceLease {
+        let id: UUID
+        let ticket: MicrophoneReservation.Ticket
+        let deadline: ContinuousClock.Instant
+        let cancellation: VoiceCaptureStartCancellation
+        let input: Server.InputLifetime?
+        var startup: CheckedContinuation<Void, Error>?
+        var watchdog: Task<Void, Never>?
+        var device: (any VoiceCaptureDevice)?
+    }
+
+    private let requestVoicePermission: RequestVoicePermission
+    private let openVoiceDevice: OpenVoiceDevice
+    private var microphone = MicrophoneReservation()
+    private var voiceAdmission = VoiceCaptureAdmission()
+    private var voiceLease: VoiceLease?
+
+    init(
+        requestVoicePermission: @escaping RequestVoicePermission = { reply in
+            AVCaptureDevice.requestAccess(for: .audio, completionHandler: reply)
+        },
+        openVoiceDevice: @escaping OpenVoiceDevice = { limit, onFailure in
+            try EngineVoiceCaptureDevice(clipLimit: limit, onFailure: onFailure)
+        }
+    ) {
+        self.requestVoicePermission = requestVoicePermission
+        self.openVoiceDevice = openVoiceDevice
+    }
+
+    func reserveCameraMicrophone() -> MicrophoneReservation.Ticket? {
+        microphone.reserve(.camera)
+    }
+
+    func releaseCameraMicrophone(_ ticket: MicrophoneReservation.Ticket) {
+        guard ticket.kind == .camera else { return }
+        microphone.release(ticket)
+    }
+
+    private func microphoneBusy() -> RpcError {
+        RpcError(code: -32004, message: "audio: microphone is already reserved", data: nil)
+    }
+
+    private func voiceError(_ message: String) -> RpcError {
+        RpcError(code: -32004, message: "media.audio.voice_capture: \(message)", data: nil)
+    }
+
+    func voiceCaptureStart(
+        id: UUID, clipLimit: Int, ingress: ContinuousClock.Instant, input: Server.InputLifetime? = nil
+    ) async throws {
+        guard input?.isClosed != true, voiceAdmission.allowsStart(id, ingress: ingress, now: ContinuousClock().now) else {
+            throw voiceError("start expired, cancelled or helper generation retired")
+        }
+        try Task.checkCancellation()
+        guard let ticket = microphone.reserve(.voice) else {
+            if let owner = microphone.current, owner.kind != .voice {
+                // This request cannot have reached either permission or device open.
+                let ownerName = owner.kind == .camera ? "camera clip" : "legacy recording"
+                throw RpcError(code: -32004, message: "audio: \(ownerName) owns microphone",
+                               data: .object(["reason": .string("voice_capture_legacy_busy")]))
+            }
+            throw microphoneBusy()
+        }
+        let deadline = ingress.advanced(by: VoiceCaptureAdmission.leaseBudget)
+        let cancellation = VoiceCaptureStartCancellation()
+        voiceLease = VoiceLease(id: id, ticket: ticket, deadline: deadline, cancellation: cancellation, input: input)
+
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (startup: CheckedContinuation<Void, Error>) in
+                guard voiceLease?.ticket == ticket else {
+                    startup.resume(throwing: CancellationError())
+                    return
+                }
+                voiceLease?.startup = startup
+                guard !Task.isCancelled else {
+                    releaseVoice(ticket, failing: CancellationError())
+                    return
+                }
+                voiceLease?.watchdog = Task { [weak self] in
+                    while !Task.isCancelled {
+                        let next = min(ContinuousClock().now.advanced(by: .milliseconds(200)), deadline)
+                        do { try await Task.sleep(until: next, clock: ContinuousClock()) } catch { return }
+                        guard await self?.checkVoiceLease(ticket) == true else { return }
+                    }
+                }
+                requestVoicePermission { [weak self] granted in
+                    Task { await self?.voicePermissionResolved(ticket, granted: granted, clipLimit: clipLimit) }
+                }
+            }
+        } onCancel: {
+            cancellation.cancel()
+            Task { await self.releaseVoice(ticket, failing: CancellationError()) }
+        }
+    }
+
+    private func voicePermissionResolved(_ ticket: MicrophoneReservation.Ticket, granted: Bool, clipLimit: Int) {
+        guard let lease = voiceLease, lease.ticket == ticket, let startup = lease.startup else { return }
+        guard granted, lease.input?.isClosed != true, !lease.cancellation.isCancelled,
+              ContinuousClock().now < lease.deadline else {
+            releaseVoice(ticket, failing: voiceError("permission denied, cancelled or lease expired"))
+            return
+        }
+        do {
+            voiceLease?.device = try openVoiceDevice(clipLimit) { [weak self] in
+                Task { await self?.captureDeviceFailed(ticket) }
+            }
+            guard lease.input?.isClosed != true, !lease.cancellation.isCancelled,
+                  ContinuousClock().now < lease.deadline else {
+                releaseVoice(ticket, failing: voiceError("cancelled or lease expired while opening device"))
+                return
+            }
+            voiceLease?.startup = nil
+            startup.resume()
+        } catch {
+            releaseVoice(ticket, failing: error)
+        }
+    }
+
+    private func captureDeviceFailed(_ ticket: MicrophoneReservation.Ticket) {
+        releaseVoice(ticket, failing: voiceError("device, samples or sample clock lost"))
+    }
+
+    private func checkVoiceLease(_ ticket: MicrophoneReservation.Ticket) -> Bool {
+        guard let lease = voiceLease, lease.ticket == ticket else { return false }
+        do {
+            guard lease.input?.isClosed != true, !lease.cancellation.isCancelled,
+                  ContinuousClock().now < lease.deadline else { throw voiceError("lease closed or expired") }
+            try lease.device?.checkHealth()
+            return true
+        } catch {
+            releaseVoice(ticket, failing: error)
+            return false
+        }
+    }
+
+    private func releaseVoice(_ ticket: MicrophoneReservation.Ticket, failing error: (any Error)? = nil) {
+        guard let lease = voiceLease, lease.ticket == ticket else { return }
+        lease.device?.stop()
+        lease.watchdog?.cancel()
+        voiceLease = nil
+        voiceAdmission.finished(lease.id)
+        microphone.release(ticket)
+        if let startup = lease.startup {
+            startup.resume(throwing: error ?? CancellationError())
+        }
+    }
+
+    func voiceCapturePoll(id: UUID, after cursor: Int) throws -> [VoiceCaptureObservation] {
+        guard let lease = voiceLease, lease.id == id, let device = lease.device,
+              checkVoiceLease(lease.ticket) else { throw voiceError("capture not active") }
+        do {
+            return try device.poll(after: cursor)
+        } catch {
+            releaseVoice(lease.ticket, failing: error)
+            throw error
+        }
+    }
+
+    func voiceCaptureSeal(id: UUID, first: Int, end: Int) throws -> Data {
+        guard let lease = voiceLease, lease.id == id, let device = lease.device,
+              checkVoiceLease(lease.ticket) else { throw voiceError("capture not active") }
+        defer { releaseVoice(lease.ticket) }
+        let wav = try device.seal(first: first, end: end)
+        guard ContinuousClock().now < lease.deadline else { throw voiceError("lease expired") }
+        return wav
+    }
+
+    func voiceCaptureCancel(id: UUID) throws {
+        if let lease = voiceLease, lease.id == id {
+            releaseVoice(lease.ticket)
+        } else if !voiceAdmission.cancelUnknown(id) {
+            throw voiceError("unmatched cancel history saturated; retire helper generation")
+        }
+    }
+
+    func closeVoiceCaptureInput() {
+        voiceAdmission.retire()
+        if let lease = voiceLease { releaseVoice(lease.ticket) }
+    }
+
     /// Active push-to-talk recorder, held between `recordStart` and `recordStop`.
     /// The delegate is retained too so its continuation/encode callbacks fire.
     private var activeRecorder: AVAudioRecorder?
@@ -55,6 +237,8 @@ actor AudioSession {
     }
 
     func record(durationSecs: Double) async throws -> (filePath: String, duration: Double, format: String) {
+        guard let ticket = microphone.reserve(.timed) else { throw microphoneBusy() }
+        defer { microphone.release(ticket) }
         let dir = mediaDir()
         do {
             try FileManager.default.createDirectory(
@@ -124,16 +308,33 @@ actor AudioSession {
         return (url.path, durationSecs, "m4a")
     }
 
-    /// Begin an open-ended push-to-talk recording. Triggers the native
-    /// microphone TCC prompt on first use (direct AVFoundation access works on
-    /// unsigned/ad-hoc builds, unlike WKWebView `getUserMedia`). Replaces any
-    /// recording already in progress.
+    /// Begin an open-ended push-to-talk recording. A duplicate is idempotent
+    /// only after the existing AudioQueue has actually started.
     func recordStart() async throws {
-        // No input device at all (e.g. a Mac mini with no built-in mic and none
-        // attached). Detect this BEFORE prompting for permission so we surface a
-        // distinct "no microphone" signal the core can turn into a clear message,
-        // rather than a cryptic `record() failed`. The token is matched on the
-        // Rust side (`handle_record_start`).
+        if activeRecorder?.isRecording == true { return }
+        let existing = activeRecorder
+        let ticket: MicrophoneReservation.Ticket
+        if existing != nil, let current = microphone.current, current.kind == .open {
+            ticket = current
+        } else {
+            guard let reserved = microphone.reserve(.open) else { throw microphoneBusy() }
+            ticket = reserved
+        }
+        var startedRecording = false
+        defer { if !startedRecording { microphone.release(ticket) } }
+
+        if let existing {
+            // Clear before the await so recordStop cannot wait on the same
+            // encoder continuation; the reservation still excludes new input.
+            let delegate = activeDelegate
+            activeRecorder = nil
+            activeURL = nil
+            activeDelegate = nil
+            existing.stop()
+            if let delegate { try? await delegate.waitForFinish(timeout: 2.0) }
+        }
+
+        // Preserve the no-device token expected by the Rust legacy caller.
         guard hasAudioInputDevice() else {
             throw RpcError(
                 code: -32004,
@@ -141,38 +342,14 @@ actor AudioSession {
                 data: nil
             )
         }
-
-        // Proactively request mic access so the system prompt appears up front
-        // and a denial surfaces as a clean error rather than an empty file.
         let granted = await AVCaptureDevice.requestAccess(for: .audio)
+        try Task.checkCancellation()
         guard granted else {
             throw RpcError(
                 code: -32004,
                 message: "audio.record_start: microphone permission denied",
                 data: nil
             )
-        }
-
-        // Reentrancy guard. `await requestAccess` above is a suspension point:
-        // while the TCC dialog is up the actor is free, so a duplicate
-        // `record_start` (e.g. a second click before the UI left Idle) can race
-        // in. If a recording is already live, return success WITHOUT touching
-        // its AudioQueue — calling `stop()` here while the queue's input
-        // callback is in flight is a use-after-free that crashes the helper
-        // (AudioRecorderAQInputCallback → objc_loadWeak EXC_BAD_ACCESS).
-        if let existing = activeRecorder {
-            if existing.isRecording {
-                return
-            }
-            // Stale, no longer recording — finalise it safely (let the queue
-            // drain via the delegate) before starting a fresh recording.
-            existing.stop()
-            if let delegate = activeDelegate {
-                try? await delegate.waitForFinish(timeout: 2.0)
-            }
-            activeRecorder = nil
-            activeURL = nil
-            activeDelegate = nil
         }
 
         let dir = mediaDir()
@@ -228,7 +405,7 @@ actor AudioSession {
         var attempt = 0
         while !started, attempt < 4 {
             attempt += 1
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try await Task.sleep(for: .milliseconds(250))
             started = recorder.record()
         }
         guard started else {
@@ -242,17 +419,20 @@ actor AudioSession {
         activeRecorder = recorder
         activeURL = url
         activeDelegate = delegate
+        startedRecording = true
     }
 
     /// Stop the active push-to-talk recording and return the captured file.
     func recordStop() async throws -> (filePath: String, duration: Double, format: String) {
-        guard let recorder = activeRecorder, let url = activeURL else {
+        guard let recorder = activeRecorder, let url = activeURL,
+              let ticket = microphone.current, ticket.kind == .open else {
             throw RpcError(
                 code: -32004,
                 message: "audio.record_stop: no active recording",
                 data: nil
             )
         }
+        defer { microphone.release(ticket) }
         // `currentTime` resets to 0 on stop(), so capture elapsed time first.
         let elapsed = recorder.currentTime
         let delegate = activeDelegate

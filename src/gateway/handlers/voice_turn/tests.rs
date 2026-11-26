@@ -595,9 +595,9 @@ impl aleph_desktop::traits::MediaCapability for FakeOfflineEngine {
     }
 }
 
-struct FakePlatform(Arc<FakeOfflineEngine>);
+struct FakePlatform<M>(Arc<M>);
 
-impl aleph_desktop::DesktopPlatform for FakePlatform {
+impl<M: aleph_desktop::traits::MediaCapability> aleph_desktop::DesktopPlatform for FakePlatform<M> {
     fn platform_name(&self) -> &str {
         "fake"
     }
@@ -618,6 +618,121 @@ impl aleph_desktop::DesktopPlatform for FakePlatform {
     }
     fn media(&self) -> Option<&dyn aleph_desktop::traits::MediaCapability> {
         Some(&*self.0)
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct CaptureMediaFixture {
+    pub(crate) entered: tokio::sync::Notify,
+    pub(crate) permit_samples: tokio::sync::Notify,
+    pub(crate) sealing: tokio::sync::Notify,
+    pub(crate) seal_cancelled: tokio::sync::Notify,
+    pub(crate) permit_release: tokio::sync::Notify,
+    pub(crate) released: AtomicUsize,
+    pub(crate) release_completed: tokio::sync::Notify,
+}
+
+impl CaptureMediaFixture {
+    pub(crate) fn mount(self: &Arc<Self>, handlers: &mut HandlerRegistry) {
+        let media = Arc::new(FixtureRecording(self.clone()));
+        voice_turn::register_capture(handlers, Some(Arc::new(FakePlatform(media))));
+    }
+}
+
+#[tokio::test]
+async fn voice_capture_legacy_dispatch_cannot_acquire_device() {
+    use aleph_protocol::panel_voice::{
+        VOICE_TURN_CAPTURE_CANCEL_METHOD, VOICE_TURN_CAPTURE_FINISH_METHOD,
+        VOICE_TURN_CAPTURE_METHOD, VOICE_TURN_CAPTURE_READY_METHOD,
+    };
+
+    let mut handlers = HandlerRegistry::new();
+    let media = Arc::new(CaptureMediaFixture::default());
+    media.mount(&mut handlers);
+    let capture_id = uuid::Uuid::new_v4();
+    for method in [
+        VOICE_TURN_CAPTURE_METHOD,
+        VOICE_TURN_CAPTURE_READY_METHOD,
+        VOICE_TURN_CAPTURE_FINISH_METHOD,
+        VOICE_TURN_CAPTURE_CANCEL_METHOD,
+    ] {
+        let request: JsonRpcRequest = serde_json::from_value(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": method,
+            "params": {"capture_id": capture_id}
+        }))
+        .unwrap();
+        let response = handlers.handle(&request).await;
+        assert_eq!(
+            response.error.unwrap().code,
+            crate::gateway::protocol::PERMISSION_DENIED
+        );
+    }
+    let entered = media.entered.notified();
+    tokio::pin!(entered);
+    assert!(futures::poll!(&mut entered).is_pending());
+}
+
+struct FixtureRecording(Arc<CaptureMediaFixture>);
+
+#[async_trait::async_trait]
+impl aleph_desktop::traits::MediaCapability for FixtureRecording {
+    fn supports_voice_capture(&self) -> bool {
+        true
+    }
+
+    async fn voice_capture_begin(
+        &self,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> aleph_desktop::Result<Box<dyn aleph_desktop::traits::VoiceCapture>> {
+        self.0.entered.notify_one();
+        Ok(Box::new(Self(self.0.clone())))
+    }
+}
+
+#[async_trait::async_trait]
+impl aleph_desktop::traits::VoiceCapture for FixtureRecording {
+    async fn poll(
+        &mut self,
+        after_sample: u32,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> aleph_desktop::Result<Vec<aleph_desktop::media_types::VoiceCaptureObservation>> {
+        if after_sample != 0 {
+            return Ok(Vec::new());
+        }
+        tokio::select! {
+            () = cancel.cancelled() => Ok(Vec::new()),
+            () = self.0.permit_samples.notified() => Ok((1..=8)
+                .map(|frame| aleph_desktop::media_types::VoiceCaptureObservation {
+                    end_sample: frame * 800,
+                    rms: 0.5,
+                }).collect()),
+        }
+    }
+
+    async fn seal(
+        self: Box<Self>,
+        first_sample: u32,
+        end_sample: u32,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> aleph_desktop::Result<Vec<u8>> {
+        assert_eq!((first_sample, end_sample), (0, 6400));
+        self.0.sealing.notify_one();
+        tokio::select! {
+            () = self.0.permit_release.notified() => {},
+            () = cancel.cancelled() => {
+                self.0.seal_cancelled.notify_one();
+                self.0.permit_release.notified().await;
+            }
+        }
+        self.0.released.fetch_add(1, Ordering::SeqCst);
+        self.0.release_completed.notify_one();
+        Ok(wav((end_sample - first_sample) as usize))
+    }
+
+    async fn cancel(self: Box<Self>) -> aleph_desktop::Result<()> {
+        self.0.released.fetch_add(1, Ordering::SeqCst);
+        self.0.release_completed.notify_one();
+        Ok(())
     }
 }
 

@@ -7,7 +7,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use aleph_protocol::panel_voice::{
-    VOICE_TURN_CANCEL_METHOD, VOICE_TURN_SYNTHESIZE_METHOD, VOICE_TURN_TRANSCRIBE_METHOD,
+    is_native_capture_method, VOICE_TURN_CANCEL_METHOD, VOICE_TURN_SYNTHESIZE_METHOD,
+    VOICE_TURN_TRANSCRIBE_METHOD,
 };
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -139,6 +140,7 @@ struct BoundPeer {
     expected: CallerSnapshot,
     authority: BoundAuthority,
     cancellation: CancellationToken,
+    live_events: bool,
     /// This connection's whole-turn scopes; shared by every request it sends.
     turns: Arc<VoiceTurnScopes>,
 }
@@ -181,12 +183,14 @@ impl DispatchPeer {
         expected: CallerSnapshot,
         binding: super::web_v1::WebBinding,
         cancellation: CancellationToken,
+        live_events: bool,
     ) -> Self {
         Self {
             bound: Some(BoundPeer {
                 expected,
                 authority: BoundAuthority::Web(binding),
                 cancellation,
+                live_events,
                 turns: Default::default(),
             }),
             ..Self::legacy(connections, conn_id, false)
@@ -199,6 +203,7 @@ impl DispatchPeer {
         conn_id: String,
         owner_store: Arc<crate::gateway::security::SecurityStore>,
         cancellation: CancellationToken,
+        live_events: bool,
     ) -> Self {
         Self {
             bound: Some(BoundPeer {
@@ -210,6 +215,7 @@ impl DispatchPeer {
                 },
                 authority: BoundAuthority::Desktop(owner_store),
                 cancellation,
+                live_events,
                 turns: Default::default(),
             }),
             ..Self::legacy(connections, conn_id, false)
@@ -228,6 +234,7 @@ impl DispatchPeer {
                 expected,
                 authority: BoundAuthority::Fixture,
                 cancellation: CancellationToken::new(),
+                live_events: false,
                 turns: Default::default(),
             }),
             ..Self::legacy(connections, conn_id, false)
@@ -245,6 +252,17 @@ impl DispatchPeer {
             return true;
         }
         matches!(authority, Some(BoundAuthority::Web(_)))
+    }
+
+    pub(super) fn is_desktop_voice_bound(&self) -> bool {
+        #[cfg(any(unix, windows))]
+        {
+            self.bound
+                .as_ref()
+                .is_some_and(|bound| matches!(&bound.authority, BoundAuthority::Desktop(_)))
+        }
+        #[cfg(not(any(unix, windows)))]
+        false
     }
 
     #[cfg(windows)]
@@ -331,13 +349,20 @@ impl<'a> PeerView<'a> {
     // Caller must already have passed `validate_live`. Neither loopback nor a
     // Panel project selector establishes the transport of the invocation.
     fn voice_context_after_validation(&self, method: &str) -> Option<VoiceRequestContext> {
-        if !matches!(
-            method,
-            VOICE_TURN_TRANSCRIBE_METHOD | VOICE_TURN_SYNTHESIZE_METHOD | VOICE_TURN_CANCEL_METHOD
-        ) {
+        let bound = self.bound?;
+        let voice_snapshot = method == aleph_protocol::panel::PANEL_UI_CAPABILITY_SNAPSHOT_METHOD
+            && bound.live_events;
+        if !voice_snapshot
+            && !matches!(
+                method,
+                VOICE_TURN_TRANSCRIBE_METHOD
+                    | VOICE_TURN_SYNTHESIZE_METHOD
+                    | VOICE_TURN_CANCEL_METHOD
+            )
+            && !is_native_capture_method(method)
+        {
             return None;
         }
-        let bound = self.bound?;
         let (ingress, budget) = match &bound.authority {
             BoundAuthority::Web(_) => (VoiceIngress::WebV1, super::web_v1::MAX_MESSAGE),
             #[cfg(any(unix, windows))]
