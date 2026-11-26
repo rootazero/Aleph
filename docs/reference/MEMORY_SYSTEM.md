@@ -546,6 +546,16 @@ table deduplicates by `sha256(query)`. `NoteSynthesis` weekly stage
 excludes `query/` to prevent recursion. See
 [docs/superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md §5](../superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md).
 
+Reflection records exposure for materialized notes offered to the model, not
+just the notes it cites. The assembler preserves the note's owner through both
+fallback and reranking; the reflector deduplicates by `(owner, path)` and
+writes one batch per owner. Raw memory, summaries and synthetic profile items
+remain citable but do not count as note exposure. Public note IDs and citation
+paths stay unchanged; owner provenance is in-process only. See
+[`src/memory/reflector/recall_signals.rs`](../../src/memory/reflector/recall_signals.rs).
+
+反思曝光记录覆盖提供给模型的实际笔记，不要求模型最终引用。选材降级与重排均保留笔记归属；反思按 `(owner, path)` 去重并逐归属分批写入。原始记忆、摘要与合成画像仍可引用，但不作为笔记曝光。公开笔记 ID 和引用路径不变，归属信息只在进程内传递。
+
 ## 17. Correction rail, destination ladder & acknowledgment contract
 
 **Correction rail (显式纠错链).** When the user corrects the model, the
@@ -555,10 +565,14 @@ path `aleph://correction/{id}` (severity-tagged, optional
 critical path — the model's own "the user corrected me" judgement replaces
 the old keyword `SignalDetector` (R7). The `FeedbackDistill` dream stage
 (`src/memory/dreaming/stages/feedback_distill.rs`) later reads corrections
-via the `aleph://correction/` path prefix (own `feedback_distill` watermark
-on `compression_metadata`; runs on **both** the Consolidate and Synthesize
-strategies) and asks the LLM to pick `New` / `Strengthen` / `Supersede` /
-`Skip` per signal — High/Critical severities bypass the batch quorum. The
+from the owning corpus's raw append feed (runs on **both** the Consolidate
+and Synthesize strategies) and asks the LLM to pick `New` / `Strengthen` /
+`Supersede` / `Skip` with exact coverage of the presented IDs. High/Critical
+signals bypass the batch quorum. The stage saves each bounded plan before
+editing notes and advances its sequence cursor only after every decision
+has settled. The existing correction list uses the same cursor; `distilled`
+means settled, including intentional skips, not necessarily a new note.
+This state is independent of CompressionService's `is_processed` flag. The
 output is `feedback/` notes, surfaced two ways: normal relevance retrieval,
 plus the always-on `FeedbackFloorLoader`
 (`src/memory/assembler/feedback_floor.rs`) which unconditionally promotes up
@@ -566,6 +580,10 @@ to 6 High/Critical rules into the envelope's `Feedback` slot (pre-populated
 like `UserProfile`, never dropped by re-rank). Corrections must NOT be
 hand-written as `feedback/` notes — the distillation gate deduplicates and
 strengthens them.
+
+**迁移与恢复 / Migration and recovery.** 首次启用时冻结旧时间水位和追加序列边界；边界之后的新纠正按追加序处理，即使同秒或回填旧时间戳也不会被旧水位跳过。边界前已被旧水位标为完成的纠正不自动重放。重启继续同一计划；若预期文件或索引与实际状态冲突，保留待处理批次和游标，不覆盖未知内容。 / Activation freezes the legacy timestamp boundary. New appends use sequence order, but corrections already covered by the legacy mark are not replayed. Conflicting disk or index state blocks the saved batch without discarding it.
+
+See [Dream Daemon §5.7](memory/DREAM_DAEMON.md#57-feedbackdistill) for the required write and verification order.
 
 **Curated hot zone (`remember`).** The `remember` tool is the sole writer
 of the per-agent `MEMORY.md` hot zone (see [NOTES.md](memory/NOTES.md)

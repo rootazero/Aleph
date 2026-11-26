@@ -470,9 +470,25 @@ impl ScopedToolService {
                         lease,
                         &Self::capability_call_context(&format!("{name}/resolve")),
                     )
-                    .map_err(|error| ToolError::PermissionDenied {
-                        name: name.into(),
-                        reason: format!("canonical capability lease cannot be resolved: {error:?}"),
+                    .map_err(|error| match error {
+                        // Model-visible: the tool stays listed and the model
+                        // learns why this call failed and that it may retry.
+                        crate::capability::facade::ResolveError::DependencyUnavailable {
+                            target,
+                            state,
+                        } => ToolError::Execution {
+                            name: name.into(),
+                            cause: format!(
+                                "`{}` 当前不可用（状态 {state:?}），稍后重试或请用户启用",
+                                target.name
+                            ),
+                        },
+                        error => ToolError::PermissionDenied {
+                            name: name.into(),
+                            reason: format!(
+                                "canonical capability lease cannot be resolved: {error:?}"
+                            ),
+                        },
                     })?;
                 captured_backend_lease = Some(backend_lease);
                 Some(entry)
@@ -1489,7 +1505,6 @@ impl ScopedToolService {
         ),
         ToolError,
     > {
-        self.validate_compatibility_activation(name, lease.owner_generation)?;
         // Only the immutable Core registration owns the typed domain policy seam.
         // Approval, compatibility, canonical capture and lease checks stay here.
         if domain_policy.is_some() {
@@ -1526,36 +1541,6 @@ impl ScopedToolService {
             crate::gateway::caller_identity::current_caller_conn_id(),
             call_id.into(),
         )
-    }
-
-    /// Preserve the old opt-in API through the same activation evaluator used
-    /// by PolicyRuntime. Production does not install a per-name policy here.
-    fn validate_compatibility_activation(
-        &self,
-        name: &str,
-        current_generation: crate::capability::ownership::OwnerGeneration,
-    ) -> Result<(), ToolError> {
-        let Some(activation) = self.capability_activations.get(name) else {
-            return Ok(());
-        };
-        let source = self.capability_constraint_context.as_ref().ok_or_else(|| {
-            ToolError::PermissionDenied {
-                name: name.to_string(),
-                reason:
-                    "capability runtime restriction requires an invocation-owner context source"
-                        .into(),
-            }
-        })?;
-        let context = source(name).map_err(|error| ToolError::PermissionDenied {
-            name: name.to_string(),
-            reason: format!("capability runtime context unavailable: {error}"),
-        })?;
-        activation
-            .validate_runtime(current_generation, &context)
-            .map_err(|error| ToolError::PermissionDenied {
-                name: name.to_string(),
-                reason: format!("capability runtime restriction denied invocation: {error}"),
-            })
     }
 
     fn validate_plugin_capture(

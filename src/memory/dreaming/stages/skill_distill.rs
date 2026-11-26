@@ -248,12 +248,8 @@ impl DreamStage for SkillDistillStage {
                     .apply_distill_action(&ctx.agent_id, "skill", &action)
                     .await
                 {
-                    Ok(_) => {
-                        // `Skip` is a pure no-op inside `apply_distill_action`,
-                        // so `Ok` is not proof a note was written. Mirrors
-                        // `FeedbackDistill`: the record still lands in the audit
-                        // trail, but the write counter only counts writes.
-                        if !matches!(action, DistillAction::Skip { .. }) {
+                    Ok(outcome) => {
+                        if outcome == DistillOutcome::Applied {
                             applied += 1;
                         }
                         ctx.report
@@ -261,7 +257,7 @@ impl DreamStage for SkillDistillStage {
                             .push(DistillActionRecord::from_action(
                                 "skill_distill",
                                 &action,
-                                DistillOutcome::Applied,
+                                outcome,
                                 None,
                             ));
                     }
@@ -323,7 +319,7 @@ pub fn parse_distill_response(text: &str) -> Vec<DistillAction> {
 
 /// Clamp `confidence` into `[0.0, 1.0]` for `New` and `Supersede` variants
 /// to defend against out-of-range values from the LLM.
-const fn clamp_action(mut a: DistillAction) -> DistillAction {
+pub(super) const fn clamp_action(mut a: DistillAction) -> DistillAction {
     use DistillAction::*;
     match &mut a {
         New { confidence, .. } | Supersede { confidence, .. } => {
@@ -484,7 +480,7 @@ mod tests {
             .report
             .distill_actions
             .iter()
-            .all(|r| r.action_kind == "skip"));
+            .all(|r| r.action_kind == "skip" && r.outcome == DistillOutcome::Skipped));
     }
 
     /// Positive control: a real `New` still counts, so the fix narrowed the

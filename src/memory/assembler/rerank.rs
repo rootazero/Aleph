@@ -179,6 +179,7 @@ mod tests {
             relevance: 0.5,
             updated_at: 0,
             slot_hint: slot,
+            note_provenance: None,
             fact_source: crate::memory::context::FactSource::Extracted,
         }
     }

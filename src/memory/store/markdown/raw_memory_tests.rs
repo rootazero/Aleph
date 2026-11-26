@@ -1,5 +1,7 @@
 use super::MarkdownSessionStore;
-use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+use crate::memory::store::raw_memory::{
+    RawMemory, RawMemorySource, RawMemoryStore, CORRECTION_PATH_PREFIX,
+};
 
 fn raw(id: &str, created_at: i64, agent: &str, path: &str) -> RawMemory {
     let mut raw = RawMemory::new(
@@ -471,6 +473,148 @@ async fn raw_memory_prefix_since_and_search_are_literal_and_limit_after_filterin
             .await
             .unwrap()),
         ["latest-match"]
+    );
+}
+
+fn correction(id: &str, timestamp: i64, corpus: &str) -> RawMemory {
+    raw(
+        id,
+        timestamp,
+        corpus,
+        &format!("{CORRECTION_PATH_PREFIX}{id}"),
+    )
+}
+
+#[tokio::test]
+async fn correction_pages_do_not_lose_late_rows_at_the_legacy_timestamp() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MarkdownSessionStore::new(dir.path()).await.unwrap();
+    for record in [
+        correction("old", 9, "main"),
+        correction("consumed", 10, "main"),
+        correction("backlog", 11, "main"),
+        correction("backlog-tie", 11, "main"),
+        correction("other-corpus", 1, "other"),
+        raw("non-correction", 11, "main", "aleph://session/actual"),
+    ] {
+        store.insert_raw_memory(&record).await.unwrap();
+    }
+    // Reopen a pre-feed metadata database over the same real Markdown bodies.
+    store
+        .db
+        .lock()
+        .await
+        .execute_batch(
+            "DROP TRIGGER append_raw_correction;
+             DROP TRIGGER delete_raw_correction;
+             DROP TABLE raw_correction_fences;
+             DROP TABLE raw_correction_sequence;",
+        )
+        .unwrap();
+    drop(store);
+    let store = MarkdownSessionStore::new(dir.path()).await.unwrap();
+    assert!(store.correction_page("main", 0, 1).await.unwrap().is_none());
+    store
+        .activate_correction_feed("main", Some(10))
+        .await
+        .unwrap();
+    store.activate_correction_feed("other", None).await.unwrap();
+    let first = store.correction_page("main", 0, 1).await.unwrap().unwrap();
+    assert_eq!(first[0].raw.id, "backlog");
+    let other = store.correction_page("other", 0, 2).await.unwrap().unwrap();
+    assert_eq!(other.len(), 1);
+    assert_eq!(other[0].raw.id, "other-corpus");
+
+    for record in [
+        correction("same-second", 11, "main"),
+        correction("same-second-two", 11, "main"),
+        correction("same-second-three", 11, "main"),
+        correction("backdated", 8, "main"),
+        correction("removed", 14, "main"),
+    ] {
+        store.insert_raw_memory(&record).await.unwrap();
+    }
+    store
+        .insert_raw_memory_or_ignore(&correction("same-second", 11, "main"))
+        .await
+        .unwrap();
+    let before_delete = store.correction_page("main", 0, 20).await.unwrap().unwrap();
+    let removed_seq = before_delete.last().unwrap().seq;
+    assert_eq!(before_delete.last().unwrap().raw.id, "removed");
+    assert!(store.remove_raw("removed", "main").await.unwrap());
+    drop(store);
+
+    let store = MarkdownSessionStore::new(dir.path()).await.unwrap();
+    store.activate_correction_feed("main", None).await.unwrap();
+    store
+        .insert_raw_memory(&correction("later", 0, "main"))
+        .await
+        .unwrap();
+    let mut after = first[0].seq;
+    let mut seen = Vec::new();
+    loop {
+        let page = store
+            .correction_page("main", after, 2)
+            .await
+            .unwrap()
+            .unwrap();
+        if page.is_empty() {
+            break;
+        }
+        assert!(page.len() <= 2);
+        for hit in page {
+            assert!(hit.seq > after);
+            after = hit.seq;
+            seen.push(hit.raw.id);
+        }
+    }
+    assert!(
+        after > removed_seq,
+        "deleting the high-water row must not reuse its sequence"
+    );
+    assert_eq!(
+        seen,
+        [
+            "backlog-tie",
+            "same-second",
+            "same-second-two",
+            "same-second-three",
+            "backdated",
+            "later"
+        ]
+    );
+    let replay = store.correction_page("main", 0, 1).await.unwrap().unwrap();
+    assert_eq!(
+        replay[0].raw.id, "backlog",
+        "repeated activation cannot reopen legacy rows"
+    );
+    assert_eq!(replay[0].seq, first[0].seq);
+}
+
+#[tokio::test]
+async fn correction_page_fails_if_a_selected_body_cannot_be_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MarkdownSessionStore::new(dir.path()).await.unwrap();
+    for id in ["before", "corrupt", "after"] {
+        store
+            .insert_raw_memory(&correction(id, 10, "main"))
+            .await
+            .unwrap();
+    }
+    store.activate_correction_feed("main", None).await.unwrap();
+    let (path, _) = deletion_paths(&store, "corrupt").await;
+    let original = std::fs::read(&path).unwrap();
+    std::fs::write(&path, b"not raw memory Markdown").unwrap();
+    assert!(store.correction_page("main", 0, 3).await.is_err());
+    std::fs::remove_file(&path).unwrap();
+    assert!(store.correction_page("main", 0, 3).await.is_err());
+    std::fs::write(path, original).unwrap();
+    let page = store.correction_page("main", 0, 3).await.unwrap().unwrap();
+    assert_eq!(
+        page.iter()
+            .map(|hit| hit.raw.id.as_str())
+            .collect::<Vec<_>>(),
+        ["before", "corrupt", "after"]
     );
 }
 

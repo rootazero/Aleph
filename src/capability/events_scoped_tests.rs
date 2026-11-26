@@ -1,5 +1,4 @@
 //! Same-source event transport tests; Gateway access remains a test adapter until Task7.
-use crate::capability::audit::{AuditCollector, AuditError, AuditQuery};
 use crate::capability::descriptor::CapabilityId;
 use crate::capability::event_audience::{CapabilityEventAccess, EventAudience, TrustedEventScope};
 use crate::capability::events::{
@@ -23,6 +22,24 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Notify, RwLock};
+
+
+/// Retained records the trusted scope admits: the snapshot half of
+/// `subscribe_scoped`, reading CURRENT access outside the buffer lock.
+async fn scoped_snapshot(
+    stream: &InMemoryEventStream,
+    scope: &TrustedEventScope,
+    filter: &EventFilter,
+) -> Result<Vec<Arc<CapabilityEventRecord>>, EventError> {
+    let snapshot = stream.snapshot()?;
+    let mut visible = Vec::new();
+    for record in snapshot.records() {
+        if filter.matches(record) && scope.admits(record).await {
+            visible.push(Arc::clone(record));
+        }
+    }
+    Ok(visible)
+}
 
 fn id() -> CapabilityId {
     CapabilityId {
@@ -184,7 +201,6 @@ impl GatewayFixture {
 async fn revoked_target_is_visible_but_demoted_subscriber_is_not() {
     let fixture = GatewayFixture::new().await;
     let stream = Arc::new(InMemoryEventStream::new(16).unwrap());
-    let audit = AuditCollector::new(stream.clone());
     let tree = Arc::new(OwnershipTree::new());
     tree.register(
         id(),
@@ -210,24 +226,21 @@ async fn revoked_target_is_visible_but_demoted_subscriber_is_not() {
         .unwrap();
     assert_eq!(live.recv().await.unwrap().event(), &revoked());
     assert_eq!(
-        audit
-            .query_scoped(&alice, &AuditQuery::default())
+        scoped_snapshot(&stream, &alice, &EventFilter::default())
             .await
             .unwrap()
             .len(),
         1
     );
     assert!(
-        audit
-            .query_scoped(&bob, &AuditQuery::default())
+        scoped_snapshot(&stream, &bob, &EventFilter::default())
             .await
             .unwrap()
             .is_empty(),
         "operator role must not cross creator audience"
     );
     assert!(
-        audit
-            .query_scoped(&next_surface, &AuditQuery::default())
+        scoped_snapshot(&stream, &next_surface, &EventFilter::default())
             .await
             .unwrap()
             .is_empty(),
@@ -254,8 +267,7 @@ async fn revoked_target_is_visible_but_demoted_subscriber_is_not() {
         connection.caller_role = "member".into();
         connection.permissions = scope_for_role("member");
     }
-    assert!(audit
-        .query_scoped(&alice, &AuditQuery::default())
+    assert!(scoped_snapshot(&stream, &alice, &EventFilter::default())
         .await
         .unwrap()
         .is_empty());
@@ -292,8 +304,7 @@ async fn revoked_target_is_visible_but_demoted_subscriber_is_not() {
         .await
         .unwrap();
     assert!(
-        audit
-            .query_scoped(&alice, &AuditQuery::default())
+        scoped_snapshot(&stream, &alice, &EventFilter::default())
             .await
             .unwrap()
             .is_empty(),
@@ -302,10 +313,9 @@ async fn revoked_target_is_visible_but_demoted_subscriber_is_not() {
 }
 
 #[tokio::test]
-async fn scoped_live_and_audit_share_exact_records() {
+async fn scoped_live_and_snapshot_share_exact_records() {
     let fixture = GatewayFixture::new().await;
     let stream = Arc::new(InMemoryEventStream::new(4).unwrap());
-    let audit = AuditCollector::new(stream.clone());
     let scope = fixture.scope("alice", Some("source-a"));
     let mut live = stream.subscribe_scoped(scope.clone(), EventFilter::default());
     let observed = audience(Some("alice"), Some(&fixture.session), Some("source-a"));
@@ -313,8 +323,7 @@ async fn scoped_live_and_audit_share_exact_records() {
         .emit_scoped(OwnerRef::Runtime, observed.clone(), revoked())
         .unwrap();
     let record = live.recv().await.unwrap();
-    let logs = audit
-        .query_scoped(&scope, &AuditQuery::default())
+    let logs = scoped_snapshot(&stream, &scope, &EventFilter::default())
         .await
         .unwrap();
     assert_eq!(logs.len(), 1);
@@ -351,31 +360,17 @@ async fn scoped_live_and_audit_share_exact_records() {
         )
         .unwrap();
     let denial = narrowed.recv().await.unwrap();
-    let query = AuditQuery {
+    let query = EventFilter {
         event_type: Some(CapabilityEventType::PolicyViolation),
         ..Default::default()
     };
-    let filtered = audit.query_scoped(&scope, &query).await.unwrap();
+    let filtered = scoped_snapshot(&stream, &scope, &query).await.unwrap();
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].sequence(), denial.sequence());
-    assert!(audit
-        .query_scoped(
-            &scope,
-            &AuditQuery {
-                from: Some(chrono::Utc::now()),
-                through: Some(record.timestamp()),
-                ..Default::default()
-            }
-        )
-        .await
-        .is_err());
     for _ in 0..2 {
         stream.emit(OwnerRef::Runtime, revoked()).unwrap();
     }
-    assert!(matches!(
-        audit.query_scoped(&scope, &query).await,
-        Err(AuditError::IncompleteHistory { dropped: 1 })
-    ));
+    assert_eq!(stream.snapshot().unwrap().dropped(), 1);
     let json = serde_json::to_string(&record).unwrap();
     for absent in ["terminal_bytes", "raw_error", "text", "key_down", "secret"] {
         assert!(!json.contains(absent));
@@ -511,9 +506,8 @@ async fn async_access_can_reenter_snapshot_and_close_without_a_buffer_lock() {
     access.entered.notified().await;
     access.release.notify_one();
     assert_eq!(worker.await.unwrap().unwrap().sequence(), 1);
-    let query = AuditCollector::new(stream);
-    let criteria = AuditQuery::default();
-    let future = query.query_scoped(&scope, &criteria);
+    let filter = EventFilter::default();
+    let future = scoped_snapshot(&stream, &scope, &filter);
     tokio::pin!(future);
     assert!(futures_util::poll!(&mut future).is_pending());
     access.entered.notified().await;
@@ -525,7 +519,6 @@ async fn async_access_can_reenter_snapshot_and_close_without_a_buffer_lock() {
 async fn missing_store_login_and_selection_never_widen_audience() {
     let fixture = GatewayFixture::new().await;
     let stream = Arc::new(InMemoryEventStream::new(8).unwrap());
-    let audit = AuditCollector::new(stream.clone());
     stream
         .emit_scoped(
             OwnerRef::Runtime,
@@ -540,8 +533,7 @@ async fn missing_store_login_and_selection_never_widen_audience() {
         store: None,
         incarnation: Some("source-a".into()),
     }));
-    assert!(audit
-        .query_scoped(&missing, &AuditQuery::default())
+    assert!(scoped_snapshot(&stream, &missing, &EventFilter::default())
         .await
         .unwrap()
         .is_empty());
@@ -550,8 +542,7 @@ async fn missing_store_login_and_selection_never_widen_audience() {
         .subscriptions
         .add_patterns("alice", vec!["different.topic".into()])
         .await;
-    assert!(audit
-        .query_scoped(&scope, &AuditQuery::default())
+    assert!(scoped_snapshot(&stream, &scope, &EventFilter::default())
         .await
         .unwrap()
         .is_empty());
@@ -563,14 +554,12 @@ async fn missing_store_login_and_selection_never_widen_audience() {
         .get_mut("alice")
         .unwrap()
         .first_message = true;
-    assert!(audit
-        .query_scoped(&scope, &AuditQuery::default())
+    assert!(scoped_snapshot(&stream, &scope, &EventFilter::default())
         .await
         .unwrap()
         .is_empty());
     fixture.connections.write().await.remove("alice");
-    assert!(audit
-        .query_scoped(&scope, &AuditQuery::default())
+    assert!(scoped_snapshot(&stream, &scope, &EventFilter::default())
         .await
         .unwrap()
         .is_empty());
@@ -587,7 +576,6 @@ async fn operators_share_only_operator_records_not_each_others_creator_audience(
     .await
     .unwrap();
     let stream = Arc::new(InMemoryEventStream::new(8).unwrap());
-    let audit = AuditCollector::new(stream.clone());
     let alice = fixture.scope("alice", Some("source-a"));
     let bob = fixture.scope("bob", Some("source-a"));
     let mut alice_live = stream.subscribe_scoped(alice.clone(), EventFilter::default());
@@ -610,8 +598,7 @@ async fn operators_share_only_operator_records_not_each_others_creator_audience(
             assert_eq!(receiver.recv().await.unwrap().sequence(), sequence);
         }
         assert!(matches!(receiver.recv().await, Err(EventError::Closed)));
-        let logs = audit
-            .query_scoped(scope, &AuditQuery::default())
+        let logs = scoped_snapshot(&stream, scope, &EventFilter::default())
             .await
             .unwrap();
         assert_eq!(
@@ -699,8 +686,7 @@ async fn mounted_host_facade_and_audited_zahir_share_one_1024_record_hub() {
         &stream.snapshot().unwrap().records()[0]
     ));
     assert_eq!(
-        host.audit_collector()
-            .query_scoped(&all(), &AuditQuery::default())
+        scoped_snapshot(&host.event_stream(), &all(), &EventFilter::default())
             .await
             .unwrap()[0]
             .sequence(),

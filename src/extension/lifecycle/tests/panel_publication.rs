@@ -253,7 +253,12 @@ async fn core_panel_lifecycle_replacement_failure_disable_and_unmount_withdraw_b
 }
 
 #[tokio::test]
-async fn core_panel_lifecycle_failed_reload_never_serves_old_publication() {
+/// A reload whose new manifest does not parse is refused by the preflight
+/// before anything is torn down: the previous publication stays current and
+/// keeps serving the bytes admitted for it. (A reload that fails after the
+/// teardown withdraws the old bytes — see
+/// `core_panel_lifecycle_replacement_failure_disable_and_unmount_withdraw_bytes`.)
+async fn core_panel_lifecycle_failed_reload_preflight_keeps_old_publication() {
     let root = tempfile::tempdir().unwrap();
     let _home = isolated_home(root.path());
     let dir = write_panel(
@@ -270,18 +275,27 @@ async fn core_panel_lifecycle_failed_reload_never_serves_old_publication() {
         .declarations
         .remove(0);
     std::fs::write(dir.join("aleph.plugin.toml"), "[invalid TOML").unwrap();
-    assert!(manager.reload_plugin("community-fixture").await.is_err());
-    assert!(manager
-        .panel_ui_capability_snapshot_for(&ctx)
-        .declarations
-        .is_empty());
-    assert!(manager
-        .panel_ui_asset(
-            &PanelAssetIdentity::from_declaration(&first),
-            &first.descriptor.entry,
-            &ctx
-        )
-        .is_err());
+    let error = manager
+        .reload_plugin("community-fixture")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("previous version is still running"), "{error}");
+    let current = manager.panel_ui_capability_snapshot_for(&ctx).declarations;
+    assert_eq!(current.len(), 1);
+    assert_eq!(current[0].source_revision, first.source_revision);
+    assert_eq!(
+        manager
+            .panel_ui_asset(
+                &PanelAssetIdentity::from_declaration(&first),
+                &first.descriptor.entry,
+                &ctx
+            )
+            .unwrap()
+            .bytes
+            .as_ref(),
+        FIRST
+    );
 }
 
 #[tokio::test]

@@ -127,7 +127,7 @@ pub(super) enum NamespaceCycle {
 ///   both blind to them — a corpus whose only new work is a batch of
 ///   corrections would sit at `Idle` forever while the tool told the user the
 ///   nightly cycle would distill them. The answer comes from
-///   [`has_undistilled_corrections`] — same watermark, same window, same
+///   [`has_undistilled_corrections`] — same pending batch, page and
 ///   admission quorum as the stage — so the gate cannot disagree with the
 ///   stage it is gating: it may only ever save a cycle, never pay for one the
 ///   stage then skips.
@@ -215,18 +215,15 @@ pub(super) async fn run_namespace_cycle(
         .list_pending_review(agent_id, i64::MAX)
         .await
         .map_or(usize::MAX, |rows| rows.len());
-    // Third leg: corrections filed against THIS agent that `feedback_distill`
-    // has not consumed. Read through the stage's own predicate so gate and
-    // stage share one watermark and one admission quorum — both knobs come
-    // from the same `DreamingConfig` fields `DreamPipeline::from_strategy`
-    // builds the stage with.
+    // Third leg: share the stage's selection and configuration, so a pending
+    // batch resumes even when there is no new quorum to admit.
+    let feedback = crate::memory::dreaming::stages::FeedbackDistillStage::from(deps.config);
     let has_corrections =
         crate::memory::dreaming::stages::feedback_distill::has_undistilled_corrections(
             deps.database,
             deps.raw_store.as_deref(),
             agent_id,
-            deps.config.feedback_lookback,
-            deps.config.feedback_distill_min_candidates,
+            &feedback,
         )
         .await;
     // Fourth leg: tool failures recorded against THIS agent that

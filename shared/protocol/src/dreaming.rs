@@ -44,6 +44,9 @@ pub struct DaemonStatus {
     /// the config file currently reads, which can differ until a restart.
     #[serde(default)]
     pub enabled: bool,
+    /// Required dependencies that the running daemon could not mount.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing_dependencies: Option<DreamMissingDependencies>,
     /// Whether local time is currently inside the dream window.
     #[serde(default)]
     pub within_window: bool,
@@ -76,6 +79,15 @@ pub struct DaemonStatus {
     /// `running` row into [`DreamLastRun::status`] `"stale_running"`.
     #[serde(default)]
     pub max_duration_seconds: u32,
+}
+
+/// The closed set of dependencies that can prevent a dream from starting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DreamMissingDependencies {
+    Provider,
+    Embedder,
+    ProviderAndEmbedder,
 }
 
 /// The last persisted run, whatever its outcome — the half of "did anything
@@ -132,6 +144,8 @@ impl DaemonStatus {
             Some(DreamGateBlock::Disabled)
         } else if self.is_running {
             None
+        } else if let Some(missing) = self.missing_dependencies {
+            Some(DreamGateBlock::MissingDependencies(missing))
         } else if !self.within_window {
             Some(DreamGateBlock::OutsideWindow)
         } else if self.user_active {
@@ -153,6 +167,8 @@ impl DaemonStatus {
 pub enum DreamGateBlock {
     /// `[memory.dreaming] enabled = false` in the running daemon.
     Disabled,
+    /// The cycle cannot execute without these dependencies.
+    MissingDependencies(DreamMissingDependencies),
     /// Local time is outside the configured window.
     OutsideWindow,
     /// Someone was typing more recently than the idle threshold allows.
@@ -232,6 +248,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn dependency_readiness_reaches_the_shared_gate_from_the_wire() {
+        use serde_json::{json, Value};
+
+        fn decode(enabled: bool, running: bool, missing: Value) -> DaemonStatus {
+            serde_json::from_value(json!({
+                "enabled": enabled,
+                "is_running": running,
+                "within_window": false,
+                "user_active": true,
+                "missing_dependencies": missing,
+            }))
+            .expect("daemon status")
+        }
+
+        for (reason, expected) in [
+            ("provider", DreamMissingDependencies::Provider),
+            ("embedder", DreamMissingDependencies::Embedder),
+            (
+                "provider_and_embedder",
+                DreamMissingDependencies::ProviderAndEmbedder,
+            ),
+        ] {
+            let blocked = decode(true, false, json!(reason));
+            assert_eq!(
+                serde_json::to_value(&blocked).unwrap()["missing_dependencies"],
+                reason
+            );
+            assert_eq!(
+                blocked.blocking_gate(),
+                Some(DreamGateBlock::MissingDependencies(expected))
+            );
+        }
+        assert_eq!(
+            decode(false, false, json!("provider")).blocking_gate(),
+            Some(DreamGateBlock::Disabled)
+        );
+        assert_eq!(decode(true, true, json!("provider")).blocking_gate(), None);
+        assert_eq!(
+            decode(true, false, Value::Null).blocking_gate(),
+            Some(DreamGateBlock::OutsideWindow)
+        );
+    }
+
     /// An older core that predates a field must not take the whole response
     /// down — the operator asking why dreaming is quiet is the last person who
     /// should get a parse error instead of an answer.
@@ -243,6 +303,8 @@ mod tests {
         let daemon = status.daemon.expect("daemon");
         assert!(daemon.enabled);
         assert_eq!(daemon.idle_threshold_seconds, 0);
+        assert_eq!(daemon.missing_dependencies, None);
+        assert_eq!(daemon.blocking_gate(), Some(DreamGateBlock::OutsideWindow));
         assert_eq!(status.last_run.expect("last_run").status, "error");
 
         let empty: DreamSchedulingStatus = serde_json::from_str("{}").expect("empty payload");

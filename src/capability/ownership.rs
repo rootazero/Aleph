@@ -1,12 +1,12 @@
-//! Capability ownership base types — the minimal vocabulary
-//! [`crate::capability::descriptor`] needs to compile.
+//! Capability ownership — the owner vocabulary and the ownership authority.
 //!
-//! These are pure data types with **no behaviour**. The ownership *tree* and
-//! its fencing/revocation semantics are deliberately deferred to Task 2; this
-//! file only establishes the types so a descriptor can name its owner, its
-//! generation, its lifetime and its visibility. Keeping them behaviour-free is
-//! load-bearing: `descriptor.rs` must compile against these without pulling in
-//! an ownership engine that does not exist yet.
+//! The base types ([`OwnerRef`], [`OwnerGeneration`], [`LifetimeScope`],
+//! [`VisibilityScope`]) are behaviour-free data so a descriptor can name its
+//! owner, generation, lifetime and visibility without depending on the engine.
+//! [`OwnershipTree`] is the single runtime authority over them: it registers
+//! owners, bumps generations, fences effect claims, and revokes or disposes by
+//! capability and lifetime scope. `BackendLease.owner_generation` is checked
+//! against [`OwnershipTree::generation`]; no other map holds owner state.
 
 use crate::acp::manager::SessionKey;
 use crate::capability::descriptor::CapabilityId;

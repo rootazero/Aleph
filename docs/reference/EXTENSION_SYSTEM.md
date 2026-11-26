@@ -343,32 +343,19 @@ Plugin Ready
 
 ## Hot Reload
 
-**Location**: `src/extension/watcher.rs`
+**Location**: `src/extension/watcher.rs` (`ExtensionWatcher`, debounced `notify` watcher) · routing in `src/extension/mod.rs` (the `on_event` callback near `ExtensionWatcher::new_with_dirs`)
 
-```rust
-pub struct PluginWatcher {
-    watcher: RecommendedWatcher,
-    registry: Arc<RwLock<PluginRegistry>>,
-}
+File changes are routed to the cheapest correct path (2026-11-25, checked against code):
 
-impl PluginWatcher {
-    pub fn watch(&mut self, path: &Path) -> Result<()> {
-        self.watcher.watch(path, RecursiveMode::Recursive)?;
-    }
+| `ExtensionChangeType` | Action |
+|---|---|
+| `Skill` | none here — `SkillWatcher` already does targeted `SKILL.md` reloads |
+| `HooksConfig` | reload user hooks only |
+| anything else | full `ExtensionManager::reload()` (dispose every mounted plugin, rediscover, mount every admitted plugin) |
 
-    async fn on_change(&self, event: Event) {
-        match event.kind {
-            EventKind::Create(_) | EventKind::Modify(_) => {
-                self.reload_plugin(&event.paths[0]).await;
-            }
-            EventKind::Remove(_) => {
-                self.unload_plugin(&event.paths[0]).await;
-            }
-            _ => {}
-        }
-    }
-}
-```
+The watcher never calls the per-plugin `reload_plugin(id)`. Only `reload_plugin` runs the preflight that keeps a running version serving when the new one is defective (see [PLUGIN_SYSTEM.md 生命周期四原语](PLUGIN_SYSTEM.md)); a full `reload()` is not staged. Per-plugin reload is reached through the `plugin_manage` builtin tool (`src/builtin_tools/plugin_manage.rs`) and the Gateway plugin runtime handler (`src/gateway/handlers/plugins/handlers/runtime.rs`).
+
+文件变化按最便宜的正确路径处理：`Skill` 交给 `SkillWatcher`；`HooksConfig` 只重载用户 hooks；其余触发全量 `reload()`。监听器不调用单插件 `reload_plugin(id)`，因此不经过「先预检新版本、有缺陷时旧版继续服务」的路径；全量 `reload()` 尚未分阶段化。单插件重载入口是 `plugin_manage` 内置工具与 Gateway 插件 runtime handler。
 
 ---
 

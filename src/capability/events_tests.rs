@@ -1,16 +1,11 @@
 use super::*;
-use crate::capability::activation::{ActivationError, CapabilityActivationController};
-use crate::capability::backend::{
-    CapabilityBackend, CapabilityDispatchError, CapabilityHandler, CapabilityHandlerRegistry,
-};
-use crate::capability::constraints::{Constraint, ConstraintContext};
 use crate::capability::descriptor::{
     CapabilityDescriptor, CapabilityFacet, CapabilityFacets, CapabilityKind, CapabilityRevision,
     ProjectionMetadata, SchemaRef,
 };
-use crate::capability::ownership::{LifetimeScope, OwnerGeneration, OwnershipTree, RunId};
+use crate::capability::ownership::{LifetimeScope, OwnershipTree, RunId};
 use crate::capability::policy::PolicyEngine;
-use serde_json::{json, Value};
+use serde_json::json;
 
 fn id(name: &str) -> CapabilityId {
     CapabilityId {
@@ -283,109 +278,6 @@ fn snapshots_cannot_change_when_the_live_buffer_changes() {
     assert_eq!(old.dropped(), 0);
 }
 
-fn observed(
-    stream: &Arc<InMemoryEventStream>,
-    constraints: Vec<Constraint>,
-) -> CapabilityActivationController {
-    CapabilityActivationController::new_observed(
-        None,
-        OwnerGeneration(1),
-        constraints,
-        &descriptor(),
-        emitter(stream),
-    )
-}
-
-#[test]
-fn activation_emits_every_committed_lifecycle_transition() {
-    let stream = Arc::new(InMemoryEventStream::new(8).unwrap());
-    let mut activation = observed(&stream, vec![Constraint::resource_limit(2)]);
-    activation.attach().unwrap();
-    activation
-        .activate(&ConstraintContext::at_hour(12).unwrap(), OwnerGeneration(1))
-        .unwrap();
-    activation.detach().unwrap();
-    activation.revoke().unwrap();
-    assert!(activation.revoke().is_err());
-    let snapshot = stream.snapshot().unwrap();
-    let kinds: Vec<_> = snapshot
-        .records()
-        .iter()
-        .map(|record| record.event().event_type())
-        .collect();
-    assert_eq!(
-        kinds,
-        vec![
-            CapabilityEventType::Created,
-            CapabilityEventType::Attached,
-            CapabilityEventType::Activated,
-            CapabilityEventType::Detaching,
-            CapabilityEventType::Revoked
-        ]
-    );
-    match snapshot.records()[2].event() {
-        CapabilityEvent::CapabilityActivated {
-            lease_id,
-            constraints_applied,
-            ..
-        } => {
-            assert!(uuid::Uuid::parse_str(lease_id).is_ok());
-            assert_eq!(*constraints_applied, 1);
-        }
-        other => panic!("wrong event: {other:?}"),
-    }
-}
-
-#[test]
-fn rejected_activation_emits_constraint_violation_not_activation() {
-    let stream = Arc::new(InMemoryEventStream::new(8).unwrap());
-    let mut activation = observed(&stream, vec![Constraint::time_window(9, 17).unwrap()]);
-    activation.attach().unwrap();
-    assert!(matches!(
-        activation.activate(&ConstraintContext::at_hour(18).unwrap(), OwnerGeneration(1)),
-        Err(ActivationError::Constraint(_))
-    ));
-    let snapshot = stream.snapshot().unwrap();
-    assert!(
-        matches!(snapshot.records().last().unwrap().event(), CapabilityEvent::ConstraintViolation { constraint_type, .. } if constraint_type == "time")
-    );
-    assert!(!snapshot
-        .records()
-        .iter()
-        .any(|record| record.event().event_type() == CapabilityEventType::Activated));
-}
-
-#[test]
-fn runtime_constraint_violation_is_audited() {
-    let stream = Arc::new(InMemoryEventStream::new(8).unwrap());
-    let mut activation = observed(&stream, vec![Constraint::resource_limit(1)]);
-    activation.attach().unwrap();
-    activation
-        .activate(&ConstraintContext::at_hour(12).unwrap(), OwnerGeneration(1))
-        .unwrap();
-    assert!(activation
-        .validate_runtime(
-            OwnerGeneration(1),
-            &ConstraintContext::at_hour(12)
-                .unwrap()
-                .with_active_resources(1)
-        )
-        .is_err());
-    assert!(
-        matches!(stream.snapshot().unwrap().records().last().unwrap().event(), CapabilityEvent::ConstraintViolation { constraint_type, .. } if constraint_type == "resource")
-    );
-}
-
-#[test]
-fn cloned_controller_does_not_duplicate_creation_or_revocation_events() {
-    let stream = Arc::new(InMemoryEventStream::new(8).unwrap());
-    let mut activation = observed(&stream, vec![]);
-    let mut clone = activation.clone();
-    activation.revoke().unwrap();
-    assert!(clone.revoke().is_err());
-    assert_eq!(stream.snapshot().unwrap().records().len(), 2);
-}
-
 #[test]
 fn policy_denial_records_requesting_actor_and_resource() {
     let stream = Arc::new(InMemoryEventStream::new(8).unwrap());
@@ -433,51 +325,6 @@ fn lease_validation_denial_is_audited() {
     assert_eq!(stream.snapshot().unwrap().records().len(), 1);
 }
 
-struct Echo;
-impl CapabilityHandler for Echo {
-    fn invoke(&self, input: Value) -> Result<Value, CapabilityDispatchError> {
-        if input["fail"] == true {
-            Err(CapabilityDispatchError::Execution(
-                "SECRET should never be logged".into(),
-            ))
-        } else {
-            Ok(input)
-        }
-    }
-}
-
-#[test]
-fn handler_invocation_success_and_failure_are_audited_without_payloads() {
-    let stream = Arc::new(InMemoryEventStream::new(8).unwrap());
-    let registry = CapabilityHandlerRegistry::new().with_events(emitter(&stream));
-    let id = registry.register(descriptor(), Arc::new(Echo)).unwrap();
-    assert!(registry.lookup(&id).is_some());
-    assert!(registry
-        .dispatch(&id, json!({"operation":"read", "secret":"SECRET"}))
-        .is_ok());
-    assert!(registry
-        .dispatch(&id, json!({"operation":"write", "fail":true}))
-        .is_err());
-    let snapshot = stream.snapshot().unwrap();
-    let events: Vec<_> = snapshot
-        .records()
-        .iter()
-        .map(|record| record.event())
-        .collect();
-    assert_eq!(events.len(), 2);
-    assert!(
-        matches!(events[0], CapabilityEvent::CapabilityInvoked { operation, handler_result: HandlerResult::Success, .. } if operation == "read")
-    );
-    assert!(matches!(
-        events[1],
-        CapabilityEvent::CapabilityInvoked {
-            handler_result: HandlerResult::ExecutionFailed,
-            ..
-        }
-    ));
-    assert!(!serde_json::to_string(&events).unwrap().contains("SECRET"));
-}
-
 #[test]
 fn visibility_mismatch_is_audited_without_changing_the_denial() {
     let stream = Arc::new(InMemoryEventStream::new(8).unwrap());
@@ -498,74 +345,6 @@ fn visibility_mismatch_is_audited_without_changing_the_denial() {
         Err(crate::capability::policy::PolicyDenial::VisibilityMismatch)
     );
     assert_eq!(stream.snapshot().unwrap().records().len(), 1);
-}
-
-#[test]
-fn failing_sink_does_not_block_activation_revocation_or_handler_result() {
-    let stream = Arc::new(
-        InMemoryEventStream::with_persistence(
-            16,
-            Some(Arc::new(Persistence(std::sync::Mutex::new(vec![]), true))),
-        )
-        .unwrap(),
-    );
-    let mut activation = observed(&stream, vec![]);
-    activation.attach().unwrap();
-    activation
-        .activate(&ConstraintContext::at_hour(12).unwrap(), OwnerGeneration(1))
-        .unwrap();
-    activation.revoke().unwrap();
-    let registry = CapabilityHandlerRegistry::new().with_events(emitter(&stream));
-    let id = registry.register(descriptor(), Arc::new(Echo)).unwrap();
-    assert_eq!(
-        registry.dispatch(&id, json!({"value": 42})).unwrap(),
-        json!({"value": 42})
-    );
-    assert!(registry.dispatch(&id, json!({"fail":true})).is_err());
-    assert_eq!(stream.snapshot().unwrap().records().len(), 6);
-}
-
-#[test]
-fn external_activation_hooks_and_event_hooks_both_observe_success() {
-    struct Hook(std::cell::Cell<usize>);
-    impl crate::capability::activation::ActivationHook for Hook {
-        fn after_activation(&self, _: &ConstraintContext) {
-            self.0.set(self.0.get() + 1);
-        }
-        fn after_revocation(&self) {
-            self.0.set(self.0.get() + 1);
-        }
-    }
-    let stream = Arc::new(InMemoryEventStream::new(8).unwrap());
-    let mut activation = observed(&stream, vec![]);
-    let hook = Hook(std::cell::Cell::new(0));
-    activation.attach().unwrap();
-    activation
-        .activate_with_hook(
-            &ConstraintContext::at_hour(12).unwrap(),
-            OwnerGeneration(1),
-            &hook,
-        )
-        .unwrap();
-    activation.revoke_with_hook(&hook).unwrap();
-    assert_eq!(hook.0.get(), 2);
-    assert_eq!(stream.snapshot().unwrap().records().len(), 4);
-}
-
-#[test]
-fn conditional_and_owner_generation_failures_are_observed() {
-    let stream = Arc::new(InMemoryEventStream::new(8).unwrap());
-    let mut activation = observed(&stream, vec![Constraint::condition("approved")]);
-    activation.attach().unwrap();
-    let context = ConstraintContext::at_hour(12).unwrap();
-    assert!(activation.activate(&context, OwnerGeneration(1)).is_err());
-    assert!(
-        matches!(stream.snapshot().unwrap().records().last().unwrap().event(), CapabilityEvent::ConstraintViolation { constraint_type, .. } if constraint_type == "conditional")
-    );
-    assert!(activation.activate(&context, OwnerGeneration(2)).is_err());
-    assert!(
-        matches!(stream.snapshot().unwrap().records().last().unwrap().event(), CapabilityEvent::PolicyViolation { reason, .. } if reason == "generation_mismatch")
-    );
 }
 
 #[test]
@@ -637,8 +416,7 @@ fn failing_sink_preserves_the_original_policy_denial() {
 }
 
 #[test]
-fn provider_activation_fault_is_failed_not_denied_in_compliance_report() {
-    use crate::capability::audit::{AuditCollector, AuditQuery};
+fn provider_activation_fault_is_failed_not_denied() {
     use crate::capability::facade::{Reference, Zahir};
     use crate::capability::provider::{
         ProviderHandle, ProviderId, ProviderLifecycle, ProviderTransport,
@@ -656,11 +434,11 @@ fn provider_activation_fault_is_failed_not_denied_in_compliance_report() {
         }
     }
 
-    for (error, expected) in [
-        (ActivationError::Failed, "failed"),
-        (ActivationError::Rejected, "denied"),
-        (ActivationError::NotVisible, "denied"),
-        (ActivationError::Unknown, "denied"),
+    for error in [
+        ActivationError::Failed,
+        ActivationError::Rejected,
+        ActivationError::NotVisible,
+        ActivationError::Unknown,
     ] {
         let stream = Arc::new(InMemoryEventStream::new(4).unwrap());
         let providers = ProviderRegistry::new();
@@ -688,24 +466,15 @@ fn provider_activation_fault_is_failed_not_denied_in_compliance_report() {
             }),
             Err(error.clone())
         );
-        let audit = AuditCollector::new(stream);
-        let report = audit.report(&AuditQuery::default()).unwrap();
-        assert_eq!(report.entries().len(), 1);
-        assert_eq!(report.entries()[0].result(), expected);
-        let json: Value = serde_json::from_str(&report.to_json().unwrap()).unwrap();
-        assert_eq!(json["entries"][0]["result"], expected);
+        let snapshot = stream.snapshot().unwrap();
+        assert_eq!(snapshot.records().len(), 1);
+        let event = snapshot.records()[0].event();
         if error == ActivationError::Failed {
-            assert!(!matches!(
-                report.entries()[0].event(),
-                CapabilityEvent::PolicyViolation { .. }
-            ));
-            assert_eq!(json["entries"][0]["event_type"], "execution_failed");
-            assert_eq!(json["entries"][0]["action"], "activate");
+            assert!(
+                matches!(event, CapabilityEvent::ExecutionFailed { operation, .. } if operation == "activate")
+            );
         } else {
-            assert!(matches!(
-                report.entries()[0].event(),
-                CapabilityEvent::PolicyViolation { .. }
-            ));
+            assert!(matches!(event, CapabilityEvent::PolicyViolation { .. }));
         }
     }
 }

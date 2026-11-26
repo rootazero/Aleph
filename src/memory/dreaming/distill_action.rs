@@ -12,7 +12,7 @@
 use crate::memory::notes::Severity;
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DistillAction {
     /// Create a brand-new note. Used when no existing candidate matches.
@@ -80,9 +80,14 @@ pub fn referenced_path(action: &DistillAction) -> Option<&str> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DistillOutcome {
-    /// Action was applied (note created / strengthened / superseded, or skip
-    /// recorded). Includes `skip` because the LLM still made a decision.
+    /// A note mutation was verified. Old logs can also carry `Applied` for a `skip`.
     Applied,
+    /// The distillation decision explicitly opted out of a note edit.
+    Skipped,
+    /// A verified no-op, such as evidence the note already contains.
+    Unchanged,
+    /// The cycle did not have enough remaining edit budget to reserve this action.
+    FilteredBudget,
     /// Dropped before apply because the referenced path was not in the
     /// candidate set the LLM was shown (anti-hallucination guard).
     FilteredNonCandidate,

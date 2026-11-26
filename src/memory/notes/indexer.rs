@@ -4,17 +4,56 @@
 //! `KnowledgeNote`s, and maintains the `SQLite` index via a `NoteStore` implementation.
 
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex, Weak};
 
 use sha2::{Digest, Sha256};
 use tokio::fs;
 
 use crate::error::AlephError;
-use crate::memory::dreaming::distill_action::DistillAction;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::wikilink::{rewrite_relation_targets, rewrite_wikilinks};
 use crate::memory::notes::{sanitize_title, KnowledgeNote, Severity};
 use crate::utils::atomic_write::atomic_write_file;
+
+mod distill_effect;
+pub(crate) use distill_effect::PreparedDistillEffect;
+
+// The runtime, base dream and corpus dreams construct separate indexers. Key
+// by vault and corpus, not indexer instance, and retire unused entries.
+type CorpusMutex = tokio::sync::Mutex<()>;
+static CORPUS_WRITERS: LazyLock<Mutex<HashMap<PathBuf, Weak<CorpusMutex>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub(crate) async fn lock_note_corpus(
+    vault: &Path,
+    agent_id: &str,
+) -> tokio::sync::OwnedMutexGuard<()> {
+    let key = vault.join(agent_id);
+    let lock = {
+        let mut writers = CORPUS_WRITERS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        match writers.get(&key).and_then(Weak::upgrade) {
+            Some(lock) => lock,
+            None => {
+                writers.retain(|_, lock| lock.strong_count() != 0);
+                let lock = Arc::new(CorpusMutex::new(()));
+                writers.insert(key, Arc::downgrade(&lock));
+                lock
+            }
+        }
+    };
+    lock.lock_owned().await
+}
+
+fn render_note(note: &KnowledgeNote) -> String {
+    crate::memory::notes::governance::supersession::ensure_supersession_section(
+        &note.to_markdown(),
+        note,
+    )
+}
 
 /// All valid category subdirectories under `memory/{agent_id}/`.
 ///
@@ -411,6 +450,7 @@ impl<S: NoteStore> NoteIndexer<S> {
     where
         S: 'static,
     {
+        let _guard = lock_note_corpus(&self.memory_dir, agent_id).await;
         let parallelism = std::thread::available_parallelism()
             .map_or(1, |n| n.get())
             .max(1);
@@ -683,6 +723,16 @@ impl<S: NoteStore> NoteIndexer<S> {
         category: &str,
         path: &Path,
     ) -> Result<bool, AlephError> {
+        let _guard = lock_note_corpus(&self.memory_dir, agent_id).await;
+        self.index_file_locked(agent_id, category, path).await
+    }
+
+    pub(crate) async fn index_file_locked(
+        &self,
+        agent_id: &str,
+        category: &str,
+        path: &Path,
+    ) -> Result<bool, AlephError> {
         // rust-doctor-disable-next-line excessive-clone
         let outcome = index_one_file(path, agent_id, category, self.store.clone()).await?;
         let IndexOutcome::Indexed { content, aliases } = outcome else {
@@ -712,6 +762,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         category: &str,
         note: &KnowledgeNote,
     ) -> Result<PathBuf, AlephError> {
+        let _guard = lock_note_corpus(&self.memory_dir, agent_id).await;
         let safe_title = sanitize_title(&note.title)?;
         let path = self
             .memory_dir
@@ -732,10 +783,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                 })?;
         }
 
-        let content = note.to_markdown();
-        let content = crate::memory::notes::governance::supersession::ensure_supersession_section(
-            &content, note,
-        );
+        let content = render_note(note);
         atomic_write_file(&path, &content).await?;
 
         // Sync index + vector immediately so callers don't have to
@@ -767,6 +815,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         let safe_agent = sanitize_title(agent_id)
             .unwrap_or_else(|_| crate::routing::DEFAULT_AGENT_ID.to_string());
         let safe_category = sanitize_title(category).unwrap_or_else(|_| "other".to_string());
+        let _guard = lock_note_corpus(&self.memory_dir, &safe_agent).await;
         let path = self
             .memory_dir
             .join(safe_agent)
@@ -800,6 +849,18 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// `note_path` is `"category/filename"` (e.g. `"preference/Editor Preferences"`).
     /// Deduplicates links, bumps `updated_at`, then writes and indexes.
     pub async fn append_to_note(
+        &self,
+        agent_id: &str,
+        note_path: &str,
+        new_facts: &[String],
+        new_links: &[String],
+    ) -> Result<(), AlephError> {
+        let _guard = lock_note_corpus(&self.memory_dir, agent_id).await;
+        self.append_to_note_locked(agent_id, note_path, new_facts, new_links)
+            .await
+    }
+
+    pub(crate) async fn append_to_note_locked(
         &self,
         agent_id: &str,
         note_path: &str,
@@ -902,6 +963,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         note_path: &str,
         relations: &[crate::memory::notes::Relation],
     ) -> Result<(), AlephError> {
+        let _guard = lock_note_corpus(&self.memory_dir, agent_id).await;
         let (category, filename) =
             note_path
                 .split_once('/')
@@ -963,6 +1025,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         category: &str,
         filename: &str,
     ) -> Result<(), AlephError> {
+        let _guard = lock_note_corpus(&self.memory_dir, agent_id).await;
         let safe_cat = sanitize_title(category).unwrap_or_else(|_| "other".to_string());
         let safe_title = sanitize_title(filename)?;
         let note_path = format!("{safe_cat}/{safe_title}");
@@ -994,6 +1057,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         old_title: &str,
         new_title: &str,
     ) -> Result<(), AlephError> {
+        let _guard = lock_note_corpus(&self.memory_dir, agent_id).await;
         let safe_old = sanitize_title(old_title)?;
         let safe_new = sanitize_title(new_title)?;
 
@@ -1075,7 +1139,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                         continue;
                     }
                     // Re-index the affected file
-                    if let Err(e) = self.index_file(agent_id, cat, &path).await {
+                    if let Err(e) = self.index_file_locked(agent_id, cat, &path).await {
                         tracing::warn!(path = %path.display(), error = %e, "rename: re-index after wikilink rewrite failed (index left stale)");
                     }
                 }
@@ -1085,7 +1149,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         // Index the renamed file. A failure here leaves the new path unindexed
         // (the old path's row was already removed), so surface it rather than
         // swallowing it — the file is on disk and full_rebuild will recover.
-        if let Err(e) = self.index_file(agent_id, &category, &new_path).await {
+        if let Err(e) = self.index_file_locked(agent_id, &category, &new_path).await {
             tracing::warn!(path = %new_path.display(), error = %e, "rename: re-index of renamed note failed (index left stale)");
         }
 
@@ -1116,288 +1180,6 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// step, saturating at 1.0. Small enough that the score grows monotonically
     /// without overshooting on a single high-corroboration round.
     const STRENGTHEN_STEP: f32 = 0.05;
-
-    /// Merge new `source_notes` into an existing note on disk and bump its
-    /// confidence monotonically. Used by both `DistillAction::Strengthen`
-    /// (no floor lift) and the `New`-with-collision demotion path
-    /// (`confidence_floor = new_action.confidence` lifts the note's
-    /// confidence to at least the LLM's latest judgment).
-    ///
-    /// Confidence formula:
-    ///   `confidence = min(1.0, max(existing, floor) + STRENGTHEN_STEP * newly_added_notes)`
-    async fn merge_source_notes_into_note(
-        &self,
-        agent_id: &str,
-        existing_note_path: &str,
-        new_source_notes: &[String],
-        confidence_floor: f32,
-    ) -> Result<(), AlephError> {
-        let (cat, filename) =
-            existing_note_path
-                .split_once('/')
-                .ok_or_else(|| AlephError::ConfigError {
-                    message: format!(
-                        "merge_source_notes: invalid note_path '{existing_note_path}' \
-                     (expected 'category/filename')"
-                    ),
-                    suggestion: None,
-                })?;
-        let safe_cat = sanitize_title(cat).unwrap_or_else(|_| "other".to_string());
-        let safe_title = sanitize_title(filename)?;
-        let file_path = self
-            .memory_dir
-            .join(agent_id)
-            .join(&safe_cat)
-            .join(format!("{safe_title}.md"));
-        if !file_path.exists() {
-            return Err(AlephError::other(format!(
-                "merge_source_notes: target missing on disk: {existing_note_path}"
-            )));
-        }
-        let content =
-            fs::read_to_string(&file_path)
-                .await
-                .map_err(|e| AlephError::ConfigError {
-                    message: format!("merge read {file_path:?}: {e}"),
-                    suggestion: None,
-                })?;
-        let mut note = KnowledgeNote::from_markdown(filename, &content)?;
-
-        let mut added_count: u32 = 0;
-        for f in new_source_notes {
-            if !note.source_notes.contains(f) {
-                // rust-doctor-disable-next-line excessive-clone
-                note.source_notes.push(f.clone());
-                added_count += 1;
-            }
-        }
-
-        // Lift to the floor first (covers the New-collision case where the
-        // LLM's new confidence may exceed the existing value), then add a
-        // proportional bump for genuinely-new corroborating facts.
-        let base = note.confidence.max(confidence_floor);
-        note.confidence = (base + Self::STRENGTHEN_STEP * (added_count as f32)).min(1.0);
-
-        note.updated_at = chrono::Utc::now().timestamp();
-        let md = note.to_markdown();
-        note.content_hash = sha2_hash(&md);
-        atomic_write_file(&file_path, &md).await?;
-        self.store.index_note(&note, agent_id, &safe_cat).await?;
-        // Merges source-provenance + confidence (frontmatter metadata) into an
-        // already-embedded note — searchable prose is unchanged, so skip the
-        // re-embed and only run the cheap inbound-link backfill.
-        self.finalize_side_effects(agent_id, &safe_cat, &safe_title, &md, &note.aliases, false)
-            .await;
-        Ok(())
-    }
-
-    /// Apply a `DistillAction` emitted by a Distill stage (`SkillDistill`, `FeedbackDistill`).
-    ///
-    /// Pure plumbing — the LLM already judged what to do; this method just executes
-    /// the I/O. Phase 2 Decision 2: the candidate selection happens upstream
-    /// (`find_similar_notes` → injected into the LLM prompt → LLM emits the action).
-    ///
-    /// `category` is the destination/source category (e.g. `"skill"` for `SkillDistill`).
-    /// For `Strengthen` and `Supersede`, the category is parsed from the embedded
-    /// note path so cross-category supersedes archive the right file.
-    // rust-doctor-disable-next-line high-cyclomatic-complexity
-    pub async fn apply_distill_action(
-        &self,
-        agent_id: &str,
-        category: &str,
-        action: &DistillAction,
-    ) -> Result<(), AlephError> {
-        match action {
-            DistillAction::New {
-                title,
-                rule,
-                confidence,
-                severity,
-                source_facts,
-            } => {
-                // Write-time collision guard: if a note with the same safe
-                // filename already exists in this (agent, category), demote
-                // to Strengthen semantics rather than silently overwriting
-                // (which would lose existing source_facts and stale the
-                // confidence to whatever the new action emitted).
-                let safe_title = sanitize_title(title)?;
-                let candidate_path = format!("{category}/{safe_title}");
-                if self
-                    .store
-                    .get_note_index(&candidate_path, agent_id)
-                    .await?
-                    .is_some()
-                {
-                    tracing::info!(
-                        note_path = %candidate_path,
-                        "DistillAction::New collided with existing note — demoting to Strengthen"
-                    );
-                    return self
-                        .merge_source_notes_into_note(
-                            agent_id,
-                            &candidate_path,
-                            source_facts,
-                            *confidence,
-                        )
-                        .await;
-                }
-
-                let now = chrono::Utc::now().timestamp();
-                let note = KnowledgeNote {
-                    // rust-doctor-disable-next-line excessive-clone
-                    title: title.clone(),
-                    category: category.to_string(),
-                    tags: vec![],
-                    facts: vec![rule.clone()],
-                    links: vec![],
-                    created_at: now,
-                    updated_at: now,
-                    content_hash: String::new(),
-                    confidence: *confidence,
-                    severity: *severity,
-                    // rust-doctor-disable-next-line excessive-clone
-                    source_notes: source_facts.clone(),
-                    ..Default::default()
-                };
-                self.write_note(agent_id, category, &note).await?;
-            }
-            DistillAction::Strengthen {
-                existing_note_path,
-                source_facts,
-            } => {
-                // Strengthen does not carry a confidence value — pass 0.0 as
-                // floor so the bump is purely additive against the existing
-                // note's confidence.
-                self.merge_source_notes_into_note(agent_id, existing_note_path, source_facts, 0.0)
-                    .await?;
-            }
-            DistillAction::Supersede {
-                old_note_path,
-                title,
-                rule,
-                confidence,
-                severity,
-                source_facts,
-            } => {
-                let (old_cat, old_filename) =
-                    old_note_path
-                        .split_once('/')
-                        .ok_or_else(|| AlephError::ConfigError {
-                            message: format!(
-                                "Supersede: invalid old_note_path '{old_note_path}' \
-                             (expected 'category/filename')"
-                            ),
-                            suggestion: None,
-                        })?;
-                let safe_old = sanitize_title(old_filename)?;
-                // Sanitize the category segment too: `old_note_path` is
-                // LLM-generated, and an unsanitized `old_cat` (e.g. "..")
-                // would let the remove_file below escape the agent directory.
-                // Mirrors `merge_source_notes_into_note` / `append_to_note`.
-                let safe_old_cat = sanitize_title(old_cat).unwrap_or_else(|_| "other".to_string());
-                let old_file = self
-                    .memory_dir
-                    .join(agent_id)
-                    .join(&safe_old_cat)
-                    .join(format!("{safe_old}.md"));
-                if old_cat != category {
-                    // Stages must validate `old_note_path` against their
-                    // candidate set before getting here (see `referenced_path`
-                    // in distill_action.rs). A cross-category supersede
-                    // arriving here is either a legitimate user intent or a
-                    // bypassed validation — either way it deserves visibility.
-                    tracing::warn!(
-                        old_path = %old_note_path,
-                        old_cat,
-                        new_cat = category,
-                        "Supersede crosses category boundary"
-                    );
-                }
-                if old_file.exists() {
-                    // Lineage instead of deletion: park the replaced note under
-                    // `archive/` (outside CATEGORY_DIRS, so index and watcher
-                    // ignore it) and stamp the same dated
-                    // `## Superseded by [[X]]` marker the ingest path's
-                    // `mark_superseded` writes. The dream log's
-                    // `DistillActionRecord` only says *that* a supersede
-                    // happened; the archived file preserves *what* was replaced
-                    // and by whom, greppable from the vault itself and
-                    // promotable to a `superseded_by` edge if ever re-ingested.
-                    let archive_dir = self
-                        .memory_dir
-                        .join(agent_id)
-                        .join("archive")
-                        .join(&safe_old_cat);
-                    fs::create_dir_all(&archive_dir).await.map_err(|e| {
-                        AlephError::ConfigError {
-                            message: format!(
-                                "Supersede: failed to create archive dir {archive_dir:?}: {e}"
-                            ),
-                            suggestion: None,
-                        }
-                    })?;
-                    // Keep the raw markdown verbatim (a `KnowledgeNote`
-                    // round-trip is lossy for prose bodies) and only append.
-                    let old_body = fs::read_to_string(&old_file).await.map_err(|e| {
-                        AlephError::ConfigError {
-                            message: format!(
-                                "Supersede: failed to read old file {old_file:?}: {e}"
-                            ),
-                            suggestion: None,
-                        }
-                    })?;
-                    let new_note_path = format!("{category}/{}", sanitize_title(title)?);
-                    let marker = format!(
-                        "\n## Superseded by [[{new_note_path}]] ({})\n",
-                        chrono::Utc::now().format("%Y-%m-%d")
-                    );
-                    let dest = archive_dir.join(format!("{safe_old}.md"));
-                    atomic_write_file(&dest, &format!("{old_body}{marker}")).await?;
-                    fs::remove_file(&old_file)
-                        .await
-                        .map_err(|e| AlephError::ConfigError {
-                            message: format!(
-                                "Supersede: failed to remove old file {old_file:?}: {e}"
-                            ),
-                            suggestion: None,
-                        })?;
-                }
-                self.store
-                    .remove_note_index(old_note_path, agent_id)
-                    .await?;
-
-                let now = chrono::Utc::now().timestamp();
-                let note = KnowledgeNote {
-                    // rust-doctor-disable-next-line excessive-clone
-                    title: title.clone(),
-                    category: category.to_string(),
-                    tags: vec![],
-                    facts: vec![rule.clone()],
-                    links: vec![],
-                    created_at: now,
-                    updated_at: now,
-                    content_hash: String::new(),
-                    confidence: *confidence,
-                    severity: *severity,
-                    // rust-doctor-disable-next-line excessive-clone
-                    source_notes: source_facts.clone(),
-                    ..Default::default()
-                };
-                self.write_note(agent_id, category, &note).await?;
-            }
-            DistillAction::Skip {
-                source_fact,
-                reason,
-            } => {
-                tracing::debug!(
-                    source_fact = %source_fact,
-                    reason = %reason,
-                    "DistillAction::Skip"
-                );
-            }
-        }
-        Ok(())
-    }
 }
 
 async fn drain_category_tasks(

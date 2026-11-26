@@ -31,6 +31,7 @@ use crate::providers::AiProvider;
 use crate::routing::DEFAULT_AGENT_ID;
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
+use aleph_protocol::dreaming::DreamMissingDependencies;
 use chrono::{Local, NaiveTime, TimeZone};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -256,13 +257,8 @@ impl DreamPipeline {
                 // path (not just the rarer synthesize path), so a freshly
                 // flagged correction becomes a recallable feedback rule within
                 // a day instead of waiting for a high-growth synthesize cycle.
-                // Watermark + min_candidates gating make this a cheap no-op when
-                // there are no new corrections, so no extra LLM call is incurred.
-                Box::new(stages::FeedbackDistillStage {
-                    max_per_cycle: dreaming_cfg.feedback_distill_max_per_cycle,
-                    min_candidates: dreaming_cfg.feedback_distill_min_candidates,
-                    lookback: dreaming_cfg.feedback_lookback,
-                }),
+                // The scoped sequence and quorum avoid an LLM call on quiet cycles.
+                Box::new(stages::FeedbackDistillStage::from(dreaming_cfg)),
                 // The failure rail, alongside the correction rail. Same
                 // frequent path for the same reason: a failure pattern is worth
                 // knowing about the next day, not the next high-growth cycle.
@@ -321,11 +317,7 @@ impl DreamPipeline {
                 // learnings. Also present on the Consolidate path so distillation
                 // happens daily; only one strategy runs per cycle, so there is no
                 // double execution.
-                Box::new(stages::FeedbackDistillStage {
-                    max_per_cycle: dreaming_cfg.feedback_distill_max_per_cycle,
-                    min_candidates: dreaming_cfg.feedback_distill_min_candidates,
-                    lookback: dreaming_cfg.feedback_lookback,
-                }),
+                Box::new(stages::FeedbackDistillStage::from(dreaming_cfg)),
                 // Present on BOTH LLM paths, like FeedbackDistill: only one
                 // strategy runs per cycle, so a stage that lives on only one of
                 // them silently stops distilling for as long as the selector
@@ -567,6 +559,7 @@ pub fn daemon_status() -> Option<DaemonStatusSnapshot> {
     let daemon = services.dream.as_ref()?;
     Some(DaemonStatusSnapshot {
         enabled: daemon.config.enabled,
+        missing_dependencies: daemon.dependencies().err(),
         within_window: daemon.is_within_window(),
         user_active: (daemon.activity_probe)(),
         idle_seconds: idle_seconds(),
@@ -762,7 +755,24 @@ pub struct DreamDaemon {
     // still governs what it actually governs, in `project_scope.rs`.
 }
 
+struct DreamDependencies {
+    provider: Arc<dyn AiProvider>,
+    embedder: Arc<dyn EmbeddingProvider>,
+}
+
 impl DreamDaemon {
+    fn dependencies(&self) -> Result<DreamDependencies, DreamMissingDependencies> {
+        match (&self.provider, &self.embedder) {
+            (Some(provider), Some(embedder)) => Ok(DreamDependencies {
+                provider: Arc::clone(provider),
+                embedder: Arc::clone(embedder),
+            }),
+            (None, Some(_)) => Err(DreamMissingDependencies::Provider),
+            (Some(_), None) => Err(DreamMissingDependencies::Embedder),
+            (None, None) => Err(DreamMissingDependencies::ProviderAndEmbedder),
+        }
+    }
+
     pub fn from_config(database: MemoryBackend, config: &MemoryConfig) -> Result<Self, AlephError> {
         let (window_start, window_end) = parse_window(&config.dreaming)?;
 
@@ -899,6 +909,14 @@ impl DreamDaemon {
     pub async fn run_now(&self) -> Result<DreamReport, AlephError> {
         #[cfg(test)]
         self.lifecycle_pause().await;
+        let dependencies = self.dependencies().map_err(|missing| {
+            let reason = match missing {
+                DreamMissingDependencies::Provider => "AI provider",
+                DreamMissingDependencies::Embedder => "embedder",
+                DreamMissingDependencies::ProviderAndEmbedder => "AI provider and embedder",
+            };
+            AlephError::other(format!("dream cycle unavailable: missing {reason}"))
+        })?;
         if self
             .is_running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -918,8 +936,6 @@ impl DreamDaemon {
         let _guard = RunGuard(&self.is_running);
 
         let run_start = now_timestamp();
-        let run_date = Local::now().format("%Y-%m-%d").to_string();
-
         if let Err(e) = self
             .database
             .set_dream_status(DreamStatus {
@@ -938,7 +954,7 @@ impl DreamDaemon {
         // every subsequent scheduled cycle.
         let result = match tokio::time::timeout(
             Duration::from_secs(u64::from(self.config.max_duration_seconds)),
-            self.run_dream(run_start, run_date, true),
+            self.run_dream(run_start, true, dependencies),
         )
         .await
         {
@@ -1102,6 +1118,18 @@ impl DreamDaemon {
             return Ok(());
         }
 
+        let dependencies = match self.dependencies() {
+            Ok(dependencies) => dependencies,
+            Err(missing) => {
+                info!(
+                    reason = "missing_dependencies",
+                    ?missing,
+                    "DreamDaemon tick: skipped"
+                );
+                return Ok(());
+            }
+        };
+
         if !self.is_within_window() {
             info!(
                 reason = "outside_window",
@@ -1177,7 +1205,7 @@ impl DreamDaemon {
             .await?;
 
         // rust-doctor-disable-next-line excessive-clone
-        let run_future = self.run_dream(run_start, run_date.clone(), false);
+        let run_future = self.run_dream(run_start, false, dependencies);
         let run_result = tokio::time::timeout(
             Duration::from_secs(u64::from(self.config.max_duration_seconds)),
             run_future,
@@ -1256,9 +1284,10 @@ impl DreamDaemon {
     async fn run_dream(
         &self,
         run_start: i64,
-        _run_date: String,
         force: bool,
+        dependencies: DreamDependencies,
     ) -> Result<DreamCycleOutcome, AlephError> {
+        let DreamDependencies { provider, embedder } = dependencies;
         // --- Phase 0: Resolve note memory dir + load the note index ---
         // rust-doctor-disable-next-line excessive-clone
         let memory_dir = self.note_memory_dir.clone().unwrap_or_else(|| {
@@ -1327,192 +1356,171 @@ impl DreamDaemon {
 
         // --- Phase 4: Build and run the consolidation pipeline ---
         let pipeline = DreamPipeline::from_strategy(strategy, &self.config, &self.decay_policy);
-        // rust-doctor-disable-next-line excessive-clone
-        let (mut report, run_status) = match (self.provider.clone(), self.embedder.clone()) {
-            (Some(provider), Some(embedder)) => {
+        let (mut report, run_status) = {
+            // rust-doctor-disable-next-line excessive-clone
+            let mut indexer = NoteIndexer::new(memory_dir.clone(), self.database.clone());
+            // Embed-on-write: distilled / rewritten / renamed notes get a
+            // fresh vector immediately instead of waiting for reembed_all.
+            // rust-doctor-disable-next-line excessive-clone
+            indexer = indexer.with_embedder(embedder.clone());
+            let notes: Vec<NoteEntry> =
+                note_index.iter().map(NoteEntry::from_index_entry).collect();
+            // Scheduled cycles yield to fresh user activity; forced cycles
+            // (run_now / E2E harness) run to completion. The scheduled arm
+            // is the same probe `check_and_run`'s entry precondition
+            // consulted — one probe, so entry gate and per-stage yield
+            // cannot disagree about what "active" means.
+            let activity_checker: Arc<dyn Fn() -> bool + Send + Sync> = if force {
+                Arc::new(|| false)
+            } else {
                 // rust-doctor-disable-next-line excessive-clone
-                let mut indexer = NoteIndexer::new(memory_dir.clone(), self.database.clone());
-                // Embed-on-write: distilled / rewritten / renamed notes get a
-                // fresh vector immediately instead of waiting for reembed_all.
+                self.activity_probe.clone()
+            };
+            let ctx = DreamContext {
+                notes,
+                note_contents: HashMap::new(),
+                agent_id: DEFAULT_AGENT_ID.to_string(),
                 // rust-doctor-disable-next-line excessive-clone
-                indexer = indexer.with_embedder(embedder.clone());
-                let notes: Vec<NoteEntry> =
-                    note_index.iter().map(NoteEntry::from_index_entry).collect();
-                // Scheduled cycles yield to fresh user activity; forced cycles
-                // (run_now / E2E harness) run to completion. The scheduled arm
-                // is the same probe `check_and_run`'s entry precondition
-                // consulted — one probe, so entry gate and per-stage yield
-                // cannot disagree about what "active" means.
-                let activity_checker: Arc<dyn Fn() -> bool + Send + Sync> = if force {
-                    Arc::new(|| false)
-                } else {
-                    // rust-doctor-disable-next-line excessive-clone
-                    self.activity_probe.clone()
-                };
-                let ctx = DreamContext {
-                    notes,
-                    note_contents: HashMap::new(),
-                    agent_id: DEFAULT_AGENT_ID.to_string(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    database: self.database.clone(),
-                    raw_store: self.raw_store.clone(),
-                    indexer,
-                    // rust-doctor-disable-next-line excessive-clone
-                    provider: provider.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    embedder: embedder.clone(),
-                    report: DreamReport {
-                        pipeline_type: strategy.to_string(),
-                        started_at: run_start,
-                        ..Default::default()
-                    },
-                    pipeline_type: strategy.to_string(),
-                    activity_checker: activity_checker.clone(),
-                    strategy,
-                    // rust-doctor-disable-next-line excessive-clone
-                    orientation: self.orientation.clone(),
-                    evolution_budget: EditBudget::default(),
-                };
-                let mut report = pipeline.run(ctx).await?;
-
-                // Per-corpus maintenance. The base agent ran the full pipeline
-                // above; **every other corpus on disk** gets the
-                // note-maintenance subset so its notes are
-                // linted/consolidated/synthesised too. The global-only stages
-                // (feedback floor, skill lifecycle, daily digest) are
-                // excluded — those stay cross-corpus.
-                //
-                // The enumeration is `list_note_corpora`, the single source for
-                // "which corpora exist", minus the base agent. It used to be
-                // `list_scoped_agent_ids(.., DEFAULT_AGENT_ID)` behind an
-                // `if self.project_scoped` gate, and both halves were wrong in
-                // the same direction: `__u-*` / `__p-*` partitions are produced
-                // by *session scope*, which never consults `project_scoped`, and
-                // a non-default agent is not a sibling of `main` at all. With
-                // the flag at its default (false) that meant every personal
-                // partition, every room partition and every non-default agent's
-                // notes went unmaintained from the day they were created — no
-                // error, no empty result, just a branch that was never taken.
-                //
-                // Each corpus governs *itself*: it folds its own event log into
-                // its own gate, personality and best-health checkpoint, and
-                // appends its own event — it does not inherit this cycle's
-                // strategy and its churn never joins the base agent's history.
-                // See `project_cycle` for why joining them would be worse than
-                // the drop it replaces. Per-corpus failures are logged, never
-                // aborting the base cycle.
-                //
-                // A base cycle the user interrupted skips the fan-out
-                // entirely: the same probe would stop every corpus at its
-                // first stage anyway, so walking them buys nothing but a log
-                // read, an index read and a budget slot per corpus — stopping
-                // is what yielding means (the fan-out's own `break` on the
-                // first interrupted namespace makes the identical call).
-                let corpora = if report.status == DreamReportStatus::Interrupted {
-                    Vec::new()
-                } else {
-                    maintenance_corpora(&memory_dir, DEFAULT_AGENT_ID)
-                };
-                let deps = project_cycle::ProjectCycleDeps {
-                    memory_dir: &memory_dir,
-                    database: &self.database,
-                    raw_store: &self.raw_store,
-                    provider: &provider,
-                    embedder: &embedder,
-                    config: &self.config,
-                    decay_policy: &self.decay_policy,
-                    orientation: &self.orientation,
-                    activity_checker: &activity_checker,
-                };
-                // Nightly budget. The fan-out's cost scales with the number of
-                // corpora, which scales with users, rooms and agents — an axis
-                // nothing else in this file bounds. Corpora that skip (unchanged
-                // since their last cycle) cost no LLM call and so do not spend
-                // budget; only cycles that actually ran do.
-                //
-                // Read from config, not from `MAX_CORPUS_CYCLES_PER_NIGHT`: the
-                // right ceiling depends on how many partitions an install has
-                // and how much the operator is willing to spend, and neither is
-                // knowable here. The constant remains that knob's default.
-                let budget = self.config.max_corpus_cycles_per_night;
-                let mut spent = 0usize;
-                for ns in &corpora {
-                    if spent >= budget {
-                        warn!(
-                            budget,
-                            remaining = corpora.len() - spent,
-                            "nightly per-corpus dream budget exhausted; \
-                             remaining corpora wait for the next window"
-                        );
-                        break;
-                    }
-                    match project_cycle::run_namespace_cycle(&deps, ns).await {
-                        Ok(project_cycle::NamespaceCycle::Idle) => {}
-                        Ok(project_cycle::NamespaceCycle::Ran(outcome)) => {
-                            spent += 1;
-                            let r = &outcome.report;
-                            let interrupted = r.status == DreamReportStatus::Interrupted;
-                            info!(
-                                agent = %ns,
-                                stages = ?r.stages_executed,
-                                interrupted,
-                                "corpus dream complete"
-                            );
-                            // The audit row the operator reads. Its absence is
-                            // why a non-base corpus's nightly history was
-                            // legible to the model — which reads that corpus's
-                            // own event log — and to no one else. Same writer as
-                            // the base cycle, so the two can't drift; the
-                            // sub-cycle's own clock, because it is its own run.
-                            // (The vacuous-night skip lives inside the writer
-                            // itself — every caller inherits it.)
-                            self.persist_run_row(&outcome, ns, r.started_at, r.duration_ms);
-                            // The activity checker fired: the user is back.
-                            // Walking the remaining corpora would only produce a
-                            // burst of cycles that interrupt at their first
-                            // stage — stop, because stopping is what yielding
-                            // means.
-                            if interrupted {
-                                break;
-                            }
-                        }
-                        Err(e) => warn!(
-                            agent = %ns,
-                            error = %e,
-                            "corpus dream failed"
-                        ),
-                    }
-                }
-
-                report.finished_at = now_timestamp();
-                report.duration_ms = ((report.finished_at - run_start).max(0) as u64) * 1000;
-                // Derived, not hard-coded `Success`: a cycle that yielded
-                // before its first stage maps to `Cancelled`, which is what
-                // re-arms `should_skip_scheduled_run`'s retry once the user
-                // goes idle again. Hard-coding `Success` here left that retry
-                // arm with zero producers while spending the day's budget on
-                // a night that did nothing.
-                let status = DreamRunStatus::for_report(&report);
-                (report, status)
-            }
-            _ => {
-                // Consolidation needs both an AI provider and an embedder
-                // (`DreamContext` requires them). The ingestion-only boot path
-                // supplies neither — skip the pipeline rather than panic. The
-                // production server always supplies both.
-                warn!(
-                    "DreamDaemon: AI provider or embedder unavailable — \
-                     skipping consolidation pipeline"
-                );
-                let report = DreamReport {
+                database: self.database.clone(),
+                raw_store: self.raw_store.clone(),
+                indexer,
+                // rust-doctor-disable-next-line excessive-clone
+                provider: provider.clone(),
+                // rust-doctor-disable-next-line excessive-clone
+                embedder: embedder.clone(),
+                report: DreamReport {
                     pipeline_type: strategy.to_string(),
                     started_at: run_start,
-                    finished_at: now_timestamp(),
-                    status: DreamReportStatus::Completed,
                     ..Default::default()
-                };
-                (report, DreamRunStatus::Success)
+                },
+                pipeline_type: strategy.to_string(),
+                activity_checker: activity_checker.clone(),
+                strategy,
+                // rust-doctor-disable-next-line excessive-clone
+                orientation: self.orientation.clone(),
+                evolution_budget: EditBudget::default(),
+            };
+            let mut report = pipeline.run(ctx).await?;
+
+            // Per-corpus maintenance. The base agent ran the full pipeline
+            // above; **every other corpus on disk** gets the
+            // note-maintenance subset so its notes are
+            // linted/consolidated/synthesised too. The global-only stages
+            // (feedback floor, skill lifecycle, daily digest) are
+            // excluded — those stay cross-corpus.
+            //
+            // The enumeration is `list_note_corpora`, the single source for
+            // "which corpora exist", minus the base agent. It used to be
+            // `list_scoped_agent_ids(.., DEFAULT_AGENT_ID)` behind an
+            // `if self.project_scoped` gate, and both halves were wrong in
+            // the same direction: `__u-*` / `__p-*` partitions are produced
+            // by *session scope*, which never consults `project_scoped`, and
+            // a non-default agent is not a sibling of `main` at all. With
+            // the flag at its default (false) that meant every personal
+            // partition, every room partition and every non-default agent's
+            // notes went unmaintained from the day they were created — no
+            // error, no empty result, just a branch that was never taken.
+            //
+            // Each corpus governs *itself*: it folds its own event log into
+            // its own gate, personality and best-health checkpoint, and
+            // appends its own event — it does not inherit this cycle's
+            // strategy and its churn never joins the base agent's history.
+            // See `project_cycle` for why joining them would be worse than
+            // the drop it replaces. Per-corpus failures are logged, never
+            // aborting the base cycle.
+            //
+            // A base cycle the user interrupted skips the fan-out
+            // entirely: the same probe would stop every corpus at its
+            // first stage anyway, so walking them buys nothing but a log
+            // read, an index read and a budget slot per corpus — stopping
+            // is what yielding means (the fan-out's own `break` on the
+            // first interrupted namespace makes the identical call).
+            let corpora = if report.status == DreamReportStatus::Interrupted {
+                Vec::new()
+            } else {
+                maintenance_corpora(&memory_dir, DEFAULT_AGENT_ID)
+            };
+            let deps = project_cycle::ProjectCycleDeps {
+                memory_dir: &memory_dir,
+                database: &self.database,
+                raw_store: &self.raw_store,
+                provider: &provider,
+                embedder: &embedder,
+                config: &self.config,
+                decay_policy: &self.decay_policy,
+                orientation: &self.orientation,
+                activity_checker: &activity_checker,
+            };
+            // Nightly budget. The fan-out's cost scales with the number of
+            // corpora, which scales with users, rooms and agents — an axis
+            // nothing else in this file bounds. Corpora that skip (unchanged
+            // since their last cycle) cost no LLM call and so do not spend
+            // budget; only cycles that actually ran do.
+            //
+            // Read from config, not from `MAX_CORPUS_CYCLES_PER_NIGHT`: the
+            // right ceiling depends on how many partitions an install has
+            // and how much the operator is willing to spend, and neither is
+            // knowable here. The constant remains that knob's default.
+            let budget = self.config.max_corpus_cycles_per_night;
+            let mut spent = 0usize;
+            for ns in &corpora {
+                if spent >= budget {
+                    warn!(
+                        budget,
+                        remaining = corpora.len() - spent,
+                        "nightly per-corpus dream budget exhausted; \
+                         remaining corpora wait for the next window"
+                    );
+                    break;
+                }
+                match project_cycle::run_namespace_cycle(&deps, ns).await {
+                    Ok(project_cycle::NamespaceCycle::Idle) => {}
+                    Ok(project_cycle::NamespaceCycle::Ran(outcome)) => {
+                        spent += 1;
+                        let r = &outcome.report;
+                        let interrupted = r.status == DreamReportStatus::Interrupted;
+                        info!(
+                            agent = %ns,
+                            stages = ?r.stages_executed,
+                            interrupted,
+                            "corpus dream complete"
+                        );
+                        // The audit row the operator reads. Its absence is
+                        // why a non-base corpus's nightly history was
+                        // legible to the model — which reads that corpus's
+                        // own event log — and to no one else. Same writer as
+                        // the base cycle, so the two can't drift; the
+                        // sub-cycle's own clock, because it is its own run.
+                        // (The vacuous-night skip lives inside the writer
+                        // itself — every caller inherits it.)
+                        self.persist_run_row(&outcome, ns, r.started_at, r.duration_ms);
+                        // The activity checker fired: the user is back.
+                        // Walking the remaining corpora would only produce a
+                        // burst of cycles that interrupt at their first
+                        // stage — stop, because stopping is what yielding
+                        // means.
+                        if interrupted {
+                            break;
+                        }
+                    }
+                    Err(e) => warn!(
+                        agent = %ns,
+                        error = %e,
+                        "corpus dream failed"
+                    ),
+                }
             }
+
+            report.finished_at = now_timestamp();
+            report.duration_ms = ((report.finished_at - run_start).max(0) as u64) * 1000;
+            // Derived, not hard-coded `Success`: a cycle that yielded
+            // before its first stage maps to `Cancelled`, which is what
+            // re-arms `should_skip_scheduled_run`'s retry once the user
+            // goes idle again. Hard-coding `Success` here left that retry
+            // arm with zero producers while spending the day's budget on
+            // a night that did nothing.
+            let status = DreamRunStatus::for_report(&report);
+            (report, status)
         };
 
         // --- Phase 5.5: Evolution gate (memory-health before/after) ---
@@ -2189,7 +2197,7 @@ mod tests {
 
     /// Minimal embedding provider stub — the stages exercised here never
     /// invoke embedding, so empty vectors suffice.
-    struct StubEmbedder;
+    pub(super) struct StubEmbedder;
 
     #[async_trait::async_trait]
     impl EmbeddingProvider for StubEmbedder {
@@ -2449,7 +2457,7 @@ mod tests {
         let daemon = test_daemon(store, temp.clone());
 
         let outcome = daemon
-            .run_dream(now_timestamp(), "2026-05-21".to_string(), true)
+            .run_dream(now_timestamp(), true, daemon.dependencies().unwrap())
             .await
             .expect("run_dream succeeds");
         let report = &outcome.report;
@@ -2539,7 +2547,7 @@ mod tests {
         // conserve rather than starting from a blank gate.
         let daemon = test_daemon(store, temp.clone());
         let outcome = daemon
-            .run_dream(now_timestamp(), "2026-05-21".to_string(), true)
+            .run_dream(now_timestamp(), true, daemon.dependencies().unwrap())
             .await
             .expect("run_dream succeeds");
 
@@ -2594,23 +2602,70 @@ mod tests {
         assert_eq!(decision.strategy.to_string(), rows[0].pipeline_type);
     }
 
+    async fn check_missing_dependencies(forced: bool) {
+        for (provider, embedder) in [(false, false), (true, false), (false, true)] {
+            let (_temp_guard, temp) = scratch_root();
+            let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+            let previous = DreamStatus {
+                last_run_at: Some(1),
+                last_status: Some("timeout".to_owned()),
+                last_duration_ms: Some(2468),
+            };
+            store.set_dream_status(previous.clone()).await.unwrap();
+            let mut daemon = DreamDaemon::from_config(store.clone(), &MemoryConfig::default())
+                .unwrap()
+                .with_note_memory_dir(temp.clone())
+                .with_activity_probe(Arc::new(|| false));
+            daemon.window_start = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+            daemon.window_end = NaiveTime::from_hms_nano_opt(23, 59, 59, 999_999_999).unwrap();
+            if provider {
+                daemon = daemon.with_provider(Arc::new(MockProvider::new("")));
+            }
+            if embedder {
+                daemon = daemon.with_embedder(Arc::new(StubEmbedder));
+            }
+
+            if forced {
+                let error = daemon
+                    .run_now()
+                    .await
+                    .expect_err("a force trigger cannot run without all dependencies")
+                    .to_string()
+                    .to_lowercase();
+                if !provider {
+                    assert!(error.contains("provider"), "missing provider: {error}");
+                }
+                if !embedder {
+                    assert!(error.contains("embed"), "missing embedder: {error}");
+                }
+            } else {
+                daemon.check_and_run().await.unwrap();
+            }
+
+            let actual = store.get_dream_status().await.unwrap();
+            assert_eq!(actual.last_run_at, previous.last_run_at);
+            assert_eq!(actual.last_status, previous.last_status);
+            assert_eq!(actual.last_duration_ms, previous.last_duration_ms);
+            assert!(store
+                .recent_dream_reports(Some(DEFAULT_AGENT_ID), 10)
+                .unwrap()
+                .is_empty());
+            assert!(!temp
+                .join(DEFAULT_AGENT_ID)
+                .join("dream_events.jsonl")
+                .exists());
+            assert!(!daemon.is_running.load(Ordering::SeqCst));
+        }
+    }
+
     #[tokio::test]
-    async fn run_dream_skips_gracefully_without_provider() {
-        let (_temp_guard, temp) = scratch_root();
-        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
-        // No provider / embedder → DreamContext cannot be built; the daemon
-        // must skip the pipeline gracefully rather than panic.
-        let daemon = DreamDaemon::from_config(store, &MemoryConfig::default())
-            .unwrap()
-            .with_note_memory_dir(temp.clone());
+    async fn scheduled_check_without_dependencies_preserves_actual_run() {
+        check_missing_dependencies(false).await;
+    }
 
-        let outcome = daemon
-            .run_dream(now_timestamp(), "2026-05-21".to_string(), true)
-            .await
-            .expect("run_dream succeeds without a provider");
-
-        assert_eq!(outcome.status, DreamRunStatus::Success);
-        assert!(outcome.report.stages_executed.is_empty());
+    #[tokio::test]
+    async fn forced_check_without_dependencies_returns_error_and_preserves_actual_run() {
+        check_missing_dependencies(true).await;
     }
 
     // -----------------------------------------------------------------------
@@ -2640,7 +2695,7 @@ mod tests {
 
         let run_start = now_timestamp();
         let outcome = daemon
-            .run_dream(run_start, "2026-08-21".to_string(), false)
+            .run_dream(run_start, false, daemon.dependencies().unwrap())
             .await
             .expect("run_dream succeeds");
 
@@ -3005,7 +3060,7 @@ mod tests {
         .with_agent(agent_id);
         raw.path = Some(format!(
             "{}{id}",
-            stages::feedback_distill::CORRECTION_PATH_PREFIX
+            crate::memory::store::raw_memory::CORRECTION_PATH_PREFIX
         ));
         fx.raw_store
             .as_ref()
@@ -3135,7 +3190,7 @@ mod tests {
             .with_note_memory_dir(dir.clone());
 
         daemon
-            .run_dream(now_timestamp(), "2026-08-04".to_string(), true)
+            .run_dream(now_timestamp(), true, daemon.dependencies().unwrap())
             .await
             .expect("run_dream succeeds");
 
@@ -3202,7 +3257,7 @@ mod tests {
             .with_note_memory_dir(dir.clone());
 
         daemon
-            .run_dream(now_timestamp(), "2026-08-08".to_string(), true)
+            .run_dream(now_timestamp(), true, daemon.dependencies().unwrap())
             .await
             .expect("run_dream succeeds");
 
@@ -3366,7 +3421,7 @@ mod tests {
             .with_note_memory_dir(dir.clone());
 
         daemon
-            .run_dream(now_timestamp(), "2026-08-08".to_string(), true)
+            .run_dream(now_timestamp(), true, daemon.dependencies().unwrap())
             .await
             .expect("run_dream succeeds");
 
