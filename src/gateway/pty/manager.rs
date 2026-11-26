@@ -1017,9 +1017,9 @@ impl PtyManager {
     /// wherever the whole set has to end at once: the terminal switch being
     /// turned off (a gate evaluated only at admission leaves the shell that
     /// is already open still open), and the daemon's exit paths in
-    /// `aleph-server`'s `start` command — beside the bash registry's reaper
-    /// (`bash_exec::kill_all_running_background`), whose twin this is. Each
-    /// session is journaled `killed` before its kill, as in [`Self::close`],
+    /// `aleph-server`'s `start` command. Human PTY teardown is separate
+    /// from the Agent shell registry. Each session is journaled `killed`
+    /// before its kill, as in [`Self::close`],
     /// which is what keeps a clean stop from leaving every open PTY row
     /// `running` on disk for the next boot to tombstone as a shell the
     /// restart *interrupted*.

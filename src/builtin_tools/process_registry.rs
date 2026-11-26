@@ -56,6 +56,8 @@ use crate::builtin_tools::code_exec::CodeExecOutput;
 use crate::builtin_tools::partial_output;
 use crate::builtin_tools::process_journal::{self, Verdict};
 use crate::sandbox::live_tail::{LiveSnapshot, LiveTail};
+use crate::sandbox::shell_lifecycle::ShellLifecycle;
+use crate::session::service::SessionId;
 use crate::sync_primitives::{Arc, AtomicU64, Mutex, MutexGuard, Ordering};
 
 /// Upper bound on retained entries. Once exceeded we evict the oldest
@@ -100,7 +102,7 @@ struct ProcEntry {
     command: String,
     session_label: Option<String>,
     started: Instant,
-    abort: AbortHandle,
+    owner: ProcessOwner,
     state: ProcState,
     /// Rolling tail of the child's output while it runs. `None` before
     /// [`ProcessRegistry::attach_live`] runs, and dropped again the moment the
@@ -117,10 +119,29 @@ struct ProcEntry {
     /// read `wait` returns through, so both faces stamp it without a second
     /// call site to forget.
     reported: bool,
-    /// `Some` only for an owner-supervised (managed) child: the controlled
-    /// cancel + reap-ack link. Plain background jobs keep `None` and every
-    /// existing code path is byte-identical for them.
-    managed: Option<ManagedLink>,
+}
+
+enum ProcessOwner {
+    Legacy(AbortHandle),
+    Managed(ManagedLink),
+    Shell(Arc<ShellLifecycle>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveProcessState {
+    Starting,
+    Running,
+    Stopping,
+}
+
+impl LiveProcessState {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Stopping => "stopping",
+        }
+    }
 }
 
 /// Registry side of a managed child's cancel + reap link. The supervisor task
@@ -180,18 +201,30 @@ pub enum ManagedCancelOutcome {
 }
 
 impl ProcEntry {
-    /// Flip out of `Running` and release the live-tail rings in one step, so
-    /// no state-transition site can keep the buffers alive by forgetting. The
-    /// caller must already hold the table lock.
+    fn live_state(&self) -> LiveProcessState {
+        match &self.owner {
+            ProcessOwner::Shell(control) if control.cancellation_requested() => {
+                LiveProcessState::Stopping
+            }
+            ProcessOwner::Shell(control) if !control.started() => LiveProcessState::Starting,
+            _ => LiveProcessState::Running,
+        }
+    }
+
+    /// Shell rows retain their bounded rings so terminal reads use the same
+    /// coordinates. Legacy and managed owners still release theirs on exit.
     fn retire(&mut self, state: ProcState) {
         self.state = state;
-        self.live = None;
+        if !matches!(self.owner, ProcessOwner::Shell(_)) {
+            self.live = None;
+        }
     }
 }
 
 /// Outcome of a [`ProcessRegistry::poll`] call.
 pub enum PollOutcome {
     Running {
+        state: LiveProcessState,
         elapsed_ms: u64,
         /// Partial output captured so far, when a live tail is attached.
         /// **PRE-scrub** — the caller must run the same secret gate the
@@ -207,6 +240,7 @@ pub enum PollOutcome {
 /// Outcome of a [`ProcessRegistry::kill`] call.
 pub enum KillOutcome {
     Killed,
+    Stopping,
     AlreadyFinished,
     NotFound,
     /// A managed (owner-supervised) child: the generic kill is refused, because
@@ -221,7 +255,10 @@ pub enum RegisterOutcome {
     Registered(u64),
     /// This session already has `MAX_RUNNING_PER_SESSION` running jobs.
     /// The caller must not spawn — it should poll/kill an existing one first.
-    TooManyRunning { limit: usize },
+    TooManyRunning {
+        limit: usize,
+    },
+    AdmissionClosed,
 }
 
 /// Outcome of an [`ProcessRegistry::wait`] call — like [`PollOutcome`] but with
@@ -233,11 +270,23 @@ pub enum WaitOutcome {
     Killed,
     /// Wait window elapsed and the job is still running.
     TimedOut {
+        state: LiveProcessState,
         elapsed_ms: u64,
         /// Partial output captured so far — same PRE-scrub contract as the
         /// `partial` field of [`PollOutcome::Running`].
         partial: Option<LiveSnapshot>,
     },
+    NotFound,
+}
+
+pub(crate) enum ReadOutcome {
+    View {
+        status: &'static str,
+        next_cursor: String,
+        stdout: partial_output::CursorStream,
+        stderr: partial_output::CursorStream,
+    },
+    InvalidCursor,
     NotFound,
 }
 
@@ -257,6 +306,7 @@ pub struct ProcSummary {
 /// Process-global table of backgrounded `bash` commands.
 pub struct ProcessRegistry {
     next_id: AtomicU64,
+    incarnation: uuid::Uuid,
     procs: Mutex<HashMap<u64, ProcEntry>>,
     /// Fires on every state transition out of `Running` (complete / kill) so
     /// [`wait`](Self::wait) can sleep until *something* finishes instead of
@@ -265,6 +315,7 @@ pub struct ProcessRegistry {
     /// [`MAX_RUNNING_PER_SESSION`] per session), so a shared notifier is
     /// cheaper than one channel per entry.
     completion: Notify,
+    shell_admission_closed: std::sync::atomic::AtomicBool,
     /// Whether this instance may write to the process-global
     /// [`process_journal`]. True for exactly one registry — the
     /// [`REGISTRY`] singleton.
@@ -302,8 +353,10 @@ impl ProcessRegistry {
     fn build(journaled: bool) -> Self {
         Self {
             next_id: AtomicU64::new(1),
+            incarnation: uuid::Uuid::new_v4(),
             procs: Mutex::new(HashMap::new()),
             completion: Notify::new(),
+            shell_admission_closed: std::sync::atomic::AtomicBool::new(false),
             journaled,
         }
     }
@@ -329,7 +382,7 @@ impl ProcessRegistry {
         session_label: Option<String>,
         abort: AbortHandle,
     ) -> RegisterOutcome {
-        self.register_inner(command.into(), session_label, abort, None)
+        self.register_inner(command.into(), session_label, ProcessOwner::Legacy(abort))
     }
 
     /// Register an owner-supervised (managed) child in the SAME table, with the
@@ -339,10 +392,18 @@ impl ProcessRegistry {
         &self,
         command: impl Into<String>,
         session_label: Option<String>,
-        abort: AbortHandle,
         link: ManagedLinkEnd,
     ) -> RegisterOutcome {
-        self.register_inner(command.into(), session_label, abort, Some(link.0))
+        self.register_inner(command.into(), session_label, ProcessOwner::Managed(link.0))
+    }
+
+    pub(crate) fn reserve_shell(
+        &self,
+        command: impl Into<String>,
+        session_label: Option<String>,
+        control: Arc<ShellLifecycle>,
+    ) -> RegisterOutcome {
+        self.register_inner(command.into(), session_label, ProcessOwner::Shell(control))
     }
 
     /// Ask the supervisor of managed entry `id` (owned by `caller`) to
@@ -358,9 +419,9 @@ impl ProcessRegistry {
         let (cancel, mut reaped) = {
             let mut procs = self.lock();
             match procs.get_mut(&id) {
-                Some(entry) if owns(entry, caller) => match entry.managed.as_mut() {
-                    Some(link) => (link.cancel.take(), link.reaped.clone()),
-                    None => return ManagedCancelOutcome::NotFound,
+                Some(entry) if owns(entry, caller) => match &mut entry.owner {
+                    ProcessOwner::Managed(link) => (link.cancel.take(), link.reaped.clone()),
+                    _ => return ManagedCancelOutcome::NotFound,
                 },
                 _ => return ManagedCancelOutcome::NotFound,
             }
@@ -382,11 +443,15 @@ impl ProcessRegistry {
         &self,
         command: String,
         session_label: Option<String>,
-        abort: AbortHandle,
-        managed: Option<ManagedLink>,
+        owner: ProcessOwner,
     ) -> RegisterOutcome {
         let (id, preview) = {
             let mut procs = self.lock();
+            if matches!(&owner, ProcessOwner::Shell(_))
+                && self.shell_admission_closed.load(Ordering::Relaxed)
+            {
+                return RegisterOutcome::AdmissionClosed;
+            }
             // BT-D-R4-17: count BOTH per-session and global running jobs in
             // one pass so a single lock acquisition enforces both caps
             // atomically. The earlier code only checked the per-session
@@ -452,11 +517,10 @@ impl ProcessRegistry {
                     command: preview.clone(),
                     session_label: session_label.clone(),
                     started: Instant::now(),
-                    abort,
+                    owner,
                     state: ProcState::Running,
                     live: None,
                     reported: false,
-                    managed,
                 },
             );
             (id, preview)
@@ -527,32 +591,42 @@ impl ProcessRegistry {
     /// announce-addressable one) — so it reports the transition and lets the
     /// spawner, which holds both, decide.
     pub fn complete(&self, id: u64, output: CodeExecOutput) -> bool {
-        let mut landed = false;
         let journaled = {
             let mut procs = self.lock();
-            match procs.get_mut(&id) {
-                Some(entry) if matches!(entry.state, ProcState::Running) => {
-                    landed = true;
-                    // The journal's copy is taken here, under the same lock that
-                    // decides the transition, so a racing `kill` cannot make the
-                    // disk say "completed" while memory says "killed". Only paid
-                    // when the journal is on: every test and non-daemon binary
-                    // skips the clone entirely. The bytes are the sandbox's
-                    // finished-path output, i.e. already scrubbed and gated.
-                    let copy = (self.journaled && process_journal::is_enabled()).then(|| {
-                        (
-                            output.exit_code,
-                            output.stdout.clone(),
-                            output.stderr.clone(),
-                        )
-                    });
-                    // Same lock acquisition drops the live rings: the finished
-                    // entry keeps only its (already truncated) CodeExecOutput.
-                    entry.retire(ProcState::Done(Box::new(output)));
-                    copy
+            let Some(entry) = procs
+                .get_mut(&id)
+                .filter(|entry| matches!(entry.state, ProcState::Running))
+            else {
+                return false;
+            };
+            if let ProcessOwner::Shell(control) = &entry.owner {
+                if !control.settled() {
+                    control.request_cancel();
+                    tracing::warn!(
+                        process_id = id,
+                        "shell child reap unconfirmed; retaining process slot"
+                    );
+                    return false;
                 }
-                _ => None,
+                if control.stopped() {
+                    let live = entry.live.clone();
+                    entry.retire(ProcState::Killed);
+                    drop(procs);
+                    self.record_kill(id, live.as_deref());
+                    return false;
+                }
             }
+            // The terminal verdict and the snapshot for the journal are
+            // selected in the same transition, before notifying any waiter.
+            let copy = (self.journaled && process_journal::is_enabled()).then(|| {
+                (
+                    output.exit_code,
+                    output.stdout.clone(),
+                    output.stderr.clone(),
+                )
+            });
+            entry.retire(ProcState::Done(Box::new(output)));
+            copy
         };
         if let Some((exit_code, stdout, stderr)) = journaled {
             process_journal::record_settled(
@@ -563,9 +637,77 @@ impl ProcessRegistry {
                 &stderr,
             );
         }
-        // Wake any `wait`ers so they re-check (and free a per-session slot).
         self.completion.notify_waiters();
-        landed
+        true
+    }
+
+    /// Take a bounded, non-consuming snapshot of an owned shell row. Durable
+    /// journal rows have no live cursor or reconstructible source coordinates.
+    pub(crate) fn read(&self, id: u64, caller: &SessionId, cursor: Option<&str>) -> ReadOutcome {
+        let caller = encode_session_label(caller);
+        let (status, terminal, tail) = {
+            let procs = self.lock();
+            let Some(entry) = procs.get(&id).filter(|entry| {
+                owns(entry, Some(&caller)) && matches!(entry.owner, ProcessOwner::Shell(_))
+            }) else {
+                return ReadOutcome::NotFound;
+            };
+            let (status, terminal) = match entry.state {
+                ProcState::Running => (entry.live_state().label(), false),
+                ProcState::Done(_) => ("done", true),
+                ProcState::Killed => ("killed", true),
+            };
+            (status, terminal, entry.live.clone())
+        };
+        let Some([out_offset, err_offset]) =
+            cursor.map_or(Some([0, 0]), |cursor| self.decode_cursor(id, cursor))
+        else {
+            return ReadOutcome::InvalidCursor;
+        };
+        let snapshot = tail.map_or_else(LiveSnapshot::default, |tail| tail.source_snapshot());
+        if out_offset > snapshot.stdout_total || err_offset > snapshot.stderr_total {
+            return ReadOutcome::InvalidCursor;
+        }
+        let stdout = partial_output::project_cursor_stream(
+            &snapshot.stdout,
+            snapshot.stdout_total,
+            out_offset,
+            terminal,
+            snapshot.withhold,
+        );
+        let stderr = partial_output::project_cursor_stream(
+            &snapshot.stderr,
+            snapshot.stderr_total,
+            err_offset,
+            terminal,
+            snapshot.withhold,
+        );
+        ReadOutcome::View {
+            status,
+            next_cursor: format!(
+                "1:{}:{id:016x}:{:016x}:{:016x}",
+                self.incarnation.simple(),
+                stdout.next,
+                stderr.next
+            ),
+            stdout,
+            stderr,
+        }
+    }
+
+    fn decode_cursor(&self, id: u64, cursor: &str) -> Option<[u64; 2]> {
+        // Fixed-width format, checked before parsing any fields.
+        if cursor.len() != 85 || !cursor.is_ascii() {
+            return None;
+        }
+        let mut parts = cursor.split(':');
+        if parts.next()? != "1" || uuid::Uuid::parse_str(parts.next()?).ok()? != self.incarnation {
+            return None;
+        }
+        let process = u64::from_str_radix(parts.next()?, 16).ok()?;
+        let stdout = u64::from_str_radix(parts.next()?, 16).ok()?;
+        let stderr = u64::from_str_radix(parts.next()?, 16).ok()?;
+        (id == process && parts.next().is_none()).then_some([stdout, stderr])
     }
 
     /// Fetch a process's status / output. Only succeeds for entries owned by
@@ -583,6 +725,7 @@ impl ProcessRegistry {
         };
         match &entry.state {
             ProcState::Running => PollOutcome::Running {
+                state: entry.live_state(),
                 elapsed_ms: elapsed_ms(entry.started),
                 partial: entry.live.as_ref().map(|t| t.snapshot()),
             },
@@ -619,53 +762,47 @@ impl ProcessRegistry {
         self.lock().get(&id).is_some_and(|e| e.reported)
     }
 
-    /// Abort a running process. Dropping the task fires `kill_on_drop` on the
-    /// underlying child, so the real OS process is `SIGKILL`ed.
+    /// Ask a shell to stop without aborting its driver. Legacy installer
+    /// tasks retain their abort behavior; managed children use their owner.
     pub fn kill(&self, id: u64, caller: Option<&str>) -> KillOutcome {
         let (outcome, live) = {
             let mut procs = self.lock();
             match procs.get_mut(&id) {
-                Some(entry) if owns(entry, caller) && entry.managed.is_some() => {
-                    // Managed children are stopped by their owner, never aborted
-                    // here (no close-first ordering, no reap proof).
-                    let outcome = if matches!(entry.state, ProcState::Running) {
-                        KillOutcome::Managed
-                    } else {
-                        KillOutcome::AlreadyFinished
-                    };
-                    (outcome, None)
-                }
                 Some(entry) if owns(entry, caller) => match entry.state {
-                    ProcState::Running => {
-                        entry.abort.abort();
-                        // Take the tail BEFORE retiring: `retire` releases the
-                        // rings under this same lock, and this is the last
-                        // instant the bytes exist anywhere.
-                        let live = entry.live.clone();
-                        entry.retire(ProcState::Killed);
-                        (KillOutcome::Killed, live)
+                    ProcState::Running => match &entry.owner {
+                        ProcessOwner::Managed(_) => (KillOutcome::Managed, None),
+                        ProcessOwner::Shell(control) => {
+                            control.request_cancel();
+                            (KillOutcome::Stopping, None)
+                        }
+                        ProcessOwner::Legacy(abort) => {
+                            abort.abort();
+                            let live = entry.live.clone();
+                            entry.retire(ProcState::Killed);
+                            (KillOutcome::Killed, live)
+                        }
+                    },
+                    ProcState::Killed if matches!(&entry.owner, ProcessOwner::Shell(_)) => {
+                        return KillOutcome::Killed;
                     }
-                    _ => (KillOutcome::AlreadyFinished, None),
+                    ProcState::Killed => (KillOutcome::AlreadyFinished, None),
+                    ProcState::Done(_) => (KillOutcome::AlreadyFinished, None),
                 },
                 _ => (KillOutcome::NotFound, None),
             }
         };
-        // A kill transitions out of `Running`, so unblock any `wait`ers and
-        // free the per-session slot the killed job was holding.
         if matches!(outcome, KillOutcome::Killed) {
-            if self.journaled {
-                // Aborting drops the in-flight future, so there is no
-                // `CodeExecOutput` — but there IS a live tail, and this is the
-                // moment it stops existing. Gating and writing happen outside
-                // the table lock: the gate runs secret patterns over 16 KiB and
-                // the write touches the disk, neither of which belongs under a
-                // lock every poll contends for.
-                journal_live_tail(id, live.as_deref());
-                process_journal::record_settled(id, Verdict::Killed, None, "", "");
-            }
-            self.completion.notify_waiters();
+            self.record_kill(id, live.as_deref());
         }
         outcome
+    }
+
+    fn record_kill(&self, id: u64, live: Option<&LiveTail>) {
+        if self.journaled {
+            journal_live_tail(id, live);
+            process_journal::record_settled(id, Verdict::Killed, None, "", "");
+        }
+        self.completion.notify_waiters();
     }
 
     /// Block until process `id` (owned by `caller`) finishes, or until
@@ -694,12 +831,14 @@ impl ProcessRegistry {
                 PollOutcome::Killed => return WaitOutcome::Killed,
                 PollOutcome::NotFound => return WaitOutcome::NotFound,
                 PollOutcome::Running {
+                    state,
                     elapsed_ms,
                     partial,
                 } => {
                     let now = Instant::now();
                     if now >= deadline {
                         return WaitOutcome::TimedOut {
+                            state,
                             elapsed_ms,
                             partial,
                         };
@@ -718,8 +857,8 @@ impl ProcessRegistry {
                                 PollOutcome::Done(out) => WaitOutcome::Done(out),
                                 PollOutcome::Killed => WaitOutcome::Killed,
                                 PollOutcome::NotFound => WaitOutcome::NotFound,
-                                PollOutcome::Running { elapsed_ms, partial } => {
-                                    WaitOutcome::TimedOut { elapsed_ms, partial }
+                                PollOutcome::Running { state, elapsed_ms, partial } => {
+                                    WaitOutcome::TimedOut { state, elapsed_ms, partial }
                                 }
                             };
                         }
@@ -729,15 +868,43 @@ impl ProcessRegistry {
         }
     }
 
-    /// Abort every running entry the registry still tracks and return the
-    /// count of processes that were signalled. Idempotent: a second call is
-    /// cheap because the registry has already flipped each entry to
-    /// `Killed` / evicted it. Wired by `BashExecTool`'s daemon-shutdown
-    /// hook (`kill_all_running_background`) so background bash / build
-    /// jobs do not outlive the core on `daemon.shutdown` / `SIGTERM` —
-    /// `tokio::process::Child::kill_on_drop` is best-effort when the
-    /// runtime itself is shutting down, so the registry has to be the
-    /// authoritative reaper.
+    /// Seal shell admission, signal all active shells, and return the number
+    /// whose settlement is still unconfirmed when the wait budget expires.
+    pub(crate) async fn shutdown_shells(&self, budget: Duration) -> usize {
+        {
+            let procs = self.lock();
+            self.shell_admission_closed.store(true, Ordering::Relaxed);
+            for entry in procs
+                .values()
+                .filter(|e| matches!(e.state, ProcState::Running))
+            {
+                if let ProcessOwner::Shell(control) = &entry.owner {
+                    control.request_cancel();
+                }
+            }
+        }
+
+        let deadline = tokio::time::Instant::now() + budget;
+        loop {
+            let notified = self.completion.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let pending = self
+                .lock()
+                .values()
+                .filter(|e| {
+                    matches!(e.state, ProcState::Running)
+                        && matches!(&e.owner, ProcessOwner::Shell(_))
+                })
+                .count();
+            if pending == 0 || tokio::time::Instant::now() >= deadline {
+                return pending;
+            }
+            let _ = tokio::time::timeout_at(deadline, notified).await;
+        }
+    }
+
+    /// Abort legacy installer tasks. This does not own shell or managed children.
     pub fn shutdown(&self) -> usize {
         let reaped: Vec<(u64, Option<Arc<LiveTail>>)> = {
             let mut procs = self.lock();
@@ -745,8 +912,10 @@ impl ProcessRegistry {
             for (id, entry) in procs.iter_mut() {
                 // Managed children are reaped by their owner's own shutdown
                 // (close resource first, then cancel + wait), never aborted here.
-                if matches!(entry.state, ProcState::Running) && entry.managed.is_none() {
-                    entry.abort.abort();
+                if let (ProcState::Running, ProcessOwner::Legacy(abort)) =
+                    (&entry.state, &entry.owner)
+                {
+                    abort.abort();
                     // Take the tail before `retire` releases it (see `kill`).
                     let live = entry.live.clone();
                     entry.retire(ProcState::Killed);
@@ -797,7 +966,7 @@ impl ProcessRegistry {
             .filter(|(_, e)| owns(e, caller))
             .map(|(id, e)| {
                 let (status, exit_code) = match &e.state {
-                    ProcState::Running => ("running", None),
+                    ProcState::Running => (e.live_state().label(), None),
                     ProcState::Done(out) => ("done", Some(out.exit_code)),
                     ProcState::Killed => ("killed", None),
                 };
@@ -816,6 +985,10 @@ impl ProcessRegistry {
         rows.sort_by_key(|x| std::cmp::Reverse(x.0));
         rows.into_iter().map(|(_, s)| s).collect()
     }
+}
+
+pub(crate) fn encode_session_label(session: &SessionId) -> String {
+    serde_json::to_string(session).unwrap_or_else(|_| format!("{session:?}"))
 }
 
 fn owns(entry: &ProcEntry, caller: Option<&str>) -> bool {
@@ -933,7 +1106,151 @@ mod tests {
             RegisterOutcome::TooManyRunning { limit } => {
                 panic!("unexpected per-session cap hit (limit {limit})")
             }
+            RegisterOutcome::AdmissionClosed => panic!("unexpected admission closure"),
         }
+    }
+
+    #[tokio::test]
+    async fn shell_cancel_retains_the_slot_until_reap_is_confirmed() {
+        let registry = ProcessRegistry::new();
+        let control = Arc::new(ShellLifecycle::default());
+        let id = unwrap_id(registry.reserve_shell("job", Some("owner".into()), control.clone()));
+        assert!(matches!(
+            registry.poll(id, Some("owner")),
+            PollOutcome::Running {
+                state: LiveProcessState::Starting,
+                ..
+            }
+        ));
+        control.spawn(|| Ok(())).unwrap();
+        control.ready();
+        assert!(matches!(
+            registry.kill(id, Some("owner")),
+            KillOutcome::Stopping
+        ));
+        assert!(!registry.complete(id, dummy_output(1, "unconfirmed")));
+        assert!(matches!(
+            registry.poll(id, Some("owner")),
+            PollOutcome::Running {
+                state: LiveProcessState::Stopping,
+                ..
+            }
+        ));
+        assert_eq!(registry.shutdown_shells(Duration::ZERO).await, 1);
+        control.reaped(true);
+        assert!(!registry.complete(id, dummy_output(1, "cancelled")));
+        assert!(matches!(
+            registry.poll(id, Some("owner")),
+            PollOutcome::Killed
+        ));
+        assert_eq!(registry.shutdown_shells(Duration::ZERO).await, 0);
+        assert!(matches!(
+            registry.reserve_shell("closed", None, Arc::new(ShellLifecycle::default())),
+            RegisterOutcome::AdmissionClosed
+        ));
+    }
+
+    #[test]
+    fn cancellation_winning_the_spawn_fence_never_calls_spawn() {
+        let control = ShellLifecycle::default();
+        control.request_cancel();
+        assert!(control
+            .spawn::<()>(|| panic!("cancelled spawn must not execute"))
+            .is_err());
+        assert!(control.stopped());
+    }
+
+    #[test]
+    fn read_retains_positions_across_exit_for_independent_readers() {
+        use crate::routing::session_key::SessionKey;
+        use crate::sandbox::live_tail::LiveStream;
+        let registry = ProcessRegistry::new();
+        let owner = SessionKey::ephemeral("shell-read");
+        let id = unwrap_id(registry.reserve_shell(
+            "job",
+            Some(encode_session_label(&owner)),
+            Arc::new(ShellLifecycle::default()),
+        ));
+        let tail = Arc::new(LiveTail::for_shell());
+        registry.attach_live(id, tail.clone());
+        tail.push(LiveStream::Stdout, b"first\nsec");
+        let ReadOutcome::View {
+            next_cursor,
+            stdout,
+            ..
+        } = registry.read(id, &owner, None)
+        else {
+            panic!("expected shell output")
+        };
+        assert_eq!(
+            (stdout.text.as_str(), stdout.next, stdout.pending),
+            ("first\n", 6, true)
+        );
+        tail.push(LiveStream::Stdout, b"ond\n");
+        assert!(registry.complete(id, dummy_output(0, "finished")));
+        let ReadOutcome::View { status, stdout, .. } =
+            registry.read(id, &owner, Some(&next_cursor))
+        else {
+            panic!("expected continuation")
+        };
+        assert_eq!(
+            (status, stdout.text.as_str(), stdout.next),
+            ("done", "second\n", 13)
+        );
+        let ReadOutcome::View { stdout, .. } = registry.read(id, &owner, None) else {
+            panic!("expected independent read")
+        };
+        assert_eq!(stdout.text, "first\nsecond\n");
+        assert!(matches!(
+            registry.read(id, &SessionKey::ephemeral("other"), Some(&next_cursor)),
+            ReadOutcome::NotFound
+        ));
+        let (_, prefix) = next_cursor.rsplit_once(':').expect("encoded cursor");
+        let future = next_cursor.strip_suffix(prefix).unwrap().to_owned() + "ffffffffffffffff";
+        assert!(matches!(
+            registry.read(id, &owner, Some(&future)),
+            ReadOutcome::InvalidCursor
+        ));
+        let other_registry = ProcessRegistry::new();
+        let other_id = unwrap_id(other_registry.reserve_shell(
+            "job",
+            Some(encode_session_label(&owner)),
+            Arc::new(ShellLifecycle::default()),
+        ));
+        assert!(matches!(
+            other_registry.read(other_id, &owner, Some(&next_cursor)),
+            ReadOutcome::InvalidCursor
+        ));
+    }
+
+    #[test]
+    fn read_latches_block_class_before_ring_wrap_even_without_a_reader() {
+        use crate::routing::session_key::SessionKey;
+        use crate::sandbox::live_tail::{LiveStream, LIVE_TAIL_BYTES};
+        let registry = ProcessRegistry::new();
+        let owner = SessionKey::ephemeral("shell-withheld");
+        let id = unwrap_id(registry.reserve_shell(
+            "job",
+            Some(encode_session_label(&owner)),
+            Arc::new(ShellLifecycle::default()),
+        ));
+        let tail = Arc::new(LiveTail::for_shell());
+        registry.attach_live(id, tail.clone());
+        tail.push(LiveStream::Stdout, b"-----BEGIN SYNTHETIC ");
+        tail.push(LiveStream::Stdout, b"PRIVATE KEY-----\n");
+        tail.push(
+            LiveStream::Stdout,
+            &b"plain\n".repeat(LIVE_TAIL_BYTES / 6 + 2),
+        );
+        let ReadOutcome::View { stdout, .. } = registry.read(id, &owner, None) else {
+            panic!("expected withholding")
+        };
+        assert!(stdout.text.is_empty());
+        let [0, end] = stdout.lost.expect("the evidence scrolled out") else {
+            panic!("unexpected lost range")
+        };
+        assert_eq!(stdout.withheld, vec![[end, stdout.next]]);
+        assert!(!stdout.pending);
     }
 
     #[tokio::test]
@@ -1617,9 +1934,7 @@ mod tests {
     /// Registers a managed entry whose supervisor acks only when told to.
     fn managed_entry(reg: &ProcessRegistry, owner: &str) -> (u64, ManagedSupervisorEnd) {
         let (end, sup) = managed_link();
-        // A parked task: a real AbortHandle that nothing here aborts.
-        let abort = tokio::spawn(std::future::pending::<()>()).abort_handle();
-        let id = unwrap_id(reg.register_managed("svc", Some(owner.into()), abort, end));
+        let id = unwrap_id(reg.register_managed("svc", Some(owner.into()), end));
         (id, sup)
     }
 

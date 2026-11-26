@@ -105,6 +105,7 @@ impl OsSandboxDriverTrait for RecordingDriver {
         profile: &OsSandboxProfile,
         _timeout: Duration,
         _max_output_bytes: usize,
+        _lifecycle: Option<&alephcore::sandbox::shell_lifecycle::ShellLifecycle>,
     ) -> Result<SandboxOutput, SandboxError> {
         *self.run_count.write().await += 1;
         *self.last_max_memory_mb.write().await = profile.max_memory_mb;

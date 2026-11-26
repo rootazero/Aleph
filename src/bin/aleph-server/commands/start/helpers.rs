@@ -603,12 +603,13 @@ mod tests {
             "production boundary must exclude tests"
         );
         let production = alephcore::utils::source_scan::code_text(&prefix);
-        for reaper in ["kill_all_running_background", "shutdown_browsers_global"] {
+        for reaper in ["shutdown_background_jobs", "shutdown_browsers_global"] {
             assert!(
                 production.contains(&format!("{reaper}(")),
                 "the common teardown must still call {reaper}()"
             );
         }
+        assert!(production.contains("shutdown_background_jobs().await"));
         assert!(production.contains("startup_resources.install_pty(manager)"));
         assert!(production.contains("startup_resources.finish(result).await"));
         let cleanup_at = production

@@ -362,6 +362,7 @@ pub async fn run_child_with_drain(
     stdin_data: Option<&[u8]>,
     timeout: Duration,
     max_output_bytes: usize,
+    lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
 ) -> Result<SandboxOutput, SandboxError> {
     let start = Instant::now();
     let stdin = child.stdin.take();
@@ -396,6 +397,8 @@ pub async fn run_child_with_drain(
     }
     let mut captured_stdout = Drained::default();
     let mut captured_stderr = Drained::default();
+    // `None` is cancellation, which has a distinct winning event from
+    // wall timeout, I/O failure and natural exit.
     let (exit, elapsed_ms, drain_incomplete) = {
         let drain = async {
             let (out, err) = tokio::join!(
@@ -417,13 +420,22 @@ pub async fn run_child_with_drain(
             out.is_err() || err.is_err()
         };
         let supervise = async {
-            let exit = tokio::time::timeout_at(
-                start + timeout,
-                wait_with_startup_stdin(&mut child, stdin, stdin_data),
-            )
-            .await;
+            let cancel = async {
+                match lifecycle {
+                    Some(control) => control.cancelled().await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            let exit = tokio::select! {
+                biased;
+                exit = tokio::time::timeout_at(
+                    start + timeout,
+                    wait_with_startup_stdin(&mut child, stdin, stdin_data),
+                ) => Some(exit),
+                _ = cancel => None,
+            };
             let elapsed_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-            if !matches!(exit, Ok(Ok(_))) {
+            if !matches!(exit, Some(Ok(Ok(_)))) {
                 kill_and_reap(&mut child).await?;
             }
             Ok::<_, SandboxError>((exit, elapsed_ms))
@@ -441,8 +453,11 @@ pub async fn run_child_with_drain(
 
     let (stdout, stdout_dropped) = captured_stdout.assemble(max_output_bytes);
     let (stderr, stderr_dropped) = captured_stderr.assemble(max_output_bytes);
+    if let Some(control) = lifecycle {
+        control.reaped(exit.is_none());
+    }
     match exit {
-        Ok(Ok(status)) => Ok(SandboxOutput {
+        Some(Ok(Ok(status))) => Ok(SandboxOutput {
             stdout,
             stderr,
             exit_code: status.code(),
@@ -454,13 +469,16 @@ pub async fn run_child_with_drain(
             duration_ms: elapsed_ms,
             denial_hint: None,
         }),
-        Ok(Err(error)) => Err(error),
-        Err(_) => Err(SandboxError::Timeout {
+        Some(Ok(Err(error))) => Err(error),
+        Some(Err(_)) => Err(SandboxError::Timeout {
             elapsed_ms,
             partial_stdout: stdout,
             partial_stderr: stderr,
             drain_incomplete,
         }),
+        None => Err(SandboxError::ExecutionFailed(
+            "shell child cancelled and reaped".into(),
+        )),
     }
 }
 
@@ -495,7 +513,7 @@ async fn wait_with_startup_stdin(
     child.wait().await.map_err(wait_error)
 }
 
-async fn kill_and_reap(child: &mut Child) -> Result<ExitStatus, SandboxError> {
+pub(crate) async fn kill_and_reap(child: &mut Child) -> Result<ExitStatus, SandboxError> {
     let kill_error = child.start_kill().err();
     let reason = match tokio::time::timeout(REAP_TIMEOUT, child.wait()).await {
         Ok(Ok(status)) => return Ok(status),
@@ -760,7 +778,7 @@ mod tests {
             .spawn()
             .expect("spawn bash");
 
-        let out = run_child_with_drain(child, None, Duration::from_secs(5), 1024)
+        let out = run_child_with_drain(child, None, Duration::from_secs(5), 1024, None)
             .await
             .expect("natural exit");
         assert_eq!(out.exit_code, Some(0));
@@ -800,7 +818,7 @@ mod tests {
             .spawn()
             .expect("spawn bash");
 
-        let err = run_child_with_drain(child, None, Duration::from_secs(3), 1024)
+        let err = run_child_with_drain(child, None, Duration::from_secs(3), 1024, None)
             .await
             .expect_err("should time out");
         match err {
@@ -849,7 +867,7 @@ mod tests {
         let input = vec![b'x'; 1024 * 1024];
         let output = tokio::time::timeout(
             Duration::from_secs(5),
-            run_child_with_drain(child, Some(&input), Duration::from_secs(3), 1024),
+            run_child_with_drain(child, Some(&input), Duration::from_secs(3), 1024, None),
         )
         .await
         .expect("both pipe directions must progress")
@@ -866,7 +884,7 @@ mod tests {
         let child = spawn_piped("printf 'captured\\n'; sleep 4 & exit 7");
         let output = tokio::time::timeout(
             Duration::from_secs(3),
-            run_child_with_drain(child, None, Duration::from_secs(10), 1024),
+            run_child_with_drain(child, None, Duration::from_secs(10), 1024, None),
         )
         .await
         .expect("inherited pipes must not delay the recorded exit")
@@ -886,7 +904,7 @@ mod tests {
         let input = vec![b'x'; 1024 * 1024];
         let error = tokio::time::timeout(
             Duration::from_secs(4),
-            run_child_with_drain(child, Some(&input), Duration::from_millis(500), 1024),
+            run_child_with_drain(child, Some(&input), Duration::from_millis(500), 1024, None),
         )
         .await
         .expect("an unread input pipe must not outlive the wall clock")
@@ -912,7 +930,7 @@ mod tests {
             .expect("spawn bash");
 
         let script = b"echo from-stdin\n";
-        let out = run_child_with_drain(child, Some(script), Duration::from_secs(5), 1024)
+        let out = run_child_with_drain(child, Some(script), Duration::from_secs(5), 1024, None)
             .await
             .expect("natural exit");
         assert_eq!(out.exit_code, Some(0));
@@ -940,7 +958,7 @@ mod tests {
             .spawn()
             .expect("spawn bash");
 
-        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024)
+        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024, None)
             .await
             .expect("stdin-reading command must exit on EOF, not hang to timeout");
         assert_eq!(out.exit_code, Some(0), "cat exits 0 on a clean EOF");
@@ -962,7 +980,7 @@ mod tests {
             .spawn()
             .expect("spawn bash");
 
-        let out = run_child_with_drain(child, None, Duration::from_secs(5), 50)
+        let out = run_child_with_drain(child, None, Duration::from_secs(5), 50, None)
             .await
             .expect("natural exit");
         assert_eq!(out.stdout.len(), 50);
@@ -995,7 +1013,7 @@ mod tests {
         let scoped = tail.clone();
         LIVE_TAIL
             .scope(scoped, async {
-                run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024)
+                run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024, None)
                     .await
                     .expect("natural exit");
             })
@@ -1008,7 +1026,7 @@ mod tests {
 
         // No scope ⇒ no tee: the foreground path must not pay for this.
         let untouched = Arc::new(LiveTail::new());
-        run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024)
+        run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024, None)
             .await
             .expect("natural exit");
         assert!(untouched.snapshot().is_empty());
@@ -1042,14 +1060,14 @@ mod tests {
         let tail = Arc::new(LiveTail::new());
         LIVE_TAIL
             .scope(tail.clone(), async {
-                run_child_with_drain(child, None, Duration::from_secs(20), 1024)
+                run_child_with_drain(child, None, Duration::from_secs(20), 1024, None)
                     .await
                     .expect("exit");
             })
             .await;
         assert_eq!(tail.child_pid(), Some(expected));
         // No scope ⇒ foreground untouched: nothing to publish into.
-        run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024)
+        run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024, None)
             .await
             .expect("exit");
     }
@@ -1078,7 +1096,7 @@ mod tests {
             .spawn()
             .expect("spawn bash");
 
-        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024)
+        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024, None)
             .await
             .expect("natural exit");
         let text = String::from_utf8_lossy(&out.stdout);
@@ -1122,7 +1140,7 @@ mod tests {
         let scoped = tail.clone();
         let out = LIVE_TAIL
             .scope(scoped, async {
-                run_child_with_drain(child, None, Duration::from_secs(20), 64)
+                run_child_with_drain(child, None, Duration::from_secs(20), 64, None)
                     .await
                     .expect("natural exit")
             })
@@ -1162,7 +1180,7 @@ mod tests {
             .spawn()
             .expect("spawn bash");
 
-        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024)
+        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024, None)
             .await
             .expect("a loud command still exits naturally");
         assert_eq!(

@@ -1047,6 +1047,10 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn supports_shell_lifecycle(&self) -> bool {
+        true
+    }
+
     async fn run(
         &self,
         program: &str,
@@ -1057,6 +1061,7 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
         profile: &OsSandboxProfile,
         timeout: Duration,
         max_output_bytes: usize,
+        lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
     ) -> Result<SandboxOutput, SandboxError> {
         if !self.is_supported() {
             return Err(SandboxError::ExecutionFailed(
@@ -1096,14 +1101,23 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
             apply_memory_rlimit(&mut cmd, mb);
         }
 
-        let child = cmd.spawn().map_err(|e| {
-            SandboxError::ExecutionFailed(format!("failed to spawn sandbox-exec: {e}"))
-        })?;
+        let mut spawn = || {
+            cmd.spawn().map_err(|e| {
+                SandboxError::ExecutionFailed(format!("failed to spawn sandbox-exec: {e}"))
+            })
+        };
+        let child = match lifecycle {
+            Some(control) => control.spawn(spawn),
+            None => spawn(),
+        }?;
+        if let Some(control) = lifecycle {
+            control.ready();
+        }
 
         // Helper owns stdin write, output drain, timeout-with-kill, and
         // partial-output capture so the three platform drivers stay in
         // lock-step with codex's IO_DRAIN_TIMEOUT discipline.
-        run_child_with_drain(child, stdin, timeout, max_output_bytes).await
+        run_child_with_drain(child, stdin, timeout, max_output_bytes, lifecycle).await
     }
 }
 
@@ -1761,6 +1775,7 @@ mod tests {
                 &profile,
                 Duration::from_secs(10),
                 4096,
+                None,
             )
             .await
             .expect("/bin/echo must run inside the sandbox now that codex defaults are in place");

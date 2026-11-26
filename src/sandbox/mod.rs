@@ -33,6 +33,7 @@ pub mod resource_governor;
 pub mod sandbox_init;
 pub mod scrub;
 pub mod security_kernel_hook;
+pub mod shell_lifecycle;
 pub mod summary;
 pub mod windows_init;
 pub mod workspace;
@@ -55,6 +56,19 @@ pub use worktree::{WorktreeError, WorktreeHandle};
 #[async_trait]
 pub trait Sandbox: Send + Sync + 'static {
     async fn execute(&self, command: SandboxCommand) -> Result<SandboxOutput, SandboxError>;
+
+    /// A sandbox must opt in rather than silently ignore a cancellation contract.
+    async fn execute_controlled(
+        &self,
+        _command: SandboxCommand,
+        _lifecycle: &shell_lifecycle::ShellLifecycle,
+    ) -> Result<SandboxOutput, SandboxError> {
+        Err(SandboxError::UnsupportedPolicy {
+            platform: "sandbox",
+            feature: "shell_lifecycle".into(),
+            reason: "this sandbox cannot supervise a continuable shell command".into(),
+        })
+    }
 
     /// Codex-inspired prompt surfacing — returns the active sandbox posture
     /// for injection into the LLM system prompt. Default `None` keeps
@@ -105,6 +119,17 @@ pub mod test_util {
         async fn execute(&self, cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
             self.calls.lock().await.push(cmd);
             Ok(self.response.clone())
+        }
+
+        async fn execute_controlled(
+            &self,
+            cmd: SandboxCommand,
+            control: &shell_lifecycle::ShellLifecycle,
+        ) -> Result<SandboxOutput, SandboxError> {
+            if control.cancellation_requested() {
+                return Err(control.cancel_before_spawn());
+            }
+            self.execute(cmd).await
         }
     }
 }

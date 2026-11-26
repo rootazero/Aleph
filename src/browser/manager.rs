@@ -76,11 +76,8 @@ fn apply_policy_to(handle: Option<&Weak<ProfileManager>>, policy: SsrfConfig) ->
 
 /// Stop the browsers of the manager the running daemon serves.
 ///
-/// Shaped exactly like [`crate::builtin_tools::bash_exec::kill_all_running_background`],
-/// for the same reason its comment gives at the shutdown call site: an
-/// automatic teardown is best-effort once the runtime itself is being torn
-/// down, so the daemon calls this explicitly. Returns 0 — honestly — when no
-/// manager is published (a CLI process, a test, or before boot wired one up).
+/// The daemon calls this explicitly because automatic teardown is best-effort
+/// once the runtime shuts down. Returns 0 when no manager is published.
 pub async fn shutdown_browsers_global(budget: Duration) -> usize {
     // The `.clone()` drops the `MutexGuard` before the await below: holding a
     // `std::sync::MutexGuard` across a yield point is what this shape avoids,

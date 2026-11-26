@@ -52,7 +52,7 @@ use crate::browser::chromium_resolve::CHROMIUM_INSTALL_ARGS;
 // `process_registry()` and return its id immediately. The model polls with the
 // verb that already exists — `bash{process_action:"wait", process_id}`, itself
 // clamped to `WAIT_MAX_TIMEOUT_SECS` (`bash_exec.rs:553`) — and
-// `kill_all_running_background` reaps the job on daemon exit for free.
+// the daemon shutdown adapter aborts outstanding installer jobs.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -521,6 +521,7 @@ impl RegistrySpawner {
                      poll or kill one first (`bash{{process_action:\"list\"}}`)"
                 ))
             }
+            RegisterOutcome::AdmissionClosed => unreachable!("only shell admission can close"),
         }
     }
 }

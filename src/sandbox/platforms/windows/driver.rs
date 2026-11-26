@@ -294,6 +294,10 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn supports_shell_lifecycle(&self) -> bool {
+        cfg!(target_os = "windows")
+    }
+
     async fn run(
         &self,
         program: &str,
@@ -304,6 +308,7 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
         profile: &OsSandboxProfile,
         timeout: Duration,
         max_output_bytes: usize,
+        lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
     ) -> Result<SandboxOutput, SandboxError> {
         let parsed = parse_profile(&profile.contents)?;
         if parsed.network_mode == NETWORK_LOOPBACK_PORTS {
@@ -395,18 +400,23 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 None
             };
 
-            let child = cmd.spawn().map_err(|e| {
-                SandboxError::ExecutionFailed(format!("failed to spawn process: {e}"))
-            })?;
+            let mut spawn = || {
+                cmd.spawn().map_err(|e| {
+                    SandboxError::ExecutionFailed(format!("failed to spawn process: {e}"))
+                })
+            };
+            let mut child = match lifecycle {
+                Some(control) => control.spawn(spawn),
+                None => spawn(),
+            }?;
 
             if let Some(ref job) = job {
                 // Fail closed: a job object that cannot be attached enforces
                 // NONE of its guarantees (memory ceiling, active-process cap,
                 // kill-on-close). Letting the child run unsandboxed while
                 // reporting success would silently defeat the sandbox, so on
-                // any failure we abort the child and surface the error. The
-                // child is terminated by `kill_on_drop(true)` (set above) as
-                // `child` drops on the early return.
+                // any failure we terminate and reap the child, then surface
+                // the setup failure.
                 let pid = child.id().unwrap_or(0);
                 let handle = if pid != 0 {
                     child.raw_handle().unwrap_or(std::ptr::null_mut())
@@ -421,8 +431,17 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                     unsafe { job.assign_process(handle as _) }
                 };
                 if let Err(e) = assign {
+                    let reaped = super::super::common::kill_and_reap(&mut child).await;
+                    if reaped.is_ok() {
+                        if let Some(control) = lifecycle {
+                            control.reaped(false);
+                        }
+                    }
+                    let detail = reaped
+                        .err()
+                        .map_or_else(String::new, |err| format!("; {err}"));
                     return Err(SandboxError::ExecutionFailed(format!(
-                        "failed to assign process to job object: {e}"
+                        "failed to assign process to job object: {e}{detail}"
                     )));
                 }
             }
@@ -431,7 +450,10 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
             // job-object handle (auto-killing any surviving children) only
             // after the helper has reaped the main child process.
             let _job = job;
-            run_child_with_drain(child, stdin, timeout, max_output_bytes).await
+            if let Some(control) = lifecycle {
+                control.ready();
+            }
+            run_child_with_drain(child, stdin, timeout, max_output_bytes, lifecycle).await
         }
 
         #[cfg(not(target_os = "windows"))]

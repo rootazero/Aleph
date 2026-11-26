@@ -309,6 +309,9 @@ mod tests {
             crate::builtin_tools::process_registry::RegisterOutcome::TooManyRunning { limit } => {
                 panic!("unexpected per-session cap hit (limit {limit})")
             }
+            crate::builtin_tools::process_registry::RegisterOutcome::AdmissionClosed => {
+                unreachable!("only shell admission can close")
+            }
         };
         reg.complete(id, done_output());
         // The model collects it itself — the stamp lives on that read.
