@@ -1841,13 +1841,14 @@ widened a narrowly-scoped change into that question. Tracked in
   - `fork`（F7）— 同一轮的 fork 兄弟发给模型的 system + 消息前缀完全一致、以 assistant 结尾、无悬空
     tool_use；后一轮 fork 是严格延长；isolated 子代理看不到父会话标记。比的是解析后的 JSON，**不是**真实
     缓存命中率。
-- **`human_gate`** — 改 `src/clarification/`、`ask_user` 或通道回复匹配前跑 `{ask,text,unattended,stale}`
-  （2026-11-26 新建，F4）。`ask` 经 `clarification.resolve` 一次答两题；`text` 走 webhook 通道逐条回文字，
-  第一条答完后**不能**多出 provider 请求，且问题必须出现在 `clarification.pending`（per-peer DM 键分裂时
-  这里是空的）；`unattended` 用 `cron.run` 触发，无人可问时工具结果立即是
-  `no human is reachable on this run`，pending 始终为空；`stale` 对已结束的问题再答返回
-  `{resolved:false, stale:true}` 且不到达模型。⚠️ cron RPC 仅在 `[cron] enabled = true` 时注册，
-  `run.sh` 同时把 `check_interval_secs` 压到 1，否则 `cron.run` 要等一分钟的 tick。
+- **`human_gate`** — 改 `src/clarification/`、`ask_user` 或通道回复匹配后，跑 `{ask,cancel,text,unattended,stale}`。
+  `ask` 先拒绝含重复下标的整批提交而不推进，再核对模型实际收到的多选下标、值与字面文本 `"1"`；
+  `cancel` 先答第一题再取消，模型只收到 `cancelled`，没有部分答案；`stale` 重发已结束的请求后返回
+  `status: stale`，且没有新增模型工具结果。`text` 走 webhook 逐题作答，中间不增加 provider 请求；
+  `unattended` 用 `cron.run` 验证无人可问时立即拒绝且 pending 为空。`run.sh` 为此启用 cron 并将检查间隔设为 1 秒。
+  / Gateway QA checks actual provider tool results, not only RPC acknowledgements: atomic typed submission,
+  cancellation without partial answers, and stale rejection. It also covers sequential webhook text and immediate
+  refusal in unattended runs. It does not exercise a browser, TUI, or third-party channel adapter.
 - **`browser_managed`** — 改 `src/browser/` 或 `src/builtin_tools/browser_tools/` 前跑。
   `{open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload,attach}`——**每个动词都有效果断言**。
   **两条 driver 轴，别混淆**：① 场景本身覆盖 `managed`（playwright-cli）与 `existing_session`

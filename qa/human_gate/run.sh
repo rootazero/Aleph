@@ -15,7 +15,7 @@
 set -uo pipefail
 
 STAGE="${1:-ask}"
-case "$STAGE" in ask|text|unattended|stale) ;; *) echo "unknown stage: $STAGE" >&2; exit 64 ;; esac
+case "$STAGE" in ask|cancel|text|unattended|stale) ;; *) echo "unknown stage: $STAGE" >&2; exit 64 ;; esac
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"

@@ -194,6 +194,7 @@ async def run_scenario(ws, slog):
                 "session_key": session_key,
                 "reply": verdict,
                 "expected_request_id": pending["request_id"],
+                "expected_question_id": APPROVAL_QUESTION_ID,
             },
             200,
         )

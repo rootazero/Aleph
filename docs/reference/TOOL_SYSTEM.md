@@ -552,6 +552,10 @@ Rule of thumb: `ctx_search` = "what did that tool print?", `recall_events` =
 | `ask_user` | Ask 1–4 questions, park until answered | `question` + `choices?`, **or** `questions[]` (`id?`/`header?`/`question`/`choices?`/`multi_select?`/`secret?`) |
 | `canvas_show` | Display in canvas | `content`, `type` |
 
+`ask_user` 仍由现有工具注册和作用域发现，不另建交互 Capability。它等待的是问题的答案，不是执行授权。两种入参形状不可混用；题目 ID 唯一，空问题和会被文字回复歧义匹配的选项会在挂起之前被拒绝。现役 Panel/TUI 可暂存、复核并一次提交尚未回答的问题，或明确取消并丢弃已记录答案。Channel 保留逐题文字回复。人答复不会自动取得执行授权，也不会扩展工具作用域。应答与兼容协议见 [FEATURE_LOCATOR §5.3](FEATURE_LOCATOR.md#53-llm-与用户互动-llm-user-interaction)。
+
+`ask_user` uses the existing scoped tool registration, not a separate interaction capability. It waits for an answer, not execution authorization. Do not mix the flat and grouped arguments. Empty prompts, duplicate question IDs, and ambiguous option labels fail before the call parks. The current Panel and TUI can review and submit outstanding answers together or explicitly cancel and discard recorded answers. Channel replies stay sequential. Answering does not grant execution or widen tool scope. See [FEATURE_LOCATOR §5.3](FEATURE_LOCATOR.md#53-llm-与用户互动-llm-user-interaction) for the response and compatibility contract.
+
 ---
 
 ## Tool Definition

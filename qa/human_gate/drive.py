@@ -3,7 +3,7 @@
 
 Usage:  drive.py STAGE WS_URL DB REQUEST_LOG BASE_URL WEBHOOK_PATH SECRET
 
-  STAGE  ask | text | unattended | stale
+  STAGE  ask | cancel | text | unattended | stale
 
 The mock's first run turn calls `ask_user` with two questions (`QA_Q1`,
 `QA_Q2`); its next turn ends the run. What the model got back is read from
@@ -141,37 +141,71 @@ def check_model_got_both_answers(label):
     )
 
 
-async def ask_and_resolve(client):
-    """Shared by `ask` and `stale`. Returns (session_key, request_id)."""
+async def open_question(client):
     r = await client.call("chat.send", {"message": "QA_ASK go", "channel": f"gui:qa-human-{STAGE}"})
     if not check("result" in r, "chat.send accepted", json.dumps(r)[:300]):
-        return None, None
-    session_key = r["result"]["session_key"]
-
+        return None
     question = await await_question(client, "QA_Q1")
     if not check(question is not None, "the ask_user request shows up in clarification.pending"):
-        return session_key, None
-    log(f"pending: {json.dumps(question)[:500]}")
-    check(
-        [q.get("id") for q in question.get("questions") or []] == ["q1", "q2"],
-        "the pending request carries both questions in order",
+        return None
+    if not check(
+        question.get("session_key") == r["result"]["session_key"]
+        and [q.get("id") for q in question.get("questions") or []] == ["q1", "q2"],
+        "the pending request belongs to this run and carries both questions in order",
+    ):
+        return None
+    return {
+        "session_key": question["session_key"],
+        "expected_request_id": question["request_id"],
+        "expected_question_id": "q1",
+    }
+
+
+def tool_outputs():
+    """Decode the actual model-facing tool result, not the resolve acknowledgement."""
+    for text in tool_results():
+        try:
+            result = json.loads(text)
+        except ValueError:
+            continue
+        if isinstance(result, dict):
+            yield result
+
+
+async def ask_and_resolve(client):
+    target = await open_question(client)
+    if target is None:
+        return None
+    first = {"question_id": "q1", "answer": {"kind": "choices", "indices": [1, 0]}}
+    duplicate = {"question_id": "q2", "answer": {"kind": "choices", "indices": [0, 0]}}
+    invalid = await client.call(
+        "clarification.resolve", {**target, "action": {"kind": "submit", "answers": [first, duplicate]}}
     )
-    request_id = question.get("request_id")
+    check("error" in invalid, "duplicate choice indices fail the entire submit", json.dumps(invalid)[:300])
+    still_waiting = await pending(client)
+    check(any(p["request_id"] == target["expected_request_id"] and p["answered"] == 0
+              for p in still_waiting), "a bad second answer leaves the cursor on q1")
+
+    second = {"question_id": "q2", "answer": {"kind": "text", "text": "1"}}
     r = await client.call(
-        "clarification.resolve",
-        {"session_key": session_key, "answers": ["A1-RED", "A2-LARGE"], "expected_request_id": request_id},
+        "clarification.resolve", {**target, "action": {"kind": "submit", "answers": [first, second]}}
     )
-    result = r.get("result") or {}
     check(
-        result.get("resolved") is True and result.get("stale") is False,
-        "clarification.resolve with both answers is accepted",
+        r.get("result") == {"status": "answered", "pending_questions": 0, "resolved": True, "stale": False},
+        "one typed submit completes the request",
         json.dumps(r)[:300],
     )
     runs = await wait_all_runs_finished()
     check(runs is not None and set(runs.values()) == {"completed"}, "the run finished normally", f"runs={runs}")
-    check_model_got_both_answers("ask")
+    expected = [
+        {"question_id": "q1", "answer": "A1-BLUE, A1-RED", "selected_indices": [1, 0]},
+        {"question_id": "q2", "answer": "1"},
+    ]
+    outputs = list(tool_outputs())
+    check(any(out.get("status") == "answered" and out.get("answers") == expected for out in outputs),
+          "the provider sees literal custom text and both indexed choices in order", json.dumps(outputs)[:500])
     check(not await pending(client), "nothing is left pending")
-    return session_key, request_id
+    return target
 
 
 async def stage_ask():
@@ -182,23 +216,52 @@ async def stage_ask():
 
 async def stage_stale():
     client = await connect("qa-human-stale")
-    session_key, request_id = await ask_and_resolve(client)
-    if not request_id:
+    target = await ask_and_resolve(client)
+    if target is None:
+        await client.ws.close()
         return
-    r = await client.call(
-        "clarification.resolve",
-        {"session_key": session_key, "reply": "A-LATE", "expected_request_id": request_id},
-    )
-    result = r.get("result") or {}
-    log(f"late resolve -> {json.dumps(r)[:300]}")
+    before = list(tool_results())
+    r = await client.call("clarification.resolve", {
+        **target,
+        "action": {"kind": "answer", "answer": {
+            "question_id": "q1", "answer": {"kind": "text", "text": "A-LATE"},
+        }},
+    })
     check(
-        result.get("stale") is True and result.get("resolved") is False,
-        "a second reply to the already-answered request is reported stale, not resolved",
+        (r.get("result") or {}).get("status") == "stale",
+        "a second reply to the already-answered request is reported stale",
+        json.dumps(r)[:300],
     )
-    check(
-        not any("A-LATE" in t for t in tool_results()),
-        "the late reply never reaches the model",
-    )
+    check(list(tool_results()) == before, "the late reply adds no model-facing tool result")
+    await client.ws.close()
+
+
+async def stage_cancel():
+    client = await connect("qa-human-cancel")
+    target = await open_question(client)
+    if target is None:
+        await client.ws.close()
+        return
+    advance = await client.call("clarification.resolve", {
+        **target,
+        "action": {"kind": "answer", "answer": {
+            "question_id": "q1", "answer": {"kind": "text", "text": "QA_DISCARDED"},
+        }},
+    })
+    check(advance.get("result") == {"status": "advanced", "pending_questions": 1, "resolved": True, "stale": False},
+          "the partial answer advances to q2", json.dumps(advance)[:300])
+    r = await client.call("clarification.resolve", {
+        **target, "expected_question_id": "q2", "action": {"kind": "cancel"},
+    })
+    check(r.get("result") == {"status": "cancelled", "pending_questions": 0, "resolved": False, "stale": False},
+          "the live questionnaire acknowledges cancellation", json.dumps(r)[:300])
+    runs = await wait_all_runs_finished()
+    check(runs is not None and set(runs.values()) == {"completed"}, "the run finished normally", f"runs={runs}")
+    outputs = list(tool_outputs())
+    check(any(out.get("status") == "cancelled" and "answers" not in out and "answer" not in out
+              for out in outputs) and not any("QA_DISCARDED" in result for result in tool_results()),
+          "the provider receives cancellation without any partial answer", json.dumps(outputs)[:500])
+    check(not await pending(client), "nothing is left pending")
     await client.ws.close()
 
 
@@ -312,7 +375,13 @@ async def stage_unattended():
     await client.ws.close()
 
 
-STAGES = {"ask": stage_ask, "text": stage_text, "unattended": stage_unattended, "stale": stage_stale}
+STAGES = {
+    "ask": stage_ask,
+    "cancel": stage_cancel,
+    "text": stage_text,
+    "unattended": stage_unattended,
+    "stale": stage_stale,
+}
 
 
 async def main():
