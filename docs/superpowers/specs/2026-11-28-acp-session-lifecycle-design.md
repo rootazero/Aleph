@@ -1,6 +1,6 @@
 # ACP 会话生命周期收敛 / ACP session lifecycle convergence
 
-状态 / Status · 待确认 / Proposed for approval
+状态 / Status · 已确认 / Approved
 
 ## 目的 / Intent
 
