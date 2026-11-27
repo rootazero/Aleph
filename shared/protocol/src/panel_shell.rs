@@ -111,6 +111,13 @@ pub enum PanelReply {
         document: String,
         call: CredentialCall,
     },
+    /// A link off the Panel's pages the user followed; the host decides
+    /// again whether it is one and hands it to the system browser or mail
+    /// app. No reply.
+    OpenExternal {
+        document: String,
+        url: String,
+    },
 }
 
 pub fn valid_document(document: &str) -> bool {
@@ -155,6 +162,21 @@ mod tests {
             bad["status"]["extra"] = serde_json::json!(true);
             assert!(serde_json::from_value::<ShellRequest>(bad).is_err());
         }
+    }
+
+    #[test]
+    fn open_external_carries_only_the_document_and_the_url() {
+        let document = "a".repeat(32);
+        let open = serde_json::json!({"kind":"open-external", "document":document, "url":"https://github.com/rootazero/Aleph"});
+        let parsed = serde_json::from_value::<PanelReply>(open.clone()).expect("open-external");
+        assert!(matches!(
+            &parsed,
+            PanelReply::OpenExternal { url, .. } if url == "https://github.com/rootazero/Aleph"
+        ));
+        assert_eq!(serde_json::to_value(&parsed).expect("serializes"), open);
+        let mut bad = open;
+        bad["target"] = serde_json::json!("_self");
+        assert!(serde_json::from_value::<PanelReply>(bad).is_err());
     }
 
     #[test]

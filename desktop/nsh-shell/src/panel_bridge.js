@@ -106,6 +106,22 @@ function installAlephShellBridge(origin, prefix) {
     finish(true);
   });
   window.addEventListener("pagehide", () => { closed = true; finish(true); finishStatus(true); });
+  // The window holds one Panel page and has no back button: a link off the
+  // Panel's origin (or to the server's artifact bytes, which are documents)
+  // goes to the host, which decides again and opens it in the system.
+  // Capture phase, so it runs before the page's own handlers.
+  document.addEventListener("click", event => {
+    if (closed || event.defaultPrevented) return;
+    const anchor = event.target?.closest?.("a[href]");
+    if (!anchor) return;
+    let url;
+    try { url = new URL(anchor.href, location.href); } catch (_) { return; }
+    if (url.origin === location.origin && !url.pathname.startsWith("/artifact/")) return;
+    event.preventDefault();
+    const payload = JSON.stringify({ kind: "open-external", document: documentId, url: url.href });
+    if (payload.length > 16384) return;
+    try { window.nsh.postMessage(prefix + payload); } catch (_) {}
+  }, true);
   Object.defineProperty(window, "__ALEPH_PANEL_KEYRING__", { value: true });
   const mark = () => document.documentElement?.setAttribute("data-shell", "aleph-nsh");
   if (document.documentElement) mark();

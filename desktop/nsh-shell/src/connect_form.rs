@@ -69,7 +69,28 @@ pub(crate) struct Switch {
     pub(crate) service: LocalService,
 }
 
+/// The server `view` shows or is starting; the form and the remote check
+/// count as what Cancel goes back to, and as nothing when there is none.
+fn shown_target(view: &View) -> Option<ConnectionTarget> {
+    match view {
+        View::Starting => Some(ConnectionTarget::Local),
+        View::Panel { target } => Some(target.clone()),
+        View::Connect {
+            back: Some(back), ..
+        } => shown_target(back),
+        View::Checking | View::Connect { back: None, .. } => None,
+    }
+}
+
 impl Switch {
+    /// The server the window shows, or else the one saved as the choice.
+    pub(crate) fn current_target(&self) -> ConnectionTarget {
+        shown_target(&self.view.get_untracked()).unwrap_or_else(|| match &self.home {
+            Some(home) => target_store::load_target(home),
+            None => ConnectionTarget::Local,
+        })
+    }
+
     /// Opens the form over whatever is shown, remembering it for Cancel.
     pub(crate) fn open_form(&self) {
         let current = self.view.get_untracked();
@@ -306,5 +327,27 @@ mod tests {
             panic!("expected the connect form");
         };
         assert!(error.contains("trusted certificate"), "{error}");
+    }
+
+    #[test]
+    fn the_shown_server_is_the_one_behind_the_form() {
+        let target = remote("https://gw.example.com");
+        assert_eq!(shown_target(&View::Starting), Some(ConnectionTarget::Local));
+        let panel = View::Panel {
+            target: target.clone(),
+        };
+        assert_eq!(shown_target(&panel), Some(target.clone()));
+        let over_panel = View::Connect {
+            error: None,
+            back: Some(Box::new(panel)),
+        };
+        assert_eq!(shown_target(&over_panel), Some(target));
+        // At startup, before any server shows, the saved choice decides.
+        assert_eq!(shown_target(&View::Checking), None);
+        let first = View::Connect {
+            error: Some("refused".into()),
+            back: None,
+        };
+        assert_eq!(shown_target(&first), None);
     }
 }

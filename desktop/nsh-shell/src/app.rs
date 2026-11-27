@@ -8,18 +8,21 @@ use crate::deep_link::{deep_link_action, DeepLink};
 use crate::local_service::{LocalService, ServerPhase};
 use crate::shell_host::HostSettings;
 use crate::update::{self, InstallStep, Updater};
-use crate::{autostart, credentials, launch, panel_bridge, target_store};
+use crate::{autostart, credentials, launch, menu, panel_bridge};
 use aleph_client::ConnectionTarget;
 use nsh_base::theme;
 use nsh_core::desktop::{Shortcut, TrayTitleRun};
+#[cfg(target_os = "macos")]
+use nsh_core::element::desktop::set_application_menu;
 use nsh_core::element::desktop::{
-    main_window, quit, register_global_shortcut, restart, set_tray, tray, MenuItem, WindowRef,
+    main_window, quit, register_global_shortcut, restart, set_tray, tray, WindowRef,
 };
 use nsh_core::notifications::Notification;
 use nsh_core::prelude::{
     background, blocking, cleanup, component, dynamic, element_ref, next_notification_press,
-    next_url_scheme_open, px, request_notification_permission, show_notification, signal, spawn,
-    text, view, web_view, AnyElement, Element, IntoElement, ParentElement, Styled, WebNavigation,
+    next_url_scheme_open, open_url, px, request_notification_permission, show_notification, signal,
+    spawn, text, view, web_view, AnyElement, Element, IntoElement, ParentElement, Styled,
+    WebNavigation,
 };
 #[cfg(feature = "embedded-core")]
 use nsh_core::prelude::{when, Interactive};
@@ -97,27 +100,50 @@ pub fn App() -> impl IntoElement {
         .then(Updater::current)
         .flatten()
         .map(|updater| Updates::new(updater, switch.clone()));
-    let mut menu = vec![
-        MenuItem::new("Show Aleph").on_select(show.clone()),
-        MenuItem::new("Connect to Server…").on_select(connect),
-    ];
-    if let Some(updates) = &updates {
-        let updates = updates.clone();
-        menu.push(MenuItem::new("Check for Updates…").on_select(move || updates.check(true)));
-    }
-    menu.push(MenuItem::new("Enable Notifications").on_select(|| {
-        let permission = request_notification_permission();
-        spawn(async move {
-            eprintln!("NSH notification permission: {:?}", permission.await);
-        });
-    }));
-    menu.push(MenuItem::new("Quit Aleph").on_select(quit));
+    let open_in_browser = {
+        let switch = switch.clone();
+        move || {
+            let opened = open_url(switch.current_target().panel_url());
+            spawn(async move {
+                if !opened.await {
+                    eprintln!("could not open the Panel in the browser");
+                }
+            });
+        }
+    };
+    let quit_and_stop = {
+        let switch = switch.clone();
+        let qa = launch.qa.is_some();
+        move || quit_and_stop(&switch, qa)
+    };
+    let commands = menu::Commands {
+        show: Rc::new(show.clone()),
+        open_in_browser: Rc::new(open_in_browser),
+        connect: Rc::new(connect),
+        check_for_updates: updates
+            .clone()
+            .map(|updates| -> menu::Command { Rc::new(move || updates.check(true)) }),
+        reload: Rc::new(panel_bridge::reload_current_panel),
+        enable_notifications: Rc::new(|| {
+            let permission = request_notification_permission();
+            spawn(async move {
+                eprintln!("NSH notification permission: {:?}", permission.await);
+            });
+        }),
+        quit_and_stop: Rc::new(quit_and_stop),
+    };
     set_tray(
         tray()
             .title([TrayTitleRun::new("Aleph")])
             .tooltip("Aleph")
-            .menu(menu),
+            .menu(commands.tray()),
     );
+    #[cfg(target_os = "macos")]
+    set_application_menu(commands.menu_bar());
+    #[cfg(all(target_os = "macos", feature = "embedded-core"))]
+    if launch.qa.is_none() {
+        crate::perm_monitor::start(switch.service.clone(), switch.home.clone());
+    }
     listen_for_intents(show.clone(), updates.clone());
     if let Some(updates) = updates {
         updates.schedule();
@@ -179,6 +205,22 @@ pub fn App() -> impl IntoElement {
             },
         }))
         .into_element()
+}
+
+/// Quits; when the window shows this computer's server, stops it first. A
+/// QA run's server is not the bundled one, so a QA run only quits.
+fn quit_and_stop(switch: &Switch, qa: bool) {
+    #[cfg(feature = "embedded-core")]
+    if !qa && switch.current_target() == ConnectionTarget::Local {
+        let service = switch.service.clone();
+        spawn(async move {
+            let _ = blocking(move || service.stop()).await;
+            quit();
+        });
+        return;
+    }
+    let _ = (switch, qa);
+    quit();
 }
 
 /// The links and notification presses the app receives. nsh holds one
@@ -331,10 +373,7 @@ impl Updates {
                 .await
                 .map_err(|_| "the update download stopped".to_owned())??,
         );
-        let target = match &self.switch.home {
-            Some(home) => target_store::load_target(home),
-            None => ConnectionTarget::Local,
-        };
+        let target = self.switch.current_target();
         for step in update::install_plan(&target) {
             match step {
                 InstallStep::StopLocalServer => {
@@ -489,6 +528,7 @@ fn panel(launch: &launch::Launch, window: WindowRef) -> AnyElement {
         window,
         credentials,
         autostart::Reader::new(nonce.as_deref()),
+        launch.settings.target.clone(),
     );
     let retiring = bridge.clone();
     cleanup(move || retiring.retire());

@@ -52,10 +52,15 @@ impl LocalService {
         )
     }
 
-    /// Stops the local server and waits for its port to close; blocks, so
-    /// call it off the engine thread. The next [`Self::start`] brings it up.
-    pub(crate) fn stop(&self) {
+    /// Stops a local server this shell admitted. This must not turn an
+    /// incompatible listener or a rejected startup into permission to stop it.
+    /// Call off the engine thread because the stop waits for the port to close.
+    pub(crate) fn stop(&self) -> bool {
+        if self.phase() != ServerPhase::Ready {
+            return false;
+        }
         (self.stopper)();
+        true
     }
 
     /// Starts an attempt in the background, unless one is in flight.
@@ -215,6 +220,18 @@ mod tests {
         release.send(()).unwrap();
         assert_eq!(settled(&service), ServerPhase::Ready);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn an_unadmitted_listener_is_never_stopped() {
+        let service = LocalService::new(
+            Box::new(|| Err("incompatible local Panel".into())),
+            Box::new(|| panic!("an unadmitted listener must not be stopped")),
+        );
+        service.stop();
+        service.start();
+        assert!(matches!(settled(&service), ServerPhase::Failed(_)));
+        service.stop();
     }
 
     #[test]

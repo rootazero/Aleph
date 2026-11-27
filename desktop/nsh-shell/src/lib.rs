@@ -21,15 +21,21 @@ mod cli;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod connect_form;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+mod external_link;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod ipc_status;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-mod panel_bridge;
+mod menu;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-mod update;
+mod panel_bridge;
 #[cfg(feature = "tsx-panel")]
 mod panel_host;
 #[cfg(all(feature = "tsx-panel", target_os = "macos"))]
 mod panel_surface;
+#[cfg(all(target_os = "macos", feature = "embedded-core"))]
+mod perm_monitor;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+mod update;
 
 #[cfg(all(feature = "tsx-panel", not(target_os = "macos")))]
 compile_error!(

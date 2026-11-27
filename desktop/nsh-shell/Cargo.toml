@@ -31,6 +31,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["std"] }
 uuid = { workspace = true }
+url = { workspace = true }
 # The TLS stack aleph-client already builds with; the probe validates the
 # server certificate against the system trust store.
 native-tls = "0.2"

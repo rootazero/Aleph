@@ -1,10 +1,14 @@
 use crate::credentials::CredentialService;
+use crate::external_link::external_target;
+use aleph_client::ConnectionTarget;
 use aleph_protocol::panel_shell::{
     valid_document, valid_notification, CredentialCall, CredentialReply, PanelReply, ShellRequest,
 };
 use nsh_core::element::desktop::WindowRef;
 use nsh_core::notifications::{Notification, NotificationPermission};
-use nsh_core::prelude::{notification_permission, set_timeout, show_notification, spawn, ElementRef};
+use nsh_core::prelude::{
+    notification_permission, open_url, set_timeout, show_notification, spawn, ElementRef,
+};
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
@@ -37,6 +41,14 @@ pub(crate) fn open_chat_in_current_panel() {
     }
 }
 
+/// Reloads the Panel the window shows; with none shown (the connect form,
+/// the local server's progress) there is nothing to reload.
+pub(crate) fn reload_current_panel() {
+    if let Some(inner) = CURRENT.with(|current| current.borrow().upgrade()) {
+        inner.view.reload();
+    }
+}
+
 struct Inner {
     view: ElementRef,
     prefix: String,
@@ -46,6 +58,8 @@ struct Inner {
     notifications: mpsc::Sender<(String, String)>,
     credentials: CredentialService,
     autostart: crate::autostart::Reader,
+    /// The server this Panel comes from: its pages stay in the window.
+    gateway: ConnectionTarget,
 }
 
 #[derive(Default)]
@@ -84,6 +98,7 @@ impl Bridge {
         window: WindowRef,
         credentials: CredentialService,
         autostart: crate::autostart::Reader,
+        gateway: ConnectionTarget,
     ) -> Self {
         let (notifications, mut pending) = mpsc::channel::<(String, String)>(1);
         let bridge = Self(Rc::new(Inner {
@@ -95,6 +110,7 @@ impl Bridge {
             notifications,
             credentials,
             autostart,
+            gateway,
         }));
         let worker = bridge.clone();
         spawn(async move { worker.navigate().await });
@@ -154,6 +170,12 @@ impl Bridge {
         };
         let mut state = self.0.state.borrow_mut();
         if state.loading {
+            return true;
+        }
+        if let PanelReply::OpenExternal { document, url } = &message {
+            if state.document.as_deref() == Some(document.as_str()) {
+                self.open_external(url);
+            }
             return true;
         }
         let autostart = match &message {
@@ -233,7 +255,8 @@ impl Bridge {
             }
             PanelReply::CredentialRequest { .. }
             | PanelReply::AutostartRequest { .. }
-            | PanelReply::AutostartSet { .. } => unreachable!(),
+            | PanelReply::AutostartSet { .. }
+            | PanelReply::OpenExternal { .. } => unreachable!(),
         };
         if let Some(exchange) = &mut state.exchange {
             if exchange.request == request
@@ -249,6 +272,22 @@ impl Bridge {
             }
         }
         true
+    }
+
+    /// Opens a link the Panel followed off its pages in the system, when
+    /// [`external_target`] agrees it is one.
+    fn open_external(&self, raw: &str) {
+        let Some(url) = external_target(raw, &self.0.gateway) else {
+            // The supplied URL may contain credentials; do not log it.
+            eprintln!("NSH refused to open a link outside the Panel");
+            return;
+        };
+        let opened = open_url(url.as_str());
+        spawn(async move {
+            if !opened.await {
+                eprintln!("NSH could not open a {}: link", url.scheme());
+            }
+        });
     }
 
     fn invoke_credential(
