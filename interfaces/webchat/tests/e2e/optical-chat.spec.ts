@@ -14,6 +14,7 @@ type Fixture = {
     releaseDetail: () => void;
     translationDelta: (text: string) => void;
     releaseTranslation: () => void;
+    disconnect: () => void;
     event: (topic: string, data: unknown) => void;
 };
 
@@ -22,8 +23,10 @@ async function installFixture(page: Page, { deferDetail = false, deferTranslatio
     let finishDetail: (() => void) | undefined;
     let sendDelta: ((text: string) => void) | undefined;
     let finishTranslation: (() => void) | undefined;
+    let connection: WebSocketRoute | undefined;
     let emit: ((topic: string, data: unknown) => void) | undefined;
     await page.routeWebSocket('**/ws', (socket: WebSocketRoute) => {
+        connection = socket;
         const send = (value: unknown) => socket.send(JSON.stringify(value));
         emit = (topic, data) => send({ jsonrpc: '2.0', method: 'event', params: { topic, data } });
         socket.onMessage((frame) => {
@@ -100,6 +103,10 @@ async function installFixture(page: Page, { deferDetail = false, deferTranslatio
             sendDelta(text);
         },
         releaseTranslation: () => finishTranslation?.(),
+        disconnect: () => {
+            if (!connection) throw new Error('WebSocket fixture is not connected');
+            connection.close({ code: 1012, reason: 'Fixture restart' });
+        },
         event: (topic, data) => {
             if (!emit) throw new Error('WebSocket fixture is not connected');
             emit(topic, data);
@@ -212,6 +219,35 @@ test('thought reader discloses the destination before each engine sends an addre
         { block, engine: 'machine', target: 'en', expected_destination: machine },
         { block, engine: 'ai', target: 'en', expected_destination: ai },
     ]);
+});
+
+test('reconnect restores measured occupancy and never accepts the old translation request', async ({ page }) => {
+    const fixture = await installFixture(page, { deferTranslation: true });
+    await page.goto('/');
+    await selectSession(page, 'Measured session');
+    const vial = page.getByRole('button', { name: /25%.*128000.*512000/ });
+    const read = page.getByRole('button', { name: 'Read thoughts' });
+    const translate = page.getByRole('button', { name: 'Translate this block' });
+    const starts = () => fixture.requests.filter(({ method }) => method === 'thought.translation.start');
+    await expect(vial).toBeVisible();
+    await read.click();
+    await translate.click();
+    await expect.poll(() => starts().length).toBe(1);
+    const oldId = starts()[0].params?.request_id;
+    fixture.disconnect();
+    await expect.poll(() => fixture.requests.filter(({ method }) => method === 'connect').length).toBe(2);
+    await expect(vial).toBeVisible();
+    if (!(await translate.isVisible())) await read.click();
+    await translate.click();
+    await expect.poll(() => starts().length).toBe(2);
+    expect(starts()[1].params?.request_id).not.toBe(oldId);
+    fixture.event('thought.translation.update', {
+        request_id: oldId,
+        update: { type: 'completed', text: 'Old connection translation' },
+    });
+    fixture.releaseTranslation();
+    await expect(page.getByText('machine fixture translation')).toBeVisible();
+    await expect(page.getByText('Old connection translation')).toHaveCount(0);
 });
 
 test.describe('Chinese phone reader', () => {
