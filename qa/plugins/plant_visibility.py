@@ -4,18 +4,13 @@ import json
 import sys
 from pathlib import Path
 
-project = Path(sys.argv[1])
-mock = Path(sys.argv[2]).resolve()
-global_root = Path(sys.argv[3])
 
-for root, suffix in [(project / ".aleph" / "plugins", "project"), (global_root, "global")]:
+def plant(root, suffix, mock):
     plugin = root / "qa-vis"
     skill_name = f"qa-vis-{suffix}-skill"
     agent_name = f"qa-vis-{suffix}-agent"
-    (plugin / ".claude-plugin").mkdir(parents=True, exist_ok=True)
-    (plugin / "skills" / skill_name).mkdir(parents=True, exist_ok=True)
-    (plugin / "agents").mkdir(parents=True, exist_ok=True)
-    (plugin / "commands").mkdir(parents=True, exist_ok=True)
+    for directory in (".claude-plugin", f"skills/{skill_name}", "agents", "commands"):
+        (plugin / directory).mkdir(parents=True, exist_ok=True)
     (plugin / "commands" / "echo.md").write_text(
         f"---\ndescription: The {suffix} fixture command\n---\nQA_COMMAND_{suffix}: $1\n"
     )
@@ -35,3 +30,11 @@ for root, suffix in [(project / ".aleph" / "plugins", "project"), (global_root, 
         f"---\nname: {agent_name}\ndescription: The {suffix} fixture agent\n---\nQA agent.\n"
     )
     print(f"planted {plugin}")
+    return plugin
+
+
+if __name__ == "__main__":
+    project = Path(sys.argv[1])
+    mock = Path(sys.argv[2]).resolve()
+    plant(project / ".aleph" / "plugins", "project", mock)
+    plant(Path(sys.argv[3]), "global", mock)

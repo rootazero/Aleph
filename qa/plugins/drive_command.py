@@ -29,7 +29,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "browser_managed"))
 from qa_rpc import Ledger, ws_connect  # noqa: E402
 
-WS, REQ_LOG, PI_PROMPT = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
 L = Ledger()
 PLUGIN = "qa-cmd-plugin"
 SLASH = f"{PLUGIN}:greet"
@@ -150,7 +149,11 @@ async def check_pi(conn):
     PI_PROMPT.rename(PI_PROMPT.with_name("remaining.md"))
     reloaded = await conn.call("plugin.reload", {"selector": "g:qa-pi"})
     L.check("renamed Pi prompt package reloaded", "result" in reloaded, str(reloaded.get("error")))
-    listing = json.dumps(await conn.call("commands.list", {}))
+    for _ in range(40):
+        listing = json.dumps(await conn.call("commands.list", {}))
+        if command not in listing and "qa-pi:remaining" in listing:
+            break
+        await asyncio.sleep(0.1)
     L.check("removed Pi prompt is withdrawn and remaining prompt is exposed",
             command not in listing and "qa-pi:remaining" in listing)
 
@@ -224,4 +227,6 @@ async def main():
     return L.verdict()
 
 
-sys.exit(asyncio.run(main()))
+if __name__ == "__main__":
+    WS, REQ_LOG, PI_PROMPT = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
+    sys.exit(asyncio.run(main()))

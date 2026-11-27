@@ -103,6 +103,7 @@ export RUST_MIN_STACK="${RUST_MIN_STACK:-268435456}"
 
 SERVER_PID=""
 MOCK_PID=""
+MCP_MOCK_PID=""
 say() { printf '\n=== %s ===\n' "$*"; }
 stop_server() {
   [ -n "$SERVER_PID" ] || return 0
@@ -118,6 +119,7 @@ stop_server() {
 cleanup() {
   stop_server
   [ -n "$MOCK_PID" ] && { kill "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null; }
+  [ -n "$MCP_MOCK_PID" ] && { kill "$MCP_MOCK_PID" 2>/dev/null; wait "$MCP_MOCK_PID" 2>/dev/null; }
   if [ "$KEEP" = "1" ]; then echo "artifacts kept in $QA_ROOT"; else rm -rf "$QA_ROOT"; fi
 }
 trap cleanup EXIT
@@ -777,6 +779,61 @@ PY
   python3 "$HERE/drive_subagent.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$QA_ROOT/requests-control.jsonl" control || RC=$?
   ;;
 
+dsh|composition)
+  export ALEPH_ACTIVATION_GATE=fatal
+  say "start isolated HTTP MCP mock"
+  python3 "$HERE/mcp_mock_server.py" --http 0 --label dsh-http \
+    --traffic "$QA_ROOT/dsh-http.jsonl" --ready "$QA_ROOT/dsh-http.port" \
+    >"$QA_ROOT/dsh-http.log" 2>&1 &
+  MCP_MOCK_PID=$!
+  for _ in $(seq 1 30); do
+    [ -s "$QA_ROOT/dsh-http.port" ] && break
+    kill -0 "$MCP_MOCK_PID" 2>/dev/null || exit 1
+    sleep 0.2
+  done
+  [ -s "$QA_ROOT/dsh-http.port" ] || exit 1
+  SOURCE="$QA_ROOT/source/qa-dsh"
+  python3 "$HERE/plant_dsh.py" "$SOURCE" "$QA_ROOT" "$(<"$QA_ROOT/dsh-http.port")" \
+    "$HERE/mcp_mock_server.py" || exit 1
+  mkdir -p "$ALEPH_HOME/data"
+  printf '[entries.qa-dsh]\nenabled = false\n\n[entries.qa-dsh-http]\nenabled = false\n' >"$ALEPH_HOME/data/plugins.toml"
+  if [ "$SCENARIO" = composition ]; then
+    python3 "$HERE/drive_composition.py" plant "$QA_ROOT" "$HERE/mcp_mock_server.py" || exit 1
+  fi
+  start_mock /etc/hostname scripted "$QA_ROOT/dsh-tool-specs.json" "$QA_ROOT/dsh-model.jsonl" || exit 1
+  start_server || exit 1
+  assert_real_mode
+  URL="ws://127.0.0.1:$GATEWAY_PORT/ws"
+  python3 "$HERE/drive_dsh.py" "$URL" "$QA_ROOT" install || exit 1
+  if [ "$SCENARIO" = composition ]; then
+    python3 "$HERE/drive_composition.py" install "$URL" "$QA_ROOT" || exit 1
+  fi
+  stop_server
+  start_server || exit 1
+  assert_real_mode
+  python3 "$HERE/drive_dsh.py" "$URL" "$QA_ROOT" disabled || RC=$?
+  if [ "$SCENARIO" = composition ]; then
+    say "run all three formats through the restarted Gateway"
+    start_mock /etc/hostname scripted "$QA_ROOT/composition-prime.json" "$QA_ROOT/composition-prime.jsonl" || exit 1
+    python3 "$HERE/drive_composition.py" prime "$URL" "$QA_ROOT" || RC=$?
+    FP="$("$BIN" hooks list | awk '$3 == "qa-vis" && $2 == "pending" {print $1; exit}')"
+    if [ -z "$FP" ]; then
+      echo "  [FAIL] the live Claude hook did not file a pending approval"
+      RC=1
+    else
+      APPROVAL="$(printf 'y\ny\n' | "$BIN" hooks test "$FP" 2>&1)"
+      printf '%s\n' "$APPROVAL"
+      if ! printf '%s\n' "$APPROVAL" | grep -qF "Approved $FP"; then
+        RC=1
+      fi
+    fi
+    start_mock /etc/hostname scripted "$QA_ROOT/composition-tools.json" "$QA_ROOT/composition-effects.jsonl" || exit 1
+    python3 "$HERE/drive_composition.py" effects "$URL" "$QA_ROOT" || RC=$?
+    start_mock /etc/hostname single-shot "" "$QA_ROOT/composition-model.jsonl" || exit 1
+    python3 "$HERE/drive_composition.py" scope "$URL" "$QA_ROOT" || RC=$?
+  fi
+  ;;
+
 cc-cache)
   # The claim: a plugin Claude Code installed under ~/.claude/plugins is
   # discovered, listed with origin `claude_cache`, DISABLED until the operator
@@ -887,7 +944,7 @@ PY
   fi
   ;;
 *)
-  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse | marketplaces | scope | panel | visibility | command | exit2 | subagent | cc-cache)" >&2; exit 2;;
+  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse | marketplaces | scope | panel | visibility | command | exit2 | subagent | dsh | composition | cc-cache)" >&2; exit 2;;
 esac
 
 say "server warnings about plugins"
