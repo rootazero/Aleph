@@ -40,6 +40,35 @@ pub struct AdapterOutput {
     pub diagnostics: Vec<ImportDiagnostic>,
 }
 
+impl AdapterOutput {
+    pub(crate) fn import_diagnostics(
+        &self,
+    ) -> Vec<aleph_protocol::plugins::PluginImportDiagnostic> {
+        self.diagnostics
+            .iter()
+            .map(
+                |diagnostic| aleph_protocol::plugins::PluginImportDiagnostic {
+                    path: diagnostic
+                        .path
+                        .is_relative()
+                        .then(|| diagnostic.path.display().to_string()),
+                    message: diagnostic.message.clone(),
+                },
+            )
+            .collect()
+    }
+}
+
+impl ImportDiagnostic {
+    pub(super) fn make_package_relative(diagnostics: &mut [Self], package_root: &Path) {
+        for diagnostic in diagnostics {
+            if let Ok(path) = diagnostic.path.strip_prefix(package_root) {
+                diagnostic.path = path.to_path_buf();
+            }
+        }
+    }
+}
+
 /// Trait for parsing plugin directories into capability declarations.
 ///
 /// Each adapter understands one manifest format (e.g., Claude Code, Codex, Cursor).
@@ -112,6 +141,7 @@ impl AdapterRegistry {
         registry.register(Box::new(super::adapters::aleph_toml::AlephTomlAdapter));
         registry.register(Box::new(super::adapters::codex::CodexAdapter));
         registry.register(Box::new(super::adapters::cursor::CursorAdapter));
+        registry.register(Box::new(super::adapters::DshAdapter));
         registry.register(Box::new(super::adapters::pi::PiAdapter));
         registry.register(Box::new(
             super::adapters::auto_discover::AutoDiscoverAdapter,

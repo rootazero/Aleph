@@ -35,6 +35,7 @@ pub fn plugin_row(info: PluginInfo) -> PluginRow {
     PluginRow {
         selector: info.selector,
         scope_kind: info.scope_kind,
+        import_diagnostics: info.import_diagnostics,
         name: info.name,
         version: info.version.unwrap_or_default(),
         description: info.description.unwrap_or_default(),
@@ -190,6 +191,7 @@ mod tests {
     #[test]
     fn the_row_carries_the_origin_label() {
         let info = PluginInfo {
+            import_diagnostics: Vec::new(),
             selector: Some("g:cc".into()),
             scope_kind: Some("global".into()),
             name: "cc".into(),

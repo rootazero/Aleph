@@ -16,6 +16,8 @@ pub struct PluginInfo {
     pub selector: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub import_diagnostics: Vec<aleph_protocol::plugins::PluginImportDiagnostic>,
     pub name: String,
     pub version: Option<String>,
     pub description: Option<String>,
@@ -57,6 +59,7 @@ impl From<&PluginRecord> for PluginInfo {
             name: record.id.clone(),
             selector: Some(record.instance_key().selector()),
             scope_kind: Some(record.scope_key.kind_label().to_owned()),
+            import_diagnostics: record.import_diagnostics.clone(),
             version: record.version.clone(),
             description: record.description.clone(),
             enabled: record.status.is_active(),
@@ -459,6 +462,8 @@ pub struct PluginRecord {
     /// An importer selected the exact Markdown files to expose as skills.
     #[serde(default)]
     pub(crate) selected_skill_files: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) import_diagnostics: Vec<aleph_protocol::plugins::PluginImportDiagnostic>,
     /// Number of skills declared by this plugin
     #[serde(default)]
     pub skill_count: usize,
@@ -500,6 +505,7 @@ impl PluginRecord {
             hook_count: 0,
             service_ids: Vec::new(),
             selected_skill_files: false,
+            import_diagnostics: Vec::new(),
             skill_count: 0,
             command_count: 0,
             agent_count: 0,
@@ -559,12 +565,17 @@ impl PluginRecord {
             status: PluginStatus::Loaded,
             error: None,
             panel: None,
+            import_diagnostics: output.import_diagnostics(),
             root_dir,
             scope_key: crate::extension::visibility::ScopeKey::Global,
             tool_names,
             hook_count,
             service_ids,
-            selected_skill_files: output.source.format == crate::extension::SourceFormat::Pi,
+            selected_skill_files: matches!(
+                output.source.format,
+                crate::extension::SourceFormat::Pi
+                    | crate::extension::SourceFormat::DeepSeekHarness
+            ),
             skill_count,
             command_count,
             agent_count,

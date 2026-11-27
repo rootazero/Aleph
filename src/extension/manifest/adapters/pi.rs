@@ -1,7 +1,7 @@
 //! Import the static resources of a Pi package.
 
 use std::collections::BTreeSet;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use glob::{MatchOptions, Pattern};
@@ -11,6 +11,8 @@ use crate::extension::capability::{CapabilityDeclaration, CapabilitySource, Sour
 use crate::extension::manifest::adapter::{AdapterOutput, ImportDiagnostic, ManifestAdapter};
 use crate::extension::manifest::{inputs, parsers, sanitize_plugin_id, validate_plugin_id};
 use crate::extension::types::{PluginOrigin, SkillType};
+
+use super::foreign::{checked_path, relative_path};
 
 pub struct PiAdapter;
 
@@ -181,6 +183,7 @@ fn parse_pi(dir: &Path, manifest: &Path, package: &Value) -> Result<AdapterOutpu
             manifest.display()
         );
     }
+    ImportDiagnostic::make_package_relative(&mut diagnostics, &root);
     Ok(AdapterOutput {
         plugin_id: id.clone(),
         name: Some(raw_name.to_owned()),
@@ -209,40 +212,6 @@ fn diagnostic(diagnostics: &mut Vec<ImportDiagnostic>, path: &Path, message: Str
         path: path.to_path_buf(),
         message,
     });
-}
-
-fn checked_path(root: &Path, path: &Path) -> Result<Option<PathBuf>> {
-    match inputs::canonicalize(path) {
-        Ok(resolved) if resolved.starts_with(root) => Ok(Some(resolved)),
-        Ok(_) => bail!("Pi resource escapes package: {}", path.display()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_symlink()) {
-                bail!("Pi resource symlink cannot be resolved: {}", path.display());
-            }
-            if let Some(parent) = path.parent().filter(|parent| parent.starts_with(root)) {
-                checked_path(root, parent)?;
-            }
-            Ok(None)
-        }
-        Err(error) => Err(error).with_context(|| format!("cannot resolve {}", path.display())),
-    }
-}
-
-fn relative_path(value: &str) -> Result<PathBuf> {
-    let path = Path::new(value);
-    if value.is_empty()
-        || value.contains('\\')
-        || value.contains(':')
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
-    {
-        bail!("Pi resource path must stay within the package: {value}");
-    }
-    Ok(path
-        .components()
-        .filter(|part| matches!(part, Component::Normal(_)))
-        .collect())
 }
 
 fn collect_files(

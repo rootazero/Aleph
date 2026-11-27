@@ -67,6 +67,15 @@ pub fn is_known_plugin_runtime(runtime: &str) -> bool {
     PLUGIN_RUNTIMES.contains(&runtime)
 }
 
+/// An unsupported declaration in a package manifest.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginImportDiagnostic {
+    /// Path relative to the package, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub message: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PluginRow {
     /// Exact instance identity passed separately from the logical name.
@@ -75,6 +84,9 @@ pub struct PluginRow {
     /// Scope kind (`global` or `project`), when provided by the Gateway.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope_kind: Option<String>,
+    /// Static package declarations that the importer could not publish.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub import_diagnostics: Vec<PluginImportDiagnostic>,
     /// Registry id. Also the key `uninstall` / `enable` / `disable` take, so a
     /// list that shows something else shows an id the caller cannot act on.
     pub name: String,

@@ -397,6 +397,8 @@ pub enum SourceFormat {
     Cursor,
     /// Pi package resources and prompt templates
     Pi,
+    /// Literal resources declared by a DeepSeek Harness bundle
+    DeepSeekHarness,
     /// Auto-discovered from well-known directory structure
     AutoDiscovered,
     /// Dynamic registration via MCP/WASM runtime

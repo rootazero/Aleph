@@ -135,6 +135,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
 
     let instance = PluginInstanceKey::new(scope.clone(), output.plugin_id.clone());
     let selector = instance.selector();
+    let import_diagnostics = output.import_diagnostics();
     let installed_path = dest_path.clone();
     let commit_scope = scope.clone();
     let result = manager
@@ -177,6 +178,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
     let info = PluginRow {
         selector: Some(selector),
         scope_kind: Some(scope.kind_label().to_owned()),
+        import_diagnostics,
         name: output.name.unwrap_or_else(|| output.plugin_id.clone()),
         version: output.version.unwrap_or_default(),
         description: output.description.unwrap_or_default(),

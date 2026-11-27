@@ -339,6 +339,7 @@ pub async fn call(
     // INVALID_PARAMS.
     let params = PluginCallToolParams {
         plugin_id: plugin.to_string(),
+        selector: None,
         handler: tool.to_string(),
         args: tool_params,
     };
@@ -469,6 +470,7 @@ mod tests {
     fn call_params_map_the_cli_words_onto_the_wire_words() {
         let params = PluginCallToolParams {
             plugin_id: "diagnostics".into(),
+            selector: None,
             handler: "system_health".into(),
             args: serde_json::json!({}),
         };
