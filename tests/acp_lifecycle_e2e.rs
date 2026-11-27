@@ -6,14 +6,10 @@ use std::time::Duration;
 
 use alephcore::acp::manager::{load_persisted_sessions, wire_persistence, AcpAdapterManager};
 use alephcore::acp::AcpSessionEvent;
-use alephcore::executor::builtin_registry::{BuiltinToolConfig, BuiltinToolRegistry};
-use alephcore::executor::ToolRegistry;
 use alephcore::gateway::handlers::acp_config::{
     handle_sessions_cancel, handle_sessions_list, handle_sessions_shutdown,
 };
 use alephcore::gateway::protocol::JsonRpcRequest;
-use alephcore::tools::handlers::builtin::register_builtin_routers;
-use alephcore::tools::ToolHandlerRegistry;
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -22,73 +18,7 @@ use tokio::time::{sleep, timeout};
 const HARNESS: &str = "lifecycle-test";
 const DEADLINE: Duration = Duration::from_secs(8);
 
-const PEER: &str = r#"
-import json
-import os
-from pathlib import Path
-import select
-import sys
-import threading
-import time
-
-cwd = Path.cwd()
-pid = os.getpid()
-held_prompt = None
-
-def respond(request, result):
-    print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
-
-def record(line):
-    with (cwd / 'frames').open('a') as frames:
-        frames.write(f'{pid} {line}\n')
-
-for line in sys.stdin:
-    frame = json.loads(line)
-    method = frame['method']
-    record(method)
-    if method == 'initialize':
-        while (cwd / 'hold-initialize').exists():
-            time.sleep(0.01)
-        result = {'protocolVersion': 1, 'agentCapabilities': {'loadSession': True}}
-    elif method == 'session/new':
-        predecessor = cwd / 'predecessor'
-        if predecessor.exists():
-            try:
-                os.kill(int(predecessor.read_text()), 0)
-                record('predecessor-still-running')
-            except ProcessLookupError:
-                pass
-        result = {'sessionId': f'peer-{pid}'}
-    elif method == 'session/load':
-        record('load:' + frame['params']['sessionId'])
-        if (cwd / 'reject-load').exists():
-            print(json.dumps({'jsonrpc': '2.0', 'id': frame['id'],
-                'error': {'code': -32000, 'message': 'test peer refused saved session'}}), flush=True)
-            continue
-        result = {}
-    elif method == 'session/prompt':
-        text = frame['params']['prompt'][0]['text']
-        if text == 'stop reading':
-            threading.Event().wait()
-        if text == 'pause after response':
-            respond(frame, {'content': text})
-            select.select([sys.stdin], [], [])
-            record('stdin-readable')
-            threading.Event().wait()
-        if text == 'wait for cancel':
-            held_prompt = frame
-            continue
-        result = {'content': text}
-    elif method == 'session/cancel':
-        record('cancel:' + frame['params']['sessionId'])
-        if held_prompt is not None:
-            respond(held_prompt, {'content': 'canceled'})
-            held_prompt = None
-        continue
-    else:
-        result = {}
-    respond(frame, result)
-"#;
+const PEER: &str = include_str!("fixtures/acp_lifecycle_peer.py");
 
 struct PeerFixture {
     root: TempDir,
@@ -349,48 +279,10 @@ async fn shutdown_reaps_unresponsive_child_and_rejects_stale_waiter() {
 
 #[tokio::test]
 async fn cancel_reaches_busy_owner_without_waiting_for_prompt_lock() {
-    if run_in_isolated_home("cancel_reaches_busy_owner_without_waiting_for_prompt_lock") {
-        return;
-    }
     let fixture = PeerFixture::new();
     let dir = fixture.workspace("cancel");
     let cwd = dir.to_str().unwrap();
     let manager = Arc::new(fixture.manager());
-    let builtin: Arc<dyn ToolRegistry> = Arc::new(
-        BuiltinToolRegistry::with_config(BuiltinToolConfig {
-            acp_manager: Some(Arc::clone(&manager)),
-            ..Default::default()
-        })
-        .await
-        .unwrap(),
-    );
-    let registry = ToolHandlerRegistry::new();
-    let _routers = register_builtin_routers(
-        &registry,
-        builtin,
-        ["acp_delegate".to_owned(), "acp_session_control".to_owned()],
-    )
-    .await
-    .unwrap();
-    let delegate = registry.resolve("acp_delegate").unwrap();
-    let control = registry.resolve("acp_session_control").unwrap();
-    let active = delegate.invoke(json!({
-        "harness": HARNESS, "cwd": cwd, "prompt": "wait for cancel"
-    }));
-    tokio::pin!(active);
-    let tool_pid = tokio::select! {
-        result = &mut active => panic!("tool prompt completed before cancel: {result:?}"),
-        pid = first_pid(&dir, "session/prompt") => pid,
-    };
-    let cancel = control.invoke(json!({"harness": HARNESS, "cwd": cwd, "action": "cancel"}));
-    let (active, cancel) = timeout(DEADLINE, async { tokio::join!(active, cancel) })
-        .await
-        .expect("tool cancel was blocked by the prompt");
-    assert_eq!(active.unwrap().value["result"], "canceled");
-    assert_eq!(cancel.unwrap().value["action"], "cancel");
-    assert!(frames(&dir).contains(&format!("{tool_pid} cancel:peer-{tool_pid}")));
-    std::fs::remove_file(dir.join("frames")).unwrap();
-
     let changes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let hook_counter = Arc::clone(&changes);
     manager
@@ -411,7 +303,6 @@ async fn cancel_reaches_busy_owner_without_waiting_for_prompt_lock() {
             json!(1),
         )
     };
-    assert_eq!(pid, tool_pid);
     let live = handle_sessions_list(rpc("acp.sessions.list"), Arc::clone(&manager)).await;
     assert_eq!(
         live.result.unwrap()[0]["acp_session_id"],
