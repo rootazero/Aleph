@@ -33,6 +33,30 @@ pub(super) fn install_checked<T>(
     plugin_name: &str,
     check: impl FnOnce(&Path) -> Result<T, String>,
 ) -> Result<(PathBuf, T), String> {
+    let (prepared, verified) = prepare_install(source_path, install_dir, plugin_name, check)?;
+    Ok((prepared.publish()?, verified))
+}
+
+pub(super) struct PreparedInstall {
+    _staging: tempfile::TempDir,
+    install_dir: PathBuf,
+    candidate: PathBuf,
+    destination: PathBuf,
+}
+
+impl PreparedInstall {
+    pub(super) fn publish(self) -> Result<PathBuf, String> {
+        publish_install(&self.install_dir, &self.candidate, &self.destination)?;
+        Ok(self.destination)
+    }
+}
+
+pub(super) fn prepare_install<T>(
+    source_path: &Path,
+    install_dir: &Path,
+    plugin_name: &str,
+    check: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<(PreparedInstall, T), String> {
     // 0. Reject a destination name that could escape the install directory.
     //    `plugin_name` originates from marketplace manifests / user input, so a
     //    crafted value like `../../etc` would let `install_dir.join(...)` write
@@ -65,8 +89,15 @@ pub(super) fn install_checked<T>(
     let candidate = staging.path().join(plugin_name);
     copy_dir_recursive(source_path, &candidate)?;
     let verified = check(&candidate)?;
-    publish_install(install_dir, &candidate, &dest)?;
-    Ok((dest, verified))
+    Ok((
+        PreparedInstall {
+            _staging: staging,
+            install_dir: install_dir.to_path_buf(),
+            candidate,
+            destination: dest,
+        },
+        verified,
+    ))
 }
 
 /// Update an already-installed plugin in place by atomically swapping in a fresh

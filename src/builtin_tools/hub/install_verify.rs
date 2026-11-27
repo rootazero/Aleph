@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AlephError, Result};
 use crate::hub::install::InstallOutcome;
-use crate::hub::verify::{verify_install, VerifyReport};
+use crate::hub::verify::{VerifyReport, verify_install};
 use crate::mcp::manager::McpManagerHandle;
 use crate::tools::AlephTool;
 
@@ -36,6 +36,7 @@ impl HubInstallVerifyArgs {
             }),
             "plugin" => Ok(InstallOutcome::Plugin {
                 path: self.id_or_path.clone(),
+                selector: None,
             }),
             "skill" => Ok(InstallOutcome::Skill {
                 path: self.id_or_path.clone(),

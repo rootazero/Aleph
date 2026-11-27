@@ -215,15 +215,11 @@ impl ExtensionManager {
     /// mount/unmount wrappers here: they would re-enter load_guard.
     pub(super) async fn reconcile_plugin_control_locked(
         &self,
-        id: &str,
+        instance: &PluginInstanceKey,
         enabled: bool,
         outcome: &mut super::plugin_state::PluginControlOutcome,
     ) {
         use super::plugin_state::{PluginControlPhase, PluginRuntimeOutcome};
-        let Some(instance) = self.unambiguous_plugin_instance(id).await else {
-            outcome.runtime_outcome = PluginRuntimeOutcome::NotDiscovered;
-            return;
-        };
         if enabled {
             match self.mount_inner(&instance, None).await {
                 Ok(PluginStatus::Cold) => outcome.runtime_outcome = PluginRuntimeOutcome::Cold,
@@ -329,6 +325,127 @@ impl ExtensionManager {
         result
     }
 
+    pub(crate) async fn publish_plugin_install<T: Send + 'static>(
+        &self,
+        instances: &[PluginInstanceKey],
+        publish: impl FnOnce() -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        self.ensure_discovered()
+            .await
+            .map_err(|error| error.to_string())?;
+        let _guard = self.load_guard.lock().await;
+        {
+            let registry = self.plugin_registry.read().await;
+            let mut seen = HashSet::new();
+            for instance in instances {
+                if !seen.insert(instance) || registry.get_plugin_instance(instance).is_some() {
+                    return Err(format!(
+                        "Plugin '{}' is already present in this scope",
+                        instance.plugin_id
+                    ));
+                }
+            }
+        }
+        let result =
+            crate::skill::run_blocking_fs("ExtensionManager::publish_plugin_install", publish)
+                .await
+                .ok_or_else(|| "Plugin installation was cancelled".to_owned())??;
+        if let Err(error) = self
+            .discover_selected(DiscoveryMode::Activation, Some(instances))
+            .await
+        {
+            tracing::warn!(%error, "Failed to discover new plugin installations");
+        }
+        self.publish_runtime_transition_views().await;
+        Ok(result)
+    }
+
+    pub(crate) async fn uninstall_plugin_target(
+        &self,
+        target: &super::plugin_target::PluginTarget,
+        access: &super::plugin_target::PluginAccess,
+    ) -> Result<(PluginInstanceKey, anyhow::Result<()>), super::plugin_target::PluginTargetError>
+    {
+        let _guard = self.load_guard.lock().await;
+        let instance = self.resolve_plugin_target(target, access).await?;
+        let result = self.uninstall_plugin_instance_locked(&instance).await;
+        Ok((instance, result))
+    }
+
+    async fn uninstall_plugin_instance_locked(
+        &self,
+        instance: &PluginInstanceKey,
+    ) -> anyhow::Result<()> {
+        let path = self
+            .plugin_registry
+            .read()
+            .await
+            .get_plugin_instance(instance)
+            .map(|row| row.root_dir.clone())
+            .ok_or_else(|| anyhow::anyhow!("Plugin is no longer discovered"))?;
+        let install_roots = match &instance.scope {
+            ScopeKey::Global => vec![crate::extension::default_plugins_dir()],
+            ScopeKey::Project(root) => vec![
+                root.join(".aleph/plugins"),
+                root.join(".aleph/plugins.local"),
+            ],
+        };
+        let install_root = install_roots
+            .iter()
+            .find(|root| {
+                path.strip_prefix(root).is_ok_and(|relative| {
+                    let count = relative.components().count();
+                    (1..=2).contains(&count)
+                        && relative
+                            .components()
+                            .all(|component| matches!(component, std::path::Component::Normal(_)))
+                })
+            })
+            .ok_or_else(|| anyhow::anyhow!("Plugin is outside an Aleph install directory"))?;
+        let canonical_root = tokio::fs::canonicalize(install_root).await?;
+        let canonical_path = tokio::fs::canonicalize(&path).await?;
+        let canonical_expected = canonical_root.join(path.strip_prefix(install_root)?);
+        anyhow::ensure!(
+            canonical_path == canonical_expected,
+            "Plugin install path traverses a symbolic link"
+        );
+        if let ScopeKey::Project(root) = &instance.scope {
+            anyhow::ensure!(
+                canonical_root.starts_with(root),
+                "Install directory leaves its project"
+            );
+        }
+        match self.unmount_inner(instance).await {
+            Ok(report) => {
+                self.publish_runtime_transition_views().await;
+                anyhow::ensure!(report.all_ok(), "Plugin effects did not stop cleanly");
+            }
+            Err(UnmountError::NotMounted(_)) => {}
+            Err(error) => return Err(error.into()),
+        }
+        tokio::fs::remove_dir_all(path).await?;
+        self.plugin_registry
+            .write()
+            .await
+            .unregister_plugin_instance(instance);
+        self.forget_plugin_instance_preference_locked(instance)
+            .await;
+        if matches!(instance.scope, ScopeKey::Global) {
+            crate::tools::usage::forget_plugin(&instance.plugin_id);
+        }
+        if let Err(error) = self
+            .discover_selected(
+                DiscoveryMode::Activation,
+                Some(std::slice::from_ref(instance)),
+            )
+            .await
+        {
+            tracing::warn!(plugin = %instance.plugin_id, %error, "failed to discover remaining plugin sources after removal");
+        }
+        self.publish_runtime_transition_views().await;
+        Ok(())
+    }
+
     /// Check the new version, then unmount + mount.
     ///
     /// Preflight first: the directory is parsed and identity-checked, and a
@@ -347,12 +464,34 @@ impl ExtensionManager {
             .unambiguous_plugin_instance(id)
             .await
             .ok_or_else(|| MountError::NotFound(id.to_owned()))?;
-        let prepared = match self.preflight_reload(&instance).await {
+        self.reload_plugin_instance_locked(&instance).await
+    }
+
+    pub(crate) async fn reload_plugin_target(
+        &self,
+        target: &super::plugin_target::PluginTarget,
+        access: &super::plugin_target::PluginAccess,
+    ) -> Result<
+        (PluginInstanceKey, Result<PluginStatus, MountError>),
+        super::plugin_target::PluginTargetError,
+    > {
+        let _guard = self.load_guard.lock().await;
+        let instance = self.resolve_plugin_target(target, access).await?;
+        let result = self.reload_plugin_instance_locked(&instance).await;
+        Ok((instance, result))
+    }
+
+    pub(super) async fn reload_plugin_instance_locked(
+        &self,
+        instance: &PluginInstanceKey,
+    ) -> Result<PluginStatus, MountError> {
+        let id = &instance.plugin_id;
+        let prepared = match self.preflight_reload(instance).await {
             Ok(prepared) => Some(prepared),
             Err(PrepareError::Refused { .. }) => None,
             // Nothing is serving: behave like a plain mount, which records
             // the failure on the row.
-            Err(_) if !self.is_mounted(&instance) => None,
+            Err(_) if !self.is_mounted(instance) => None,
             Err(error) => {
                 let reason = match error {
                     PrepareError::Defect(reason) => reason,
@@ -367,7 +506,7 @@ impl ExtensionManager {
                 });
             }
         };
-        match self.unmount_inner(&instance).await {
+        match self.unmount_inner(instance).await {
             Ok(_) | Err(UnmountError::NotMounted(_)) => {}
             Err(UnmountError::NotFound(_)) => return Err(MountError::NotFound(id.to_string())),
             Err(error @ UnmountError::RuntimeOwnerResidual(_)) => {
@@ -377,7 +516,7 @@ impl ExtensionManager {
                 });
             }
         }
-        let result = self.mount_inner(&instance, prepared).await;
+        let result = self.mount_inner(instance, prepared).await;
         self.views().after_transition().await;
         self.sync_runtime_snapshots().await;
         result
@@ -519,6 +658,14 @@ impl ExtensionManager {
         &self,
         mode: DiscoveryMode,
     ) -> ExtensionResult<LoadOutcome> {
+        self.discover_selected(mode, None).await
+    }
+
+    async fn discover_selected(
+        &self,
+        mode: DiscoveryMode,
+        selected: Option<&[PluginInstanceKey]>,
+    ) -> ExtensionResult<LoadOutcome> {
         let mut summary = LoadSummary::default();
         let mut mounted: Vec<String> = Vec::new();
         let mut failed: Vec<(String, MountError)> = Vec::new();
@@ -555,9 +702,10 @@ impl ExtensionManager {
             // discovery rebuilds rows only before any runtime has been
             // declared, leaving active runtime views untouched if a future
             // caller reaches this path with an already populated manager.
-            let declaration_can_rebuild = mode == DiscoveryMode::FullLoad
-                || (self.runtime_owners.lock().unwrap().is_empty()
-                    && self.scopes.lock().unwrap().is_empty());
+            let declaration_can_rebuild = selected.is_none()
+                && (mode == DiscoveryMode::FullLoad
+                    || (self.runtime_owners.lock().unwrap().is_empty()
+                        && self.scopes.lock().unwrap().is_empty()));
             if declaration_can_rebuild {
                 let mut registry = self.plugin_registry.write().await;
                 registry.clear();
@@ -579,6 +727,18 @@ impl ExtensionManager {
                 legacy_marker,
             } = scanned;
             let dir_path = &found.path;
+            if let Some(selected) = selected {
+                let id = match &identified {
+                    Identified::Parsed(output) => &output.plugin_id,
+                    Identified::Unparsed { id, .. } => id,
+                };
+                if !selected
+                    .iter()
+                    .any(|key| key.scope == found.scope_key && key.plugin_id == *id)
+                {
+                    continue;
+                }
+            }
             let mut output = match identified {
                 Identified::Parsed(output) => output,
                 Identified::Unparsed {
@@ -2438,16 +2598,20 @@ handler = "handler"
             .await
             .unwrap();
 
-        let listed = PluginManageTool::call_on(
-            &manager,
-            PluginManageArgs {
-                action: PluginAction::List,
-                name: None,
-                source: None,
-                query: None,
-                config: None,
-                enforce: None,
-            },
+        let listed = crate::projects::with_project_root(
+            Some(tmp.path().to_path_buf()),
+            PluginManageTool::call_on(
+                &manager,
+                PluginManageArgs {
+                    action: PluginAction::List,
+                    name: None,
+                    selector: None,
+                    source: None,
+                    query: None,
+                    config: None,
+                    enforce: None,
+                },
+            ),
         )
         .await
         .unwrap();
@@ -2461,16 +2625,20 @@ handler = "handler"
         assert_eq!(probe.guest_instance_dropped(), 0);
         drop(loader);
 
-        let enabled = PluginManageTool::call_on(
-            &manager,
-            PluginManageArgs {
-                action: PluginAction::Enable,
-                name: Some("lazy-wasm".to_owned()),
-                source: None,
-                query: None,
-                config: None,
-                enforce: None,
-            },
+        let enabled = crate::projects::with_project_root(
+            Some(tmp.path().to_path_buf()),
+            PluginManageTool::call_on(
+                &manager,
+                PluginManageArgs {
+                    action: PluginAction::Enable,
+                    name: Some("lazy-wasm".to_owned()),
+                    selector: None,
+                    source: None,
+                    query: None,
+                    config: None,
+                    enforce: None,
+                },
+            ),
         )
         .await
         .unwrap();
@@ -4853,11 +5021,24 @@ handler = "handler"
         use crate::builtin_tools::plugin_manage::{
             PluginAction, PluginManageArgs, PluginManageTool,
         };
+        use crate::extension::plugin_target::{PluginAccess, PluginTarget};
         use crate::gateway::handlers::{extensions, plugins};
+        let instance = manager
+            .unambiguous_plugin_instance("qa-wasm")
+            .await
+            .unwrap();
+        let ScopeKey::Project(root) = &instance.scope else {
+            panic!("expected project fixture");
+        };
+        let target = PluginTarget::Bare(instance.plugin_id.clone());
+        let access = PluginAccess::Scoped(
+            crate::extension::visibility::VisibilityCtx::from_project_root(Some(root.clone())),
+        );
         let rpc = plugins::set_enabled_via_registry(
             manager,
             Some(serde_json::json!(71)),
-            "qa-wasm",
+            &target,
+            &access,
             enabled,
         )
         .await;
@@ -4865,6 +5046,8 @@ handler = "handler"
             manager,
             Some(serde_json::json!(72)),
             "qa-wasm",
+            None,
+            &access,
             enabled,
         )
         .await;
@@ -4878,20 +5061,24 @@ handler = "handler"
             assert_eq!(data["ok"], false);
             outcomes.push(data["outcome"].clone());
         }
-        let tool = PluginManageTool::call_on(
-            manager,
-            PluginManageArgs {
-                action: if enabled {
-                    PluginAction::Enable
-                } else {
-                    PluginAction::Disable
+        let tool = crate::projects::with_project_root(
+            Some(root.clone()),
+            PluginManageTool::call_on(
+                manager,
+                PluginManageArgs {
+                    action: if enabled {
+                        PluginAction::Enable
+                    } else {
+                        PluginAction::Disable
+                    },
+                    name: Some("qa-wasm".to_owned()),
+                    selector: None,
+                    source: None,
+                    query: None,
+                    config: None,
+                    enforce: None,
                 },
-                name: Some("qa-wasm".to_owned()),
-                source: None,
-                query: None,
-                config: None,
-                enforce: None,
-            },
+            ),
         )
         .await
         .unwrap();

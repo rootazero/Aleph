@@ -54,6 +54,7 @@ pub(crate) mod panel_publication;
 mod plugin_ops;
 pub mod plugin_secrets;
 pub mod plugin_state;
+pub(crate) mod plugin_target;
 pub mod plugin_trust;
 pub mod plugin_vars;
 mod projection;

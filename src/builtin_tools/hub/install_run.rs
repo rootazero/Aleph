@@ -17,13 +17,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::error::{AlephError, Result};
-use crate::extension::marketplace::types::MarketplaceConfig;
 use crate::extension::marketplace::MarketplaceManager;
+use crate::extension::marketplace::types::MarketplaceConfig;
 use crate::gateway::security::SharedTokenManager;
 use crate::hub::cache::{CatalogCache, CatalogFilter};
-use crate::hub::install::{run_install, InstallContext, InstallOutcome};
+use crate::hub::install::{InstallContext, InstallOutcome, run_install};
 use crate::hub::secrets::field_key;
-use crate::hub::trust::{build_disclosure, DisclosurePayload};
+use crate::hub::trust::{DisclosurePayload, build_disclosure};
 use crate::hub::types::InstallSpec;
 use crate::mcp::manager::McpManagerHandle;
 use crate::tools::AlephTool;
@@ -102,7 +102,9 @@ pub enum InstallToolResult {
 fn outcome_json(o: &InstallOutcome) -> Value {
     match o {
         InstallOutcome::Mcp { id } => serde_json::json!({ "kind": "mcp", "id": id }),
-        InstallOutcome::Plugin { path } => serde_json::json!({ "kind": "plugin", "path": path }),
+        InstallOutcome::Plugin { path, selector } => {
+            serde_json::json!({ "kind": "plugin", "path": path, "selector": selector })
+        }
         InstallOutcome::Skill { path } => {
             // The provenance (source, version, url) comes from the install
             // registry — the one place that knows where the skill came from.
@@ -147,8 +149,7 @@ pub struct HubInstallRunTool {
 #[async_trait]
 impl AlephTool for HubInstallRunTool {
     const NAME: &'static str = "hub_install_run";
-    const DESCRIPTION: &'static str =
-        "Install a catalog entry by id (trust-gated). Get the id from hub_catalog_search. Clean \
+    const DESCRIPTION: &'static str = "Install a catalog entry by id (trust-gated). Get the id from hub_catalog_search. Clean \
          specs install directly and come back with a post-install `verify` verdict; ack-required \
          specs and anything that writes code to disk (skills, plugins) bounce to the user for \
          consent via the Extensions UI without any side effect; OCI is rejected. \
@@ -268,7 +269,7 @@ impl HubInstallRunTool {
         let ctx = InstallContext {
             entry,
             mcp: self.mcp.as_ref(),
-            marketplace: Some(&marketplace),
+            marketplace: Some(crate::sync_primitives::Arc::new(marketplace)),
             secret_refs,
             plain_values,
         };

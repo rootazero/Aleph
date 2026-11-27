@@ -71,7 +71,7 @@ pub(crate) fn validate_install_candidate(plugin_dir: &Path) -> Result<AdapterOut
     Ok(output)
 }
 
-fn validate_output(plugin_dir: &Path, output: &AdapterOutput) -> ValidationResult {
+pub(super) fn validate_output(plugin_dir: &Path, output: &AdapterOutput) -> ValidationResult {
     let mut result = ValidationResult::default();
     for diagnostic in &output.diagnostics {
         result.warnings.push(format!(
@@ -245,10 +245,12 @@ entry = "SKILL.md"
 
         let result = validate_plugin(dir.path());
         assert!(result.is_valid(), "Errors: {:?}", result.errors);
-        assert!(result
-            .info
-            .iter()
-            .any(|item| item.contains("portable-codex")));
+        assert!(
+            result
+                .info
+                .iter()
+                .any(|item| item.contains("portable-codex"))
+        );
     }
 
     #[test]
@@ -263,10 +265,12 @@ entry = "SKILL.md"
 
         let result = validate_plugin(dir.path());
         assert!(!result.is_valid());
-        assert!(result
-            .errors
-            .iter()
-            .any(|error| error.contains("JSON parse error")));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("JSON parse error"))
+        );
     }
 
     #[test]
@@ -295,10 +299,12 @@ entry = "dist/index.js"
         let result = validate_plugin(dir.path());
         // Should be valid (missing entry is only a warning)
         assert!(result.is_valid(), "Errors: {:?}", result.errors);
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.contains("entry") || w.contains("Entry")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("entry") || w.contains("Entry"))
+        );
     }
 
     #[test]
@@ -329,10 +335,12 @@ handler = "handle2"
 
         let result = validate_plugin(dir.path());
         assert!(!result.is_valid());
-        assert!(result
-            .errors
-            .iter()
-            .any(|e| e.contains("Duplicate") || e.contains("duplicate")));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.contains("Duplicate") || e.contains("duplicate"))
+        );
     }
 
     #[test]

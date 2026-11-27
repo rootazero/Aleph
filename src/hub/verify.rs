@@ -191,7 +191,7 @@ pub async fn verify_install(
             let other = info.resource_count + info.resource_template_count + info.prompt_count;
             verdict_with_health(running, observation, info.tool_count, other)
         }
-        InstallOutcome::Plugin { path } => verify_on_disk_path(path, "plugin"),
+        InstallOutcome::Plugin { path, .. } => verify_on_disk_path(path, "plugin"),
         InstallOutcome::Skill { path } => verify_on_disk_path(path, "skill"),
     }
 }

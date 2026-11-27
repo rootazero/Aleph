@@ -52,6 +52,13 @@ pub enum ScopeKey {
 }
 
 impl ScopeKey {
+    pub(crate) const fn kind_label(&self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Project(_) => "project",
+        }
+    }
+
     /// The only way to build a `Project` key: canonicalises the root.
     #[must_use]
     pub fn project(root: &Path) -> Self {
@@ -184,21 +191,19 @@ pub fn scope_install_dir(
     scope: PluginScope,
     project_dir: Option<&Path>,
 ) -> Result<PathBuf, String> {
-    match scope {
+    let dir = match scope {
         PluginScope::User => {
             let home = crate::discovery::aleph_home_dir()
                 .map_err(|e| format!("Cannot resolve home dir: {e}"))?;
-            Ok(home.join("plugins/installed"))
+            return Ok(home.join("plugins/installed"));
         }
-        PluginScope::Project => {
-            let project = project_dir.ok_or("Project scope requires a project directory")?;
-            Ok(project.join(".aleph/plugins"))
-        }
-        PluginScope::Local => {
-            let project = project_dir.ok_or("Local scope requires a project directory")?;
-            Ok(project.join(".aleph/plugins.local"))
-        }
-    }
+        PluginScope::Project => ".aleph/plugins",
+        PluginScope::Local => ".aleph/plugins.local",
+    };
+    let project = project_dir.ok_or("Project scope requires a project directory")?;
+    let destination = project.join(dir);
+    crate::extension::ensure_plugin_destination_is_safe(project, &destination)?;
+    Ok(destination)
 }
 
 /// The shape shared by every "list" face: items that no plugin owns pass;

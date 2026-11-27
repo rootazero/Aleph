@@ -154,18 +154,22 @@ async fn a_claude_cache_plugin_loads_disabled_and_never_writes_under_claude_home
         "loading records no preference: the foreign marker is not migrated into a disable"
     );
 
-    assert!(manager
-        .set_plugin_enabled("qa-cc", true)
-        .await
-        .unwrap()
-        .changed());
+    assert!(
+        manager
+            .set_plugin_enabled("qa-cc", true)
+            .await
+            .unwrap()
+            .changed()
+    );
     let info = manager.get_plugin_info().await;
     assert!(row(&info, "qa-cc").unwrap().enabled);
     // The one bit Aleph owns lives in Aleph's own document, and survives a
     // fresh load.
-    assert!(PluginsConfig::load(&cfg_path)
-        .unwrap()
-        .is_enabled_for("qa-cc", PluginOrigin::ClaudeCache));
+    assert!(
+        PluginsConfig::load(&cfg_path)
+            .unwrap()
+            .is_enabled_for("qa-cc", PluginOrigin::ClaudeCache)
+    );
     manager.load_all().await.unwrap();
     let info = manager.get_plugin_info().await;
     assert_eq!(row(&info, "qa-cc").unwrap().status, "loaded");
@@ -218,11 +222,13 @@ async fn one_id_in_aleph_home_and_the_claude_cache_is_one_row_the_aleph_copy() {
     // Disable the id, then lose the Aleph copy outside `uninstall` (which
     // would have forgotten the preference): the Claude Code copy now holds
     // the id, and the explicit `false` holds for it too.
-    assert!(manager
-        .set_plugin_enabled("dup", false)
-        .await
-        .unwrap()
-        .changed());
+    assert!(
+        manager
+            .set_plugin_enabled("dup", false)
+            .await
+            .unwrap()
+            .changed()
+    );
     std::fs::remove_dir_all(&own).unwrap();
     manager.load_all().await.unwrap();
     let info = manager.get_plugin_info().await;
@@ -234,11 +240,13 @@ async fn one_id_in_aleph_home_and_the_claude_cache_is_one_row_the_aleph_copy() {
 
     // The residual, pinned so a change to it is a decision: an explicit
     // `true` is an opt-in to the id.
-    assert!(manager
-        .set_plugin_enabled("dup", true)
-        .await
-        .unwrap()
-        .changed());
+    assert!(
+        manager
+            .set_plugin_enabled("dup", true)
+            .await
+            .unwrap()
+            .changed()
+    );
     let info = manager.get_plugin_info().await;
     assert_eq!(row(&info, "dup").unwrap().status, "loaded");
 }
@@ -259,11 +267,13 @@ async fn a_claude_code_update_moves_the_hook_root_and_the_approval_stays_behind(
     let (manager, _cfg) =
         isolated_manager_with_claude_home(scratch.path(), claude_home.path()).await;
     manager.load_all().await.unwrap();
-    assert!(manager
-        .set_plugin_enabled("hooky", true)
-        .await
-        .unwrap()
-        .changed());
+    assert!(
+        manager
+            .set_plugin_enabled("hooky", true)
+            .await
+            .unwrap()
+            .changed()
+    );
 
     let hook_roots = |registry: &crate::extension::PluginRegistry| -> Vec<Option<PathBuf>> {
         registry
@@ -338,11 +348,13 @@ async fn an_unreadable_index_forgets_nothing() {
     let (manager, cfg_path) =
         isolated_manager_with_claude_home(scratch.path(), claude_home.path()).await;
     manager.load_all().await.unwrap();
-    assert!(manager
-        .set_plugin_enabled("keep", true)
-        .await
-        .unwrap()
-        .changed());
+    assert!(
+        manager
+            .set_plugin_enabled("keep", true)
+            .await
+            .unwrap()
+            .changed()
+    );
 
     let index = claude_home.path().join("plugins/installed_plugins.json");
     std::fs::write(&index, "{ not json").unwrap();
@@ -417,25 +429,39 @@ async fn the_rpc_face_enables_and_disables_a_claude_cache_row() {
     let (manager, cfg_path) =
         isolated_manager_with_claude_home(scratch.path(), claude_home.path()).await;
 
-    let on = set_enabled_via_registry(&manager, None, "rpc-cc", true).await;
+    use crate::extension::plugin_target::{PluginAccess, PluginTarget};
+    let access = PluginAccess::global();
+    let target = PluginTarget::Bare("rpc-cc".into());
+    let on = set_enabled_via_registry(&manager, None, &target, &access, true).await;
     assert!(on.is_success(), "{on:?}");
     let info = manager.get_plugin_info().await;
     assert_eq!(row(&info, "rpc-cc").unwrap().status, "loaded");
 
-    let off = set_enabled_via_registry(&manager, None, "rpc-cc", false).await;
+    let off = set_enabled_via_registry(&manager, None, &target, &access, false).await;
     assert!(off.is_success(), "{off:?}");
     let info = manager.get_plugin_info().await;
     assert_eq!(row(&info, "rpc-cc").unwrap().status, "disabled");
-    assert!(!PluginsConfig::load(&cfg_path)
-        .unwrap()
-        .is_enabled_for("rpc-cc", PluginOrigin::ClaudeCache));
+    assert!(
+        !PluginsConfig::load(&cfg_path)
+            .unwrap()
+            .is_enabled_for("rpc-cc", PluginOrigin::ClaudeCache)
+    );
 
-    let unknown = set_enabled_via_registry(&manager, None, "nothing-found", true).await;
+    let unknown = set_enabled_via_registry(
+        &manager,
+        None,
+        &PluginTarget::Bare("nothing-found".into()),
+        &access,
+        true,
+    )
+    .await;
     assert!(unknown.is_error(), "{unknown:?}");
-    assert!(!PluginsConfig::load(&cfg_path)
-        .unwrap()
-        .entries
-        .contains_key("nothing-found"));
+    assert!(
+        !PluginsConfig::load(&cfg_path)
+            .unwrap()
+            .entries
+            .contains_key("nothing-found")
+    );
     assert_eq!(
         snapshot(claude_home.path()),
         before,
@@ -479,6 +505,7 @@ async fn read_only_discovery_names_a_claude_cache_id_without_loading_it() {
 #[tokio::test]
 async fn the_model_may_disable_but_not_enable_a_claude_cache_row() {
     use crate::builtin_tools::plugin_manage::{PluginAction, PluginManageArgs, PluginManageTool};
+    use crate::extension::plugin_target::{PluginAccess, PluginTarget};
     use crate::gateway::handlers::plugins::set_enabled_via_registry;
 
     let claude_home = tempfile::tempdir().unwrap();
@@ -493,6 +520,7 @@ async fn the_model_may_disable_but_not_enable_a_claude_cache_row() {
     let args = |action, name: &str| PluginManageArgs {
         action,
         name: Some(name.to_string()),
+        selector: None,
         source: None,
         query: None,
         config: None,
@@ -527,10 +555,12 @@ async fn the_model_may_disable_but_not_enable_a_claude_cache_row() {
         ),
         ""
     );
-    assert!(!PluginsConfig::load(&cfg_path)
-        .unwrap()
-        .entries
-        .contains_key("model-cc"));
+    assert!(
+        !PluginsConfig::load(&cfg_path)
+            .unwrap()
+            .entries
+            .contains_key("model-cc")
+    );
     let info = manager.get_plugin_info().await;
     assert_eq!(row(&info, "model-cc").unwrap().status, "disabled");
 
@@ -546,24 +576,36 @@ async fn the_model_may_disable_but_not_enable_a_claude_cache_row() {
     let pre = PluginManageTool::call_on(&manager, args(PluginAction::Enable, "not-listed-yet"))
         .await
         .expect_err("an id nothing discovered cannot be pre-enabled");
-    assert!(pre.to_string().contains("not-listed-yet"), "{pre}");
-    assert!(!PluginsConfig::load(&cfg_path)
-        .unwrap()
-        .entries
-        .contains_key("not-listed-yet"));
+    assert!(pre.to_string().contains("Plugin not found"), "{pre}");
+    assert!(
+        !PluginsConfig::load(&cfg_path)
+            .unwrap()
+            .entries
+            .contains_key("not-listed-yet")
+    );
 
     // The operator turns it on; the model may turn it off.
-    assert!(set_enabled_via_registry(&manager, None, "model-cc", true)
+    assert!(
+        set_enabled_via_registry(
+            &manager,
+            None,
+            &PluginTarget::Bare("model-cc".into()),
+            &PluginAccess::global(),
+            true
+        )
         .await
-        .is_success());
+        .is_success()
+    );
     PluginManageTool::call_on(&manager, args(PluginAction::Disable, "model-cc"))
         .await
         .expect("disabling is the fail-safe direction");
     let info = manager.get_plugin_info().await;
     assert_eq!(row(&info, "model-cc").unwrap().status, "disabled");
-    assert!(!PluginsConfig::load(&cfg_path)
-        .unwrap()
-        .is_enabled_for("model-cc", PluginOrigin::ClaudeCache));
+    assert!(
+        !PluginsConfig::load(&cfg_path)
+            .unwrap()
+            .is_enabled_for("model-cc", PluginOrigin::ClaudeCache)
+    );
 }
 
 /// Fix round 1, F2 (ruling 5 on the usage face) — while Claude Code's index
@@ -573,9 +615,9 @@ async fn the_model_may_disable_but_not_enable_a_claude_cache_row() {
 /// made, carried with that load's rows.
 #[tokio::test]
 async fn an_unreadable_index_keeps_the_usage_history() {
-    use crate::tools::usage::report::{add_extension_inventory, forget_orphans, ExtensionKind};
+    use crate::tools::usage::report::{ExtensionKind, add_extension_inventory, forget_orphans};
     use crate::tools::usage::store::ToolUsageStore;
-    use crate::tools::usage::{build_report, UsageInventory};
+    use crate::tools::usage::{UsageInventory, build_report};
 
     let claude_home = tempfile::tempdir().unwrap();
     write_index(claude_home.path(), &[("used", "m", "1.0.0")]);
@@ -587,11 +629,13 @@ async fn an_unreadable_index_keeps_the_usage_history() {
     let (manager, _cfg) =
         isolated_manager_with_claude_home(scratch.path(), claude_home.path()).await;
     manager.load_all().await.unwrap();
-    assert!(manager
-        .set_plugin_enabled("used", true)
-        .await
-        .unwrap()
-        .changed());
+    assert!(
+        manager
+            .set_plugin_enabled("used", true)
+            .await
+            .unwrap()
+            .changed()
+    );
     store.record_call("plugin:used", "some_tool", true);
 
     std::fs::write(

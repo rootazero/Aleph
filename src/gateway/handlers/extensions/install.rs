@@ -8,16 +8,16 @@
 
 use crate::extension::marketplace::MarketplaceManager;
 use crate::gateway::handlers::parse_params;
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS, JsonRpcRequest, JsonRpcResponse};
 use crate::gateway::security::SharedTokenManager;
 use crate::hub::cache::{CatalogCache, CatalogFilter};
-use crate::hub::install::{run_install, InstallContext, InstallOutcome};
+use crate::hub::install::{InstallContext, InstallOutcome, run_install};
 use crate::hub::secrets::field_key;
 use crate::hub::trust::{build_disclosure, scan_for_injection};
 use crate::hub::types::{ExtensionEntry, InstallSpec};
 use crate::mcp::manager::McpManagerHandle;
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -191,6 +191,17 @@ pub async fn handle_install(
             "OCI/Docker MCP containers are not installable in this version",
         );
     }
+    if matches!(spec, InstallSpec::GitDir { .. })
+        && entry.kind != crate::hub::types::ExtensionKind::Skill
+        && !crate::gateway::handlers::plugins::current_plugin_access()
+            .allows(&crate::extension::visibility::ScopeKey::Global)
+    {
+        return JsonRpcResponse::error(
+            req.id,
+            INVALID_PARAMS,
+            "Plugin install unavailable in this context",
+        );
+    }
     // (3) trust gate: build disclosure; require ack when mandated.
     let disclosure = build_disclosure(&entry, &spec);
     let findings = scan_text(&entry);
@@ -229,7 +240,7 @@ pub async fn handle_install(
     let ctx = InstallContext {
         entry: &entry,
         mcp: mcp.as_ref(),
-        marketplace: Some(marketplace.as_ref()),
+        marketplace: Some(marketplace),
         secret_refs,
         plain_values,
     };
@@ -257,7 +268,9 @@ pub async fn handle_install(
 fn outcome_json(o: &InstallOutcome) -> Value {
     match o {
         InstallOutcome::Mcp { id } => json!({ "kind": "mcp", "id": id }),
-        InstallOutcome::Plugin { path } => json!({ "kind": "plugin", "path": path }),
+        InstallOutcome::Plugin { path, selector } => {
+            json!({ "kind": "plugin", "path": path, "selector": selector })
+        }
         InstallOutcome::Skill { path } => crate::hub::install::skill_outcome_json(
             crate::utils::paths::get_skills_dir().ok().as_deref(),
             path,
@@ -279,11 +292,12 @@ async fn verify_after_install(outcome: &InstallOutcome, mcp: Option<&McpManagerH
                 let _ = mcp.start_server(id).await;
             }
         }
-        InstallOutcome::Plugin { .. } | InstallOutcome::Skill { .. } => {
+        InstallOutcome::Skill { .. } => {
             if let Some(mgr) = crate::extension::try_extension_manager() {
                 let _ = mgr.reload().await;
             }
         }
+        InstallOutcome::Plugin { .. } => {}
     }
     let report = crate::hub::verify::verify_install(outcome, mcp).await;
     serde_json::to_value(&report).unwrap_or_else(|e| json!({ "ok": false, "error": e.to_string() }))

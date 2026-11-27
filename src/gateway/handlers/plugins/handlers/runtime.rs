@@ -1,9 +1,12 @@
 use serde_json::json;
 
+use super::super::current_plugin_access;
 use super::super::types::{CallToolParams, ReloadPluginParams};
+use super::manage::plugin_target_error_response;
+use crate::extension::plugin_target::PluginTarget;
 use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::plugins::handlers::get_extension_manager;
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
+use crate::gateway::protocol::{INTERNAL_ERROR, JsonRpcRequest, JsonRpcResponse};
 
 /// Call a tool on a loaded runtime plugin
 ///
@@ -72,10 +75,18 @@ pub async fn handle_reload(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => return e.with_id(request.id),
     };
 
-    match manager.reload_plugin(&params.plugin_id).await {
+    let target = PluginTarget::from_fields(params.plugin_id, params.selector);
+    let (instance, result) = match manager
+        .reload_plugin_target(&target, &current_plugin_access())
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => return plugin_target_error_response(request.id, error),
+    };
+    match result {
         Ok(status) => JsonRpcResponse::success(
             request.id,
-            json!({ "ok": true, "pluginId": params.plugin_id, "status": status.label() }),
+            json!({ "ok": true, "pluginId": instance.plugin_id, "selector": instance.selector(), "scope_kind": instance.scope.kind_label(), "status": status.label() }),
         ),
         Err(e) => JsonRpcResponse::error(
             request.id,

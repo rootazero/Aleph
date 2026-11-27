@@ -100,6 +100,8 @@ pub struct PluginCleanupStep {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[must_use]
 pub struct PluginControlOutcome {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
     pub plugin_id: String,
     pub desired_enabled: bool,
     pub preference_changed: bool,
@@ -366,7 +368,7 @@ impl PluginsConfig {
         }
     }
 
-    fn entry(&self, instance: &PluginInstanceKey) -> Option<&PluginEntryConfig> {
+    pub(super) fn entry(&self, instance: &PluginInstanceKey) -> Option<&PluginEntryConfig> {
         match instance.scope {
             ScopeKey::Global => self.entries.get(&instance.plugin_id),
             ScopeKey::Project(_) => self.instances.get(&instance.preference_key()),

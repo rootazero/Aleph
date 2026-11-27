@@ -12,6 +12,10 @@ use std::path::{Path, PathBuf};
 /// Plugin info for display
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_kind: Option<String>,
     pub name: String,
     pub version: Option<String>,
     pub description: Option<String>,
@@ -45,6 +49,30 @@ pub struct PluginInfo {
     /// Error message when the plugin failed to load (status == "error").
     #[serde(default)]
     pub error: Option<String>,
+}
+
+impl From<&PluginRecord> for PluginInfo {
+    fn from(record: &PluginRecord) -> Self {
+        Self {
+            name: record.id.clone(),
+            selector: Some(record.instance_key().selector()),
+            scope_kind: Some(record.scope_key.kind_label().to_owned()),
+            version: record.version.clone(),
+            description: record.description.clone(),
+            enabled: record.status.is_active(),
+            path: record.root_dir.display().to_string(),
+            skills_count: record.skill_count,
+            commands_count: record.command_count,
+            agents_count: record.agent_count,
+            hooks_count: record.hook_count,
+            mcp_servers_count: record.mcp_server_count,
+            tools_count: record.tool_names.len(),
+            kind: record.kind.as_str().to_string(),
+            origin: record.origin.label().to_string(),
+            status: record.status.label().to_string(),
+            error: record.error.clone(),
+        }
+    }
 }
 
 /// Plugin origin - where the plugin was discovered from

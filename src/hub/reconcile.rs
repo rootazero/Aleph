@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::extension::PluginRecord;
 use crate::hub::install::mcp_server_id;
-use crate::hub::origin::{local_ref_addresses, InstallOrigin};
+use crate::hub::origin::{InstallOrigin, local_ref_addresses};
 use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, TrustTier};
 use crate::mcp::manager::{HealthStatus, McpManagerHandle, McpServerInfo};
 use crate::skill::status::SkillStatusEntry;
@@ -46,7 +46,11 @@ pub(crate) fn mcp_to_entry(info: &McpServerInfo) -> ExtensionEntry {
 }
 
 pub(crate) fn plugin_to_entry(p: &PluginRecord) -> ExtensionEntry {
-    let mut e = base_entry(ExtensionKind::Plugin, &p.id, p.name.clone());
+    let mut e = base_entry(
+        ExtensionKind::Plugin,
+        &p.instance_key().selector(),
+        p.name.clone(),
+    );
     e.description = p.description.clone().unwrap_or_default();
     e.version = p.version.clone();
     e.enabled = p.status.is_active();
@@ -64,7 +68,10 @@ pub(crate) fn skill_to_entry(s: &SkillStatusEntry) -> ExtensionEntry {
 /// Best-effort: a failing or empty backend is logged and skipped — it never
 /// aborts, so a flaky MCP actor cannot blank the catalog or installed views.
 /// All calls are local (no network), so callers stay offline-capable.
-pub async fn collect_installed(mcp: Option<McpManagerHandle>) -> Vec<ExtensionEntry> {
+pub(crate) async fn collect_installed(
+    mcp: Option<McpManagerHandle>,
+    access: &crate::extension::plugin_target::PluginAccess,
+) -> Vec<ExtensionEntry> {
     let mut out = Vec::new();
 
     if let Some(mcp) = &mcp {
@@ -78,7 +85,13 @@ pub async fn collect_installed(mcp: Option<McpManagerHandle>) -> Vec<ExtensionEn
         if let Err(e) = mgr.ensure_discovered().await {
             tracing::warn!("collect_installed: failed to discover plugins: {e}");
         }
-        out.extend(mgr.list_plugin_records().await.iter().map(plugin_to_entry));
+        out.extend(
+            mgr.list_plugin_records()
+                .await
+                .iter()
+                .filter(|record| access.allows(&record.scope_key))
+                .map(plugin_to_entry),
+        );
     }
 
     crate::skill::ensure_shared_skill_system_initialized().await;
