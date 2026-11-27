@@ -528,13 +528,12 @@ mod disabled_tests {
     #[tokio::test]
     #[cfg(unix)]
     async fn disabled_delegate_never_starts_harness() {
-        use crate::capability::facade::{CapabilityFacade, Scope};
+        use crate::capability::facade::{Scope, Zahir};
         use crate::capability::ownership::OwnershipTree;
         use crate::capability::zahir_facade::ZahirFacade;
         use crate::executor::builtin_registry::{BuiltinToolConfig, BuiltinToolRegistry};
         use crate::executor::ToolRegistry;
-        use crate::tools::handlers::builtin::{register_builtin_routers, BuiltinRegistryRouter};
-        use crate::tools::traits::AlephToolDyn;
+        use crate::tools::handlers::builtin::register_builtin_routers;
         use crate::tools::ToolHandlerRegistry;
 
         let _home = crate::utils::paths::IsolatedAlephHome::new();
@@ -567,7 +566,7 @@ mod disabled_tests {
         )
         .await
         .unwrap();
-        let facade = ZahirFacade::new(registry, Arc::new(OwnershipTree::default()));
+        let facade = ZahirFacade::new(registry.clone(), Arc::new(OwnershipTree::default()));
         let snapshot = facade.describe(Scope::default());
         for name in names {
             assert!(snapshot
@@ -575,8 +574,9 @@ mod disabled_tests {
                 .iter()
                 .any(|descriptor| descriptor.id.name == name));
         }
-        let router = BuiltinRegistryRouter::new("acp_delegate".into(), builtin);
-        let error = router
+        let error = registry
+            .resolve("acp_delegate")
+            .expect("registered ACP delegate")
             .invoke(serde_json::json!({
                 "harness": "blocked", "prompt": "hello", "cwd": directory.path()
             }))
