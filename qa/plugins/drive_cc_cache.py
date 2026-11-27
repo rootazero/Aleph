@@ -51,7 +51,7 @@ def mcp_server_running():
     """Whether the plugin's MCP server process runs under THIS daemon: a
     descendant of the server pid whose command line names the mock (review
     M-4 — the spawn itself, not a catalog read that could precede it)."""
-    out = subprocess.run(["ps", "-axo", "pid=,ppid=,command="], capture_output=True, text=True).stdout
+    out = subprocess.run(["ps", "-wwaxo", "pid=,ppid=,command="], capture_output=True, text=True).stdout
     procs = []
     for line in out.splitlines():
         parts = line.split(None, 2)
@@ -205,17 +205,26 @@ async def first(rpc):
     res = await rpc.call("plugins.enable", {"name": PLUGIN})
     L.check("plugins.enable accepted", (res.get("result") or {}).get("ok") is True,
             json.dumps(res.get("error") or res.get("result"))[:200])
-    r, _ = await row(rpc)
+    # The daemon can accept enable before the MCP handshake completes. Wait
+    # for the actual runtime effects, including the command and child process.
+    deadline = time.monotonic() + 30
+    while True:
+        r, _ = await row(rpc)
+        command_live = SLASH in json.dumps(await rpc.call("commands.list", {}))
+        process_live = mcp_server_running()
+        if (r and r.get("status") == "loaded" and command_live and process_live
+                or time.monotonic() >= deadline):
+            break
+        await asyncio.sleep(0.25)
     L.log("plugins.list row ->", fields(r))
     L.check("enabled after the operator's verb", r is not None and r.get("enabled") is True
             and r.get("status") == "loaded", str(fields(r)))
     # One reader feeds the count and the spawn (P4.15 / D-1).
     n = r.get("mcp_servers_count") if r else None
     L.check("the row counts the one .mcp.json server (mcp_servers_count == 1)", n == 1, str(n))
-    cmds = json.dumps(await rpc.call("commands.list", {}))
-    L.check("the command is registered by the mount (no restart)", SLASH in cmds, f"payload {len(cmds)}B")
+    L.check("the command is registered by the mount (no restart)", command_live)
     await poll_echo(rpc, "the .mcp.json server (no aleph.runtime) mounted: *__qa_echo is in tools.catalog")
-    L.check("…and its process runs under this daemon", mcp_server_running())
+    L.check("…and its process runs under this daemon", process_live)
 
 
 async def second(rpc):

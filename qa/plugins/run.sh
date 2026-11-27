@@ -261,6 +261,19 @@ PY
     [ -n "$SRC" ] || { echo "  [FAIL] init --type $rt produced no directory"; RC=1; continue; }
     ( cd "$SRC" && "$CLI" plugin validate . >"$QA_ROOT/validate-$rt.log" 2>&1 ) \
       || { echo "  [FAIL] plugin validate rejected its own scaffold ($rt)"; cat "$QA_ROOT/validate-$rt.log"; RC=1; }
+    case "$rt" in
+    wasm)
+      toolchain=$(cd "$REPO" && rustup show active-toolchain | awk 'NR == 1 { print $1 }')
+      ( cd "$SRC" && CARGO_TARGET_DIR="$SRC/target" cargo +"$toolchain" build --target wasm32-wasip1 --release ) \
+        >"$QA_ROOT/build-$rt.log" 2>&1 \
+        || { echo "  [FAIL] could not build the WASM scaffold"; tail -30 "$QA_ROOT/build-$rt.log"; RC=1; continue; }
+      ;;
+    mcp)
+      ( cd "$SRC" && npm install --ignore-scripts --no-audit --no-fund ) \
+        >"$QA_ROOT/build-$rt.log" 2>&1 \
+        || { echo "  [FAIL] could not install MCP scaffold dependencies"; tail -30 "$QA_ROOT/build-$rt.log"; RC=1; continue; }
+      ;;
+    esac
     cp -R "$SRC" "$INSTALLED/qa-scaffold-$rt"
   done
 
