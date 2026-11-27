@@ -46,6 +46,22 @@ The orderly shutdown hook `shutdown_background_jobs` closes shell admission, req
 
 See [Shell tool and continuation](TOOL_SYSTEM.md#code-execution) and [sandbox execution](SANDBOX.md#execution-pipeline--执行顺序).
 
+## ACP harness 子进程 (ACP harness children)
+
+Aleph 启动对端 harness 子进程，让它作为 **ACP 客户端**的对面；Aleph 自己拥有这个子进程，并保存「本地键 ↔ 远端 ACP session ID」的关联。
+
+- **单所有者**：每个 `SessionKey`（harness + cwd + 可选 session name）在 `src/acp/manager/` 里只有一个 slot。同键的**启动与回收串行**，异键并行；只有 harness 注册仍然有效时才发布 live owner，所以已更新或已注销的 harness 不会留下孤儿子进程。
+- **停机语义**：显式关闭、显式替换与成功的 harness 更新/禁用/注销会回收子进程并清除关联（含仅落盘、无进程的记录）；被拒绝的配置变更保留关联。**服务停止**保留可恢复 ID，经共享启动资源排空写入者（`src/bin/aleph-server/commands/start/builder/startup_resources.rs`）后退出，重启时只经 `session/load` 恢复，不新建空白上下文。
+- **取消**：走独立的 `CancelHandle`（`src/acp/session.rs`），**不等待 prompt 锁**，直接打断正在运行的 turn；结果区分「已发出通知」与「无会话可取消」。
+- **准入**：`trust_level=disabled` 在 manager 准入处被拒，发生在任何子进程启动之前。
+
+Aleph spawns the peer harness child as the far side of an **ACP client** session. The manager in `src/acp/manager/` owns that child and the local-key ↔ remote-session-ID association.
+
+- **Single owner**: one slot per `SessionKey`. Starting and retiring the same key serialize while different keys progress, and a live owner is published only against a still-valid harness registration, so an updated or unregistered harness leaves no orphan child.
+- **Stop semantics**: explicit close, explicit replacement, and a successful harness update / disable / unregistration reap the child and clear the association (including disk-only records); a rejected configuration change keeps it. A **server stop** retains recoverable IDs and drains the persistence writer through the shared startup resources before exit, and a restart restores them through `session/load` only, never by creating a blank context.
+- **Cancel**: the independent `CancelHandle` in `src/acp/session.rs` does not wait for the prompt lock; it interrupts the running turn and distinguishes a sent notification from having no session to cancel.
+- **Admission**: `trust_level=disabled` is refused at the manager admission point, before any child starts.
+
 ## 浏览器引擎子进程 (Browser engine children)
 
 Aleph 自己 spawn 浏览器（2026-09-05 起 Chromium，2026-09-06 起还有 obscura），而 `std::process::Child`

@@ -2362,6 +2362,34 @@ BT-D-R4-22 的 DNS-pin 缺口是**结构性**的：crawl4ai / firecrawl 服务�
 
 **续轮验证状态**：全量 `--lib` **17,959 passed / 3 failed**（同三条 HEAD 既有）；clippy `--lib --bins` 零警告；`aleph-panel` check 绿。
 
+### 3.19 ACP 会话生命周期 (ACP Session Lifecycle · 2026-11-28)
+
+**状态**：✅ 已实现（出站客户端生命周期）。ACP 在 Aleph 里只是**客户端**：Aleph 启动对端 harness 子进程，本地保存「本地键 ↔ 远端 ACP session ID」的关联。本文只记录**现有入口**与**既有语义**；协议报文修正、文件系统隔离、跨调用方会话归属仍是独立契约。详见 [ACP 生命周期设计](../../superpowers/specs/2026-11-28-acp-session-lifecycle-design.md) 与 [实施计划](../../superpowers/plans/2026-11-28-acp-session-lifecycle.md)。
+
+**1. 现有入口 / Existing entry points** —— 三个正常入口共用同一套 manager 生命周期：
+- **模型工具**：`acp_delegate` / `acp_session_control` 经 `src/tools/registry.rs::ToolHandlerRegistry` 作为 Tool Capability 暴露与调用（注册见 `src/executor/builtin_registry/builder/constructor/agent_acp_tools.rs`，调度见 `src/executor/builtin_registry/registry/tool_registry_impl.rs`；工具实现 `src/builtin_tools/acp_tools.rs`）。
+- **Teams**：`src/teams/dispatcher/runner.rs::execute_acp_member_task` 用同一个 manager 发 `prompt_named`（`reuse_session=true`，保持成员连续性）。
+- **Gateway**：`acp.sessions.list` / `acp.sessions.cancel` / `acp.sessions.shutdown`，Admin 类方法（`src/gateway/method_census.rs`），实现 `src/gateway/handlers/acp_config.rs`，注册 `src/bin/aleph-server/commands/start/builder/handlers/settings.rs`。
+- **启动恢复**：`src/bin/aleph-server/commands/start/mod.rs` 装好 manager 后调用 `restore_sessions`。
+
+**2. 准入 / Admission** —— `trust_level=disabled` 在 manager 准入处（`src/acp/manager/harness_admin.rs`）以 `HarnessDenied` 被拒，发生在**任何子进程启动之前**；模型、Teams 与启动恢复走同一判定，因此禁用条目不会派生子进程。
+
+**3. 单所有者 / Single owner** —— 每个 `SessionKey`（harness + cwd + 可选 session name）一个 slot：同键的**启动与回收串行**，异键可并行；发布 live owner 前复检 harness 注册仍有效，注册已被更新或注销时旧进程不能发布（`src/acp/manager/lifecycle.rs`、`src/acp/manager/mod.rs`）。
+
+**4. 取消 / Cancel** —— `acp_session_control` 的 cancel 与 `acp.sessions.cancel` 走独立的 `CancelHandle`，**不等待 prompt 锁**，可直接打断正在进行的 turn；结果区分「已发出通知」与「无会话可取消」两种（`CancelDispatch::Sent` / `CancelDispatch::NoSession`，`src/acp/session.rs`）。
+
+**5. 恢复 / Restore** —— 已保存的远端 ID **只经 `session/load` 恢复**，不新建空白上下文；只有**显式替换**（原生 `acp_delegate` 的 `reuse_session=false`）才为已知记录开空白上下文。恢复失败保留远端 ID 与失败原因，快照以可选 `load_error` 字段暴露（`SessionSnapshot`，`src/acp/manager/mod.rs`）；后续复用可重试同一条 `session/load` 路径。
+
+**6. 关闭与停止 / Close and stop** —— 显式关闭（`acp.sessions.shutdown`）、显式替换、以及 harness 的成功更新/禁用/注销都会清除该 harness 的关联，**包括只有落盘记录、没有活进程**的条目；被拒绝的配置变更保留原关联。**服务停止**则相反：保留可恢复 ID，并经共享启动资源（`src/bin/aleph-server/commands/start/builder/startup_resources.rs`）排空持久化写入后退出（`AcpPersistence::close_and_await`，`src/acp/manager/persistence.rs`）。
+
+**7. 持久化与通知 / Persistence and notification** —— 沿用既有 `acp_sessions.json` 记录格式与单一写入者，原子写入走 `utils::atomic_io`。`acp.sessions.changed` 只是**重读信号**：它由已提交的内存状态变更触发，客户端据此重新 `acp.sessions.list`，文件才是重启后 `session/load` 的来源。
+
+**8. 验证 / Verification（意图路径，非本轮结果）** —— 生命周期意图验证位于 `src/acp/manager/tests.rs` 与 `tests/acp_lifecycle_e2e.rs`（后者由该生命周期实现分支引入）；写入者与排空意图验证位于 `src/acp/manager/persistence.rs` 的单元测试；Gateway 与工具调度意图验证位于 `src/bin/aleph-server/commands/start/builder/handlers/settings.rs` 与 `src/executor/builtin_registry/builder/constructor/agent_acp_tools.rs` 的既有 dispatch 测试面。本文只登记路径，**不声称这些测试已在本分支通过**。
+
+**边界 / Limits** —— 本切片覆盖出站客户端生命周期、本地关联记录与现有消费者。跨进程租约、共享队列 daemon、自动重投 prompt、完整事件日志、`session/resume` 协商与入站服务仍是后续设计；对端会话历史由对端管理，Aleph 只拥有本地关联与重连结果。
+
+English mirror: ACP is a client-side slice. Model tools (`acp_delegate`, `acp_session_control` through the `ToolHandlerRegistry` Capability surface), Teams (`execute_acp_member_task`) and the Admin-class Gateway methods (`acp.sessions.list/cancel/shutdown`) all drive one `AcpAdapterManager`. `trust_level=disabled` is refused at the shared manager admission point before any child starts. One owner per `SessionKey`: starts and retirements for the same key serialize while unrelated keys progress, and a live owner is published only against a still-valid harness registration. Cancellation uses the independent `CancelHandle`, bypasses the prompt lock, and distinguishes a sent notification from no session to cancel. A saved remote ID is restored through `session/load` only; a blank context requires an explicit replacement. A failed load keeps the remote ID and exposes the reason as the optional `load_error` snapshot field. Explicit close, explicit replacement and successful harness update/disable/unregistration clear that harness's associations, including records without a process; a rejected configuration change keeps them. A server stop instead retains recoverable IDs and drains the persistence writer through the shared startup resources. `acp.sessions.changed` is a refetch signal, not a data channel; `acp_sessions.json` stays the source for load after restart. The listed test paths are the intended verification surfaces; this entry does not claim any runtime or test-pass result.
+
 ## 4. Loop 层
 
 ### 4.1 Goal 命令 (Standing Goal)
