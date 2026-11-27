@@ -605,10 +605,10 @@ mod registered_tool_tests {
         )
         .await
         .unwrap();
-        let facade = Arc::new(ZahirFacade::new(
+        let facade = ZahirFacade::new(
             registry.as_ref().clone(),
             Arc::new(OwnershipTree::default()),
-        ));
+        );
         let snapshot = facade.describe(Scope::default());
         for name in names {
             assert!(snapshot
