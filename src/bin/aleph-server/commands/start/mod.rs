@@ -1275,7 +1275,9 @@ async fn start_server_body(
             }
 
             let manager = Arc::new(AcpAdapterManager::from_entries(entries));
-            let _event_tx = alephcore::acp::manager::wire_persistence(&manager).await;
+            let (persistence, persisted) =
+                alephcore::acp::manager::wire_persistence(&manager).await;
+            startup_resources.install_acp(manager.clone(), persistence);
 
             // Wire the gateway broadcast hook so panels subscribed to
             // `acp.sessions.changed` get live re-fetch signals on every
@@ -1295,6 +1297,10 @@ async fn start_server_body(
 
             if !args.daemon {
                 println!("ACP harness manager initialized");
+            }
+            let restored = manager.restore_sessions(persisted).await;
+            if !restored.is_empty() {
+                tracing::info!(count = restored.len(), "Restored ACP sessions from disk");
             }
             Some(manager)
         } else {
@@ -4102,7 +4108,7 @@ async fn start_server_body(
         }
     }
     if let Err(error) = startup_resources.cleanup().await {
-        tracing::warn!(%error, "Memory and projection cleanup failed; continuing sibling teardown");
+        tracing::warn!(%error, "Startup resource cleanup failed; continuing sibling teardown");
     }
     // Cancel config watcher background task if it was spawned
     if let Some(handle) = config_watcher_handle {
@@ -4286,10 +4292,6 @@ async fn start_server_body(
                 tracing::warn!(%error, "heartbeat timer loop: join error after shutdown");
             }
         }
-    }
-
-    if let Some(ref manager) = acp_manager {
-        manager.shutdown_all().await;
     }
 
     if let Some(broadcaster) = auth_bundle.mdns_broadcaster {

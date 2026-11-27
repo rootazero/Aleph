@@ -6,6 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Keeps acquired startup resources reachable until common cleanup completes.
 pub(in crate::commands::start) struct StartupResources {
+    acp_manager: Option<Arc<alephcore::acp::manager::AcpAdapterManager>>,
+    acp_persistence: Option<alephcore::acp::manager::AcpPersistence>,
+    acp_drain:
+        Option<std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AlephError>> + Send>>>,
     memory: Option<Arc<MemoryRuntime>>,
     projection_host: Option<Arc<ProjectionHost>>,
     ownership_tree: Option<Arc<alephcore::capability::ownership::OwnershipTree>>,
@@ -20,6 +24,9 @@ pub(in crate::commands::start) struct StartupResources {
 impl StartupResources {
     pub(in crate::commands::start) fn new() -> Self {
         Self {
+            acp_manager: None,
+            acp_persistence: None,
+            acp_drain: None,
             memory: None,
             projection_host: None,
             ownership_tree: None,
@@ -30,6 +37,15 @@ impl StartupResources {
             pty: None,
             cleanup_called: AtomicBool::new(false),
         }
+    }
+
+    pub(in crate::commands::start) fn install_acp(
+        &mut self,
+        manager: Arc<alephcore::acp::manager::AcpAdapterManager>,
+        persistence: alephcore::acp::manager::AcpPersistence,
+    ) {
+        self.acp_manager = Some(manager);
+        self.acp_persistence = Some(persistence);
     }
 
     pub(in crate::commands::start) fn install_memory(&mut self, runtime: Arc<MemoryRuntime>) {
@@ -83,6 +99,19 @@ impl StartupResources {
             policy.stop_admission();
         }
         let mut observation_failure = None;
+        if let Some(manager) = &self.acp_manager {
+            manager.shutdown_all().await;
+        }
+        if self.acp_drain.is_none() {
+            if let Some(writer) = self.acp_persistence.take() {
+                self.acp_drain = Some(Box::pin(writer.close_and_await()));
+            }
+        }
+        if let Some(drain) = self.acp_drain.as_mut() {
+            // Retain the join future if the cleanup caller is cancelled.
+            observation_failure = drain.await.err();
+            self.acp_drain = None;
+        }
         if let Some(host) = &self.projection_host {
             if host.specials().close_ui_surfaces().await.is_err() {
                 observation_failure = Some(AlephError::other("UI source cleanup failed"));

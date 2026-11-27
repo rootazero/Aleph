@@ -1,179 +1,165 @@
-//! Harness registration / CRUD / config + session restore + snapshots.
+//! Harness registrations, saved associations and Gateway snapshots.
 
 use std::collections::HashMap;
 
-use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::warn;
 
-use super::{AcpAdapterManager, SessionEntry, SessionKey, SessionSnapshot};
+use super::{
+    session_closed, AcpAdapterManager, HarnessRegistration, ManagerState, SessionKey,
+    SessionSnapshot,
+};
 use crate::acp::adapter::{AcpAdapter, AdapterMode};
 use crate::acp::adapters::{CustomAcpAdapter, GenericAcpAdapter};
-use crate::acp::protocol::{AcpErrorCode, AcpOperationError};
-use crate::config::types::acp::AcpAdapterEntry;
-use crate::error::Result;
-use crate::sync_primitives::Arc;
+use crate::acp::protocol::{AcpErrorCode, AcpOperationError, AcpSessionState};
+use crate::acp::session::PersistedAcpSession;
+use crate::config::types::acp::{AcpAdapterEntry, TrustLevel};
+use crate::error::{AlephError, Result};
+use crate::sync_primitives::{Arc, Mutex};
+
+impl HarnessRegistration {
+    fn new(id: &str, config: AcpAdapterEntry) -> Self {
+        let adapter = config
+            .enabled
+            .then(|| AcpAdapterManager::build_harness(id, &config));
+        Self { config, adapter }
+    }
+}
 
 impl AcpAdapterManager {
-    /// Resolve launch policy and adapter from the same registration.
-    /// Registration locks are released before the caller starts a subprocess.
-    pub async fn admitted_adapter(&self, harness_id: &str) -> Result<Arc<dyn AcpAdapter>> {
-        let adapters = self.adapters.read().await;
-        let configs = self.configs.read().await;
-        let harness = adapters.get(harness_id).ok_or_else(|| {
-            AcpOperationError::new(
-                AcpErrorCode::HarnessNotFound,
-                format!("Unknown ACP harness: '{harness_id}'"),
-            )
-        })?;
-        let config = configs.get(harness_id).ok_or_else(|| {
-            AcpOperationError::new(
-                AcpErrorCode::HarnessNotFound,
-                format!("Missing ACP harness configuration: '{harness_id}'"),
-            )
-        })?;
-        if config.trust_level == crate::config::types::acp::TrustLevel::Disabled {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::from_entries(AcpAdapterEntry::all_presets().into_iter().collect())
+    }
+
+    #[must_use]
+    pub fn from_entries(entries: HashMap<String, AcpAdapterEntry>) -> Self {
+        let registrations = entries
+            .into_iter()
+            .filter(|(_, entry)| entry.enabled)
+            .map(|(id, entry)| {
+                let registration = HarnessRegistration::new(&id, entry);
+                (id, registration)
+            })
+            .collect();
+        Self {
+            state: Arc::new(Mutex::new(ManagerState {
+                registrations,
+                ..ManagerState::default()
+            })),
+        }
+    }
+
+    pub(super) fn build_harness(id: &str, entry: &AcpAdapterEntry) -> Arc<dyn AcpAdapter> {
+        if entry.preset.is_some() {
+            Arc::new(GenericAcpAdapter::from_entry(entry))
+        } else {
+            Arc::new(CustomAcpAdapter::new(id.to_owned(), entry.clone()))
+        }
+    }
+
+    pub(super) fn adapter(&self, id: &str) -> Option<Arc<dyn AcpAdapter>> {
+        self.state().registrations.get(id)?.adapter.clone()
+    }
+
+    pub(super) async fn admitted_adapter(&self, id: &str) -> Result<Arc<dyn AcpAdapter>> {
+        let state = self.state();
+        Self::admitted_registration(&state, id).cloned()
+    }
+
+    fn admitted_registration<'a>(
+        state: &'a ManagerState,
+        id: &str,
+    ) -> Result<&'a Arc<dyn AcpAdapter>> {
+        if state.stopped {
+            return Err(session_closed());
+        }
+        let registration = state
+            .registrations
+            .get(id)
+            .ok_or_else(|| unknown_harness(id))?;
+        let adapter = registration
+            .adapter
+            .as_ref()
+            .ok_or_else(|| unknown_harness(id))?;
+        if registration.config.trust_level == TrustLevel::Disabled {
             return Err(AcpOperationError::new(
                 AcpErrorCode::HarnessDenied,
-                format!("ACP harness '{harness_id}' is disabled (trust_level=disabled)"),
+                format!("Delegation to ACP harness '{id}' is disabled"),
             )
             .into());
         }
-        Ok(Arc::clone(harness))
+        Ok(adapter)
     }
 
-    /// Create a manager with all default harnesses enabled.
-    #[must_use]
-    pub fn new() -> Self {
-        let entries: HashMap<String, AcpAdapterEntry> =
-            AcpAdapterEntry::all_presets().into_iter().collect();
-        Self::from_entries(entries)
-    }
-
-    /// Create a manager from a map of harness entries.
-    ///
-    /// For each entry where `enabled == true`:
-    /// - If `entry.preset` matches a known preset, uses the dedicated harness impl
-    ///   with `entry.executable` as override.
-    /// - Otherwise, uses `CustomAcpAdapter`.
-    #[must_use]
-    pub fn from_entries(entries: HashMap<String, AcpAdapterEntry>) -> Self {
-        let mut adapters: HashMap<String, Arc<dyn AcpAdapter>> = HashMap::new();
-        let mut configs: HashMap<String, AcpAdapterEntry> = HashMap::new();
-
-        for (id, entry) in entries {
-            if !entry.enabled {
-                continue;
-            }
-            let harness = Self::build_harness(&id, &entry);
-            adapters.insert(id.clone(), harness);
-            configs.insert(id, entry);
+    pub(super) fn check_registration(
+        state: &ManagerState,
+        id: &str,
+        adapter: &Arc<dyn AcpAdapter>,
+    ) -> Result<()> {
+        if !Arc::ptr_eq(Self::admitted_registration(state, id)?, adapter) {
+            return Err(session_closed());
         }
-
-        Self {
-            adapters: RwLock::new(adapters),
-            configs: RwLock::new(configs),
-            sessions: RwLock::new(HashMap::new()),
-            persistence_hook: RwLock::new(None),
-            gateway_change_hook: RwLock::new(None),
-        }
+        Ok(())
     }
 
-    /// Factory: build the right harness implementation from an entry.
-    pub(super) fn build_harness(id: &str, entry: &AcpAdapterEntry) -> Arc<dyn AcpAdapter> {
-        if entry.preset.is_some() {
-            // All preset harnesses use the generic configuration-driven adapter
-            Arc::new(GenericAcpAdapter::from_entry(entry))
-        } else {
-            // Custom or unknown preset — use CustomAcpAdapter
-            Arc::new(CustomAcpAdapter::new(id.to_string(), entry.clone()))
-        }
-    }
-
-    // =========================================================================
-    // Query methods (all async due to RwLock)
-    // =========================================================================
-
-    /// List registered harness IDs.
-    ///
-    /// Test-only: production reads the registry through
-    /// [`Self::list_configs`], which carries each harness's config as well.
     #[cfg(test)]
     pub async fn harness_ids(&self) -> Vec<String> {
-        let adapters = self.adapters.read().await;
-        let mut ids: Vec<String> = adapters.keys().cloned().collect();
+        let mut ids: Vec<_> = self
+            .state()
+            .registrations
+            .iter()
+            .filter(|(_, registration)| registration.adapter.is_some())
+            .map(|(id, _)| id.clone())
+            .collect();
         ids.sort();
         ids
     }
 
-    /// Check whether a harness with the given ID is registered.
     pub async fn has_harness(&self, id: &str) -> bool {
-        let adapters = self.adapters.read().await;
-        adapters.contains_key(id)
+        self.adapter(id).is_some()
     }
 
-    /// Get the display name for a registered harness.
     pub async fn display_name(&self, id: &str) -> Option<String> {
-        let adapters = self.adapters.read().await;
-        adapters.get(id).map(|h| h.display_name().to_string())
+        self.adapter(id)
+            .map(|adapter| adapter.display_name().to_owned())
     }
 
-    /// Get the execution mode for a registered harness.
     pub async fn harness_mode(&self, id: &str) -> Option<AdapterMode> {
-        let adapters = self.adapters.read().await;
-        adapters.get(id).map(|h| h.mode())
+        self.adapter(id).map(|adapter| adapter.mode())
     }
 
-    /// Return IDs of harnesses whose executables are available on this system.
     pub async fn available_harnesses(&self) -> Vec<String> {
-        // Clone Arc refs under brief read lock, then check availability without holding the lock.
-        // Each is_available() can take up to 5s — holding the lock would block all writers.
-        let snapshot: Vec<(String, Arc<dyn AcpAdapter>)> = {
-            let adapters = self.adapters.read().await;
-            adapters
-                .iter()
-                .map(|(id, h)| (id.clone(), Arc::clone(h)))
-                .collect()
-        };
-
-        // Run all availability probes concurrently with `join_all`. The
-        // previous serial loop blocked wall-clock for N × 5s on N harnesses,
-        // which dragged gateway startup and health checks well beyond their
-        // budget.
-        let results = futures::future::join_all(
-            snapshot
-                .into_iter()
-                .map(|(id, adapter)| async move { (id, adapter.is_available().await) }),
-        )
-        .await;
-        let mut available: Vec<String> = results
-            .into_iter()
-            .filter_map(|(id, ok)| ok.then_some(id))
+        let adapters: Vec<_> = self
+            .state()
+            .registrations
+            .iter()
+            .filter_map(|(id, registration)| {
+                registration
+                    .adapter
+                    .clone()
+                    .map(|adapter| (id.clone(), adapter))
+            })
             .collect();
+        let mut available: Vec<_> = futures::future::join_all(
+            adapters
+                .into_iter()
+                .map(|(id, adapter)| async move { adapter.is_available().await.then_some(id) }),
+        )
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
         available.sort();
         available
     }
 
-    /// Check availability of a single harness by ID.
     pub async fn is_harness_available(&self, id: &str) -> bool {
-        // Clone Arc ref under brief read lock, then check without holding the lock.
-        let harness = {
-            let adapters = self.adapters.read().await;
-            adapters.get(id).map(Arc::clone)
-        };
-        match harness {
-            Some(h) => h.is_available().await,
+        match self.adapter(id) {
+            Some(adapter) => adapter.is_available().await,
             None => false,
         }
     }
 
-    // =========================================================================
-    // Dynamic management
-    // =========================================================================
-
-    /// Register a new harness at runtime.
-    ///
-    /// Lock ordering: harnesses → configs
-    /// (no sessions lock needed — new harness has no sessions yet)
     pub async fn register_harness(&self, id: String, entry: AcpAdapterEntry) -> Result<()> {
         if !entry.enabled {
             return Err(AcpOperationError::new(
@@ -182,346 +168,177 @@ impl AcpAdapterManager {
             )
             .into());
         }
-
-        let harness = Self::build_harness(&id, &entry);
-
-        // For a new harness, we only need harnesses + configs (no sessions to kill).
-        // This is safe: register only inserts into harnesses/configs, and no other
-        // code path holds adapters.write while waiting on configs.write.
-        let mut adapters = self.adapters.write().await;
-        let mut configs = self.configs.write().await;
-
-        if adapters.contains_key(&id) {
+        let registration = HarnessRegistration::new(&id, entry);
+        let mut state = self.state();
+        if state.stopped {
+            return Err(session_closed());
+        }
+        if state.registrations.contains_key(&id) {
             return Err(AcpOperationError::new(
                 AcpErrorCode::HarnessDenied,
                 format!("Harness '{id}' is already registered. Use update_harness to modify it."),
             )
             .into());
         }
-
-        info!(harness_id = %id, "Registering new ACP harness");
-        adapters.insert(id.clone(), harness);
-        configs.insert(id, entry);
+        state.registrations.insert(id, registration);
         Ok(())
     }
 
-    /// Unregister a harness at runtime.
-    ///
-    /// Rejects preset harness IDs — use `update_harness` to disable them instead.
-    ///
-    /// Lock ordering: sessions → harnesses → configs
-    /// (matches `update_harness` and `ensure_session` to prevent deadlocks)
     pub async fn unregister_harness(&self, id: &str) -> Result<()> {
         if AcpAdapterEntry::is_preset_id(id) {
             return Err(AcpOperationError::new(
                 AcpErrorCode::HarnessDenied,
-                format!(
-                    "Cannot unregister preset harness '{id}'. Disable it via update_harness instead."
-                ),
-            )
-            .into());
+                format!("Cannot unregister preset harness '{id}'. Disable it via update_harness instead."),
+            ).into());
         }
-
-        // Acquire locks in consistent order: sessions → harnesses → configs
-        let mut sessions = self.sessions.write().await;
-        let mut adapters = self.adapters.write().await;
-        let mut configs = self.configs.write().await;
-
-        if adapters.remove(id).is_none() {
-            // A previously disabled harness has no adapter entry but still owns
-            // a config record. Removing the orphan config is what the user
-            // asked `unregister_harness` to do — fail only when neither side
-            // knows about the id.
-            if configs.remove(id).is_none() {
-                return Err(AcpOperationError::new(
-                    AcpErrorCode::HarnessNotFound,
-                    format!("Harness '{id}' is not registered"),
-                )
-                .into());
+        let reservations = {
+            let mut state = self.state();
+            if state.stopped {
+                return Err(session_closed());
             }
-        } else {
-            configs.remove(id);
-        }
-
-        // Detach all active sessions for this harness (all cwds) from the map,
-        // then release every lock BEFORE killing. `kill()` awaits the OS; doing
-        // it under the sessions/adapters/configs write locks (and across the
-        // per-session mutex, possibly held by a long prompt) would freeze the
-        // whole ACP subsystem for the prompt's lifetime.
-        let removed: Vec<(SessionKey, SessionEntry)> = sessions
-            .iter()
-            .filter(|(k, _)| k.harness_id == id)
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        for (key, _) in &removed {
-            sessions.remove(key);
-        }
-        drop(configs);
-        drop(adapters);
-        drop(sessions);
-        self.kill_and_emit_removed(removed).await;
-
-        info!(harness_id = %id, "Unregistered ACP harness");
-        Ok(())
+            if state.registrations.remove(id).is_none() {
+                return Err(unknown_harness(id));
+            }
+            self.withdraw_slots(&mut state, Some(id), true)
+        };
+        self.finish_retirements(reservations).await
     }
 
-    /// Update an existing harness configuration.
-    ///
-    /// Replaces the harness instance and config. Kills any active session.
-    ///
-    /// Lock ordering: sessions → harnesses → configs
-    /// (matches `ensure_session` which acquires sessions first, then harnesses)
     pub async fn update_harness(&self, id: &str, entry: AcpAdapterEntry) -> Result<()> {
-        // Acquire locks in consistent order: sessions → harnesses → configs
-        let mut sessions = self.sessions.write().await;
-        let mut adapters = self.adapters.write().await;
-        let mut configs = self.configs.write().await;
-
-        // Refuse to create a brand-new harness via the update path — that is
-        // the job of `register_harness`, which validates duplicates and the
-        // enabled-flag invariant. Without this check, a typo in the harness id
-        // (or a stale UI sending the wrong id) would silently insert a new
-        // config and a new adapter instance.
-        if !adapters.contains_key(id) && !configs.contains_key(id) {
-            return Err(AcpOperationError::new(
-                AcpErrorCode::HarnessNotFound,
-                format!("Harness '{id}' is not registered; use register_harness instead"),
-            )
-            .into());
-        }
-
-        // Helper: remove all sessions for this harness_id (across all cwds)
-        let remove_sessions = |sessions: &mut HashMap<SessionKey, SessionEntry>,
-                               harness_id: &str| {
-            let keys_to_remove: Vec<SessionKey> = sessions
-                .keys()
-                .filter(|k| k.harness_id == harness_id)
-                .cloned()
-                .collect();
-            let mut removed = Vec::new();
-            for key in keys_to_remove {
-                if let Some(entry) = sessions.remove(&key) {
-                    removed.push((key, entry));
-                }
+        let registration = HarnessRegistration::new(id, entry);
+        let reservations = {
+            let mut state = self.state();
+            if state.stopped {
+                return Err(session_closed());
             }
-            removed
+            let existing = state
+                .registrations
+                .get_mut(id)
+                .ok_or_else(|| unknown_harness(id))?;
+            *existing = registration;
+            self.withdraw_slots(&mut state, Some(id), true)
         };
-
-        if !entry.enabled {
-            // Disable: remove harness but keep config
-            adapters.remove(id);
-            configs.insert(id.to_string(), entry);
-
-            // Detach sessions, then release all locks before killing (kill()
-            // awaits the OS and may block on a per-session mutex held by a
-            // long-running prompt — don't do it under the write locks).
-            let removed = remove_sessions(&mut sessions, id);
-            drop(configs);
-            drop(adapters);
-            drop(sessions);
-            self.kill_and_emit_removed(removed).await;
-
-            info!(harness_id = %id, "Disabled ACP harness");
-            return Ok(());
-        }
-
-        let harness = Self::build_harness(id, &entry);
-        adapters.insert(id.to_string(), harness);
-        configs.insert(id.to_string(), entry);
-
-        // Detach any active sessions so they will be respawned with the new
-        // config, then release all locks before killing (see note above).
-        let removed = remove_sessions(&mut sessions, id);
-        drop(configs);
-        drop(adapters);
-        drop(sessions);
-        self.kill_and_emit_removed(removed).await;
-
-        info!(harness_id = %id, "Updated ACP harness");
-        Ok(())
+        self.finish_retirements(reservations).await
     }
 
-    /// Get the config entry for a specific harness.
     pub async fn get_config(&self, id: &str) -> Option<AcpAdapterEntry> {
-        let configs = self.configs.read().await;
-        configs.get(id).cloned()
+        self.state()
+            .registrations
+            .get(id)
+            .map(|registration| registration.config.clone())
     }
 
-    /// List all config entries as (id, entry) pairs.
     pub async fn list_configs(&self) -> Vec<(String, AcpAdapterEntry)> {
-        let configs = self.configs.read().await;
-        let mut result: Vec<(String, AcpAdapterEntry)> = configs
+        let mut configs: Vec<_> = self
+            .state()
+            .registrations
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(id, registration)| (id.clone(), registration.config.clone()))
             .collect();
-        result.sort_by(|a, b| a.0.cmp(&b.0));
-        result
+        configs.sort_by(|a, b| a.0.cmp(&b.0));
+        configs
     }
 
-    /// Set the persistence hook for session state changes.
     pub async fn set_persistence_hook(&self, hook: crate::acp::PersistenceHook) {
-        let mut h = self.persistence_hook.write().await;
-        *h = Some(hook);
+        self.state().persistence_hook = Some(hook);
     }
 
-    /// Set the gateway broadcast hook fired on every pool mutation. Used to
-    /// publish `acp.sessions.changed` so panels can re-fetch live.
     pub async fn set_gateway_change_hook(&self, hook: crate::acp::GatewayChangeHook) {
-        let mut h = self.gateway_change_hook.write().await;
-        *h = Some(hook);
+        self.state().gateway_change_hook = Some(hook);
     }
 
-    /// Emit a persistence event AND fan out to the gateway broadcast hook.
-    /// Both consumers are independent — either may be unset.
-    pub(super) async fn emit_persistence_event(&self, event: crate::acp::AcpSessionEvent) {
-        // Notify the gateway first; it's payload-free so re-fetches don't
-        // race the disk write. The gateway hook is cheap (broadcast send).
-        let notify = {
-            let gh = self.gateway_change_hook.read().await;
-            gh.clone()
+    /// Seed all associations before using normal native admission to load them.
+    /// A failed load leaves its remote ID available for a later retry or close.
+    pub async fn restore_sessions(&self, persisted: Vec<PersistedAcpSession>) -> Vec<String> {
+        let keys = {
+            let mut state = self.state();
+            if state.stopped {
+                return Vec::new();
+            }
+            let mut keys = Vec::new();
+            for record in persisted {
+                let key = SessionKey::with_name(
+                    &record.harness_id,
+                    &record.cwd,
+                    record.session_name.as_deref(),
+                );
+                let slot = state.slots.entry(key.clone()).or_default();
+                if slot.live.is_none() && slot.saved_id.is_none() && !slot.retiring {
+                    slot.saved_id = Some(record.acp_session_id);
+                    keys.push((key, Arc::clone(&slot.epoch)));
+                }
+            }
+            if !keys.is_empty() {
+                state.publish(None);
+            }
+            keys
         };
-        if let Some(n) = notify {
-            n();
-        }
-        let hook = self.persistence_hook.read().await;
-        if let Some(ref h) = *hook {
-            h(event);
-        }
-    }
-
-    /// Kill every entry in `removed` and emit an `AcpSessionEvent::Removed`
-    /// for each so persistence + gateway broadcast stay in sync. The caller
-    /// must have already dropped any outer write locks before calling — this
-    /// method acquires the per-session mutex (which may block on a long prompt)
-    /// and must NOT run under the sessions/adapters/configs map locks. See
-    /// `unregister_harness` / `update_harness` for the lock-release pattern.
-    async fn kill_and_emit_removed(&self, removed: Vec<(SessionKey, SessionEntry)>) {
-        for (_, entry) in &removed {
-            let mut session = entry.session.lock().await;
-            session.kill().await;
-        }
-        for (key, _) in removed {
-            // Compute all fields before any partial move so the borrow
-            // checker doesn't see key as half-moved when session_name_opt
-            // borrows the name field.
-            let session_name = key.session_name_opt().map(str::to_owned);
-            let harness_id = key.harness_id;
-            let cwd = key.cwd.to_string_lossy().into_owned();
-            self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                harness_id,
-                cwd,
-                session_name,
-            })
-            .await;
-        }
-    }
-
-    /// Restore sessions from persisted state. Returns list of successfully restored harness IDs.
-    pub async fn restore_sessions(
-        &self,
-        persisted: Vec<crate::acp::session::PersistedAcpSession>,
-    ) -> Vec<String> {
         let mut restored = Vec::new();
-        for entry in persisted {
-            let key =
-                SessionKey::with_name(&entry.harness_id, &entry.cwd, entry.session_name.as_deref());
-
-            // Clone Arc ref under brief read lock, then spawn without holding it.
-            // spawn_session may take seconds (process startup + initialize handshake).
-            let harness = match self.admitted_adapter(&entry.harness_id).await {
-                Ok(harness) => harness,
+        for (key, epoch) in keys {
+            let result = async {
+                let adapter = self.admitted_adapter(&key.harness_id).await?;
+                super::lifecycle::require_mode(&*adapter, &key.harness_id, AdapterMode::NativeAcp)?;
+                self.acquire_owner(key.clone(), adapter, false, false, Some(&epoch))
+                    .await
+            }
+            .await;
+            match result {
+                Ok(_) => restored.push(key.harness_id),
                 Err(error) => {
-                    warn!(harness_id = %entry.harness_id, %error, "Restore admission refused; retaining saved session");
-                    continue;
-                }
-            };
-            // read lock dropped — writers can proceed while we spawn
-
-            let mut session = match harness.spawn_session(Some(&entry.cwd)).await {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!(harness_id = %entry.harness_id, error = %e, "Failed to spawn for restore");
-                    continue;
-                }
-            };
-
-            let timeout = harness.build_config(Some(&entry.cwd)).timeout;
-            if session
-                .load_acp_session(&entry.acp_session_id, &entry.cwd, timeout)
-                .await
-                .is_err()
-            {
-                if let Err(e) = session.create_acp_session(&entry.cwd, timeout).await {
-                    warn!(harness_id = %entry.harness_id, error = %e, "Failed to create new session on restore");
-                    continue;
+                    warn!(harness = %key.harness_id, %error, "ACP session restore failed")
                 }
             }
-
-            info!(harness_id = %entry.harness_id, "Restored ACP session");
-            // Double-check under the sessions write lock: a concurrent user-facing
-            // `prompt_named` may have already populated this slot while we were
-            // spawning outside any lock. Mirror the acquire_live_entry pattern:
-            // if a different live entry is present, drop the freshly-spawned one
-            // rather than overwriting (which would kill the live subprocess via
-            // the overwritten SessionEntry's Drop). See ACP-R4-01.
-            {
-                let mut sessions = self.sessions.write().await;
-                if sessions.contains_key(&key) {
-                    warn!(
-                        harness_id = %entry.harness_id,
-                        cwd = ?entry.cwd,
-                        "Restored session slot already populated by a live entry; \
-                         discarding freshly-spawned restore"
-                    );
-                    session.kill().await;
-                    continue;
-                }
-                sessions.insert(key, SessionEntry::new(session));
-            }
-            restored.push(entry.harness_id);
         }
         restored
     }
 
-    /// Snapshot of every pooled session for diagnostics + panel display.
-    ///
-    /// Acquires a brief lock per entry to read state. Does NOT block a
-    /// running prompt — uses `try_lock` and falls back to `Busy` when held.
+    /// Snapshot without waiting for an active prompt to release the session.
     pub async fn list_sessions(&self) -> Vec<SessionSnapshot> {
-        let entries: Vec<(SessionKey, SessionEntry)> = {
-            let sessions = self.sessions.read().await;
-            sessions
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
-        };
-        let mut out = Vec::with_capacity(entries.len());
-        for (key, entry) in entries {
-            let (alive, state, sid) = match entry.session.try_lock() {
-                Ok(mut s) => (s.is_alive(), s.state(), s.acp_session_id()),
-                Err(_) => {
-                    // Lock held by another task (likely an in-flight prompt).
-                    // The session is actively in use, so report alive=true.
-                    // State is Busy because we can't read the actual state
-                    // without blocking the caller.
-                    (true, crate::acp::protocol::AcpSessionState::Busy, None)
-                }
+        let state = self.state();
+        let mut snapshots = Vec::new();
+        for (key, slot) in &state.slots {
+            let (alive, session_state) = match slot.live.as_ref() {
+                Some(entry) if !entry.closed.is_cancelled() => match entry.session.try_lock() {
+                    Ok(mut session) => {
+                        let alive = session.is_alive();
+                        (
+                            alive,
+                            if alive {
+                                session.state()
+                            } else {
+                                AcpSessionState::Error
+                            },
+                        )
+                    }
+                    Err(_) => (true, AcpSessionState::Busy),
+                },
+                _ if slot.saved_id.is_some() => (false, AcpSessionState::Error),
+                _ => continue,
             };
-            out.push(SessionSnapshot {
+            snapshots.push(SessionSnapshot {
                 harness_id: key.harness_id.clone(),
                 cwd: key.cwd.to_string_lossy().into_owned(),
                 session_name: key.session_name_opt().map(str::to_owned),
-                acp_session_id: sid,
+                acp_session_id: slot.saved_id.clone(),
                 alive,
-                state,
+                state: session_state,
+                load_error: slot.load_failure.clone(),
             });
         }
-        out.sort_by(|a, b| {
+        snapshots.sort_by(|a, b| {
             a.harness_id
                 .cmp(&b.harness_id)
                 .then(a.cwd.cmp(&b.cwd))
                 .then(a.session_name.cmp(&b.session_name))
         });
-        out
+        snapshots
     }
+}
+
+fn unknown_harness(id: &str) -> AlephError {
+    AcpOperationError::new(
+        AcpErrorCode::HarnessNotFound,
+        format!("Unknown ACP harness: '{id}'"),
+    )
+    .into()
 }

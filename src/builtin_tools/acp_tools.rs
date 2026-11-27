@@ -522,29 +522,186 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod disabled_tests {
+#[cfg(all(test, unix))]
+mod registered_tool_tests {
     use super::*;
+    use crate::approval::tool_call::{with_call_identity, CallIdentity};
+    use crate::capability::facade::{Scope, Zahir};
+    use crate::capability::ownership::OwnershipTree;
+    use crate::capability::zahir_facade::ZahirFacade;
+    use crate::config::types::{acp::AcpAdapterEntry, policies::ExecTier};
+    use crate::executor::builtin_registry::{BuiltinToolConfig, BuiltinToolRegistry};
+    use crate::executor::ToolRegistry;
+    use crate::tools::adapters::McpRegistryTool;
+    use crate::tools::handlers::builtin::register_builtin_routers;
+    use crate::tools::runtime::LoopToolRegistry;
+    use crate::tools::scoped::ScopedToolService;
+    use crate::tools::service::ToolService;
+    use crate::tools::turn_context::TurnContext;
+    use crate::tools::ToolHandlerRegistry;
+    use serde_json::json;
+    use std::time::Duration;
+
+    async fn dispatch(
+        service: &ScopedToolService,
+        tool: &str,
+        call_id: &str,
+        input: serde_json::Value,
+    ) -> std::result::Result<crate::tools::service::ToolOutput, crate::tools::service::ToolError>
+    {
+        with_call_identity(
+            Some(CallIdentity {
+                turn_id: crate::session::events::TurnId::nil(),
+                call_id: call_id.into(),
+            }),
+            service.execute(tool, input),
+        )
+        .await
+    }
+
     #[tokio::test]
-    #[cfg(unix)]
-    async fn disabled_delegate_never_starts_harness() {
+    async fn registered_acp_tools_enforce_admission_and_cancel_a_live_prompt() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let directory = tempfile::tempdir().unwrap();
         let marker = directory.path().join("started");
-        let entry = crate::config::types::acp::AcpAdapterEntry {
+        let peer = directory.path().join("peer.py");
+        std::fs::write(
+            &peer,
+            include_str!("../../tests/fixtures/acp_lifecycle_peer.py"),
+        )
+        .unwrap();
+        let blocked = AcpAdapterEntry {
             executable: Some("/bin/sh".into()),
             args: vec!["-c".into(), format!("touch '{}'; exit 1", marker.display())],
             enabled: true,
             trust_level: TrustLevel::Disabled,
             ..Default::default()
         };
-        let tool = AcpDelegateTool::new(Arc::new(AcpAdapterManager::from_entries(
-            std::collections::HashMap::from([("blocked".into(), entry)]),
-        )));
-        let args = serde_json::from_value(serde_json::json!({
-            "harness": "blocked", "prompt": "hello", "cwd": directory.path()
+        let live: AcpAdapterEntry = serde_json::from_value(json!({
+            "executable": "/usr/bin/env", "args": ["python3", "-u", peer],
+            "default_mode": "native_acp", "enabled": true, "trust_level": "full"
         }))
         .unwrap();
-        assert!(tool.call(args).await.is_err());
+        let manager = Arc::new(AcpAdapterManager::from_entries(
+            std::collections::HashMap::from([
+                ("blocked".into(), blocked),
+                ("fixture".into(), live),
+            ]),
+        ));
+        let builtin: Arc<dyn ToolRegistry> = Arc::new(
+            BuiltinToolRegistry::with_config(BuiltinToolConfig {
+                acp_manager: Some(Arc::clone(&manager)),
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+        );
+        let registry = Arc::new(ToolHandlerRegistry::new());
+        let names = ["acp_delegate", "acp_switch", "acp_session_control"];
+        let _scope = register_builtin_routers(
+            &registry,
+            builtin,
+            names.iter().map(|name| (*name).to_owned()),
+        )
+        .await
+        .unwrap();
+        let facade = ZahirFacade::new(
+            registry.as_ref().clone(),
+            Arc::new(OwnershipTree::default()),
+        );
+        let snapshot = facade.describe(Scope::default());
+        for name in names {
+            assert!(snapshot
+                .capabilities
+                .iter()
+                .any(|descriptor| descriptor.id.name == name));
+        }
+        let mut inner = LoopToolRegistry::new();
+        inner.bind_canonical_registry(Arc::clone(&registry), Arc::new(|_| true));
+        assert!(inner.bind_canonical_facade(facade));
+        for entry in registry.entries_snapshot().values() {
+            inner.register(Box::new(McpRegistryTool::from_registry_entry(
+                entry.handler.clone(),
+                &entry.descriptor,
+            )));
+        }
+        let service = ScopedToolService::new(Arc::new(inner), Default::default())
+            .with_exec_tier(ExecTier::Full)
+            .with_turn_context(TurnContext {
+                session_key: crate::routing::session_key::SessionKey::main("acp-fixture"),
+                run_id: "acp-fixture".into(),
+                channel_id: "test".into(),
+                conversation_id: "conv".into(),
+                caller_role: None,
+                channel_tool_permissions: None,
+                unattended: false,
+                plan_gate: None,
+                side_question: false,
+                telecom_authority: None,
+            });
+        let cwd = directory.path();
+        let error = dispatch(
+            &service,
+            "acp_delegate",
+            "disabled",
+            json!({"harness": "blocked", "prompt": "hello", "cwd": cwd}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("disabled (trust_level=disabled)"),
+            "{error}"
+        );
         assert!(!marker.exists());
+
+        let (prompt, cancel) = tokio::time::timeout(Duration::from_secs(8), async {
+            let prompt = dispatch(
+                &service,
+                "acp_delegate",
+                "prompt",
+                json!({"harness": "fixture", "prompt": "wait for cancel", "cwd": cwd}),
+            );
+            let cancel = async {
+                let frames = cwd.join("frames");
+                loop {
+                    if std::fs::read_to_string(&frames)
+                        .is_ok_and(|log| log.contains(" session/prompt"))
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                dispatch(
+                    &service,
+                    "acp_session_control",
+                    "cancel",
+                    json!({"harness": "fixture", "action": "cancel", "cwd": cwd}),
+                )
+                .await
+            };
+            tokio::join!(prompt, cancel)
+        })
+        .await
+        .expect("registered ACP prompt and cancel must both finish");
+        let prompt = prompt.unwrap().value;
+        let cancel = cancel.unwrap().value;
+        assert!(prompt.as_str().unwrap().contains("canceled"), "{prompt}");
+        assert!(
+            cancel
+                .as_str()
+                .unwrap()
+                .contains("cancel notification sent"),
+            "{cancel}"
+        );
+        let frames = std::fs::read_to_string(cwd.join("frames")).unwrap();
+        let pid = frames
+            .lines()
+            .find_map(|line| line.strip_suffix(" session/prompt"))
+            .unwrap();
+        let cancel_frame = format!("{pid} cancel:peer-{pid}");
+        assert!(frames.lines().any(|line| line == cancel_frame), "{frames}");
+        manager.shutdown_all().await;
     }
 }

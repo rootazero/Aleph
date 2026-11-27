@@ -2,15 +2,17 @@
 //!
 //! Format: a JSON array of [`crate::acp::session::PersistedAcpSession`] entries
 //! at `~/.aleph/data/acp_sessions.json`. Best-effort — parse failures fall back
-//! to "no persisted sessions" and write failures only warn.
+//! to "no persisted sessions" and write failures warn and are reported when the writer closes.
 //!
 //! **Projection-only boundary:** this JSON is a re-creatable protocol/session
 //! projection. It is not an authorization source, capability registry, or
 //! recovery source of truth.
 
-use tracing::{info, warn};
+use tracing::warn;
 
-use super::AcpAdapterManager;
+use crate::error::{AlephError, Result};
+
+use super::{AcpAdapterManager, SessionKey};
 use crate::sync_primitives::Arc;
 
 /// Default persistence file path for ACP sessions.
@@ -38,34 +40,27 @@ pub fn load_persisted_sessions() -> Vec<crate::acp::session::PersistedAcpSession
 
 /// Save persisted ACP sessions to disk (atomic write).
 pub fn save_persisted_sessions(sessions: &[crate::acp::session::PersistedAcpSession]) {
-    let path = acp_sessions_path();
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            warn!("Failed to create ACP sessions directory: {}", e);
-        }
-    }
-    match serde_json::to_string_pretty(sessions) {
-        Ok(json) => {
-            if let Err(e) = crate::utils::atomic_io::write_atomic(&path, json.as_bytes()) {
-                warn!("Failed to atomic-write ACP sessions: {}", e);
-            }
-        }
-        Err(e) => warn!("Failed to serialize ACP sessions: {}", e),
+    if let Err(error) = write_sessions(sessions) {
+        warn!(%error, "Failed to save ACP sessions");
     }
 }
 
-/// Wire up file-based persistence for ACP sessions.
-/// Call this after creating the `AcpAdapterManager` at startup.
-/// Apply an [`AcpSessionEvent`] to the in-memory session store.
+fn write_sessions(sessions: &[crate::acp::session::PersistedAcpSession]) -> Result<()> {
+    let path = acp_sessions_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(sessions)
+        .map_err(|error| AlephError::other(format!("Failed to serialize ACP sessions: {error}")))?;
+    crate::utils::atomic_io::write_atomic(&path, json.as_bytes())?;
+    Ok(())
+}
+
+/// Apply an event to the store owned exclusively by the serial writer.
+/// Events are applied and written in receive order to avoid stale snapshots.
 ///
-/// Pulled out of [`wire_persistence`] so the persistence worker can call it
-/// in a single critical section (lock → mutate → snapshot → unlock),
-/// avoiding the stale-snapshot race that arose when each event captured
-/// its own snapshot mid-flight.
-///
-/// `Created` is re-emitted idempotently after every prompt, so the
-/// `created_at` of the existing record is preserved; only `last_used_at`
-/// moves. `Removed` drops the matching entry.
+/// `Created` establishes an association or records a changed peer ID. The
+/// existing key keeps its creation timestamp. `Removed` drops that key.
 fn apply_event_to_store(
     store: &mut Vec<crate::acp::session::PersistedAcpSession>,
     event: &crate::acp::AcpSessionEvent,
@@ -78,10 +73,9 @@ fn apply_event_to_store(
             cwd,
             session_name,
         } => {
+            let key = SessionKey::with_name(harness_id, cwd, session_name.as_deref());
             let now = chrono::Utc::now();
-            if let Some(existing) = store.iter_mut().find(|s| {
-                s.harness_id == *harness_id && s.cwd == *cwd && s.session_name == *session_name
-            }) {
+            if let Some(existing) = store.iter_mut().find(|record| stored_key(record) == key) {
                 existing.acp_session_id = acp_session_id.clone();
                 existing.last_used_at = now;
             } else {
@@ -100,148 +94,114 @@ fn apply_event_to_store(
             cwd,
             session_name,
         } => {
-            store.retain(|s| {
-                !(s.harness_id == *harness_id && s.cwd == *cwd && s.session_name == *session_name)
-            });
+            let key = SessionKey::with_name(harness_id, cwd, session_name.as_deref());
+            store.retain(|record| stored_key(record) != key);
         }
     }
 }
 
-/// Wire up file-based persistence for ACP sessions.
-/// Call this after creating the `AcpAdapterManager` at startup.
-///
-/// Returns the channel sender the hook uses to forward events to the
-/// persistence worker. Production callers can ignore the return value
-/// (`let _ = wire_persistence(&manager).await;`); tests and migration
-/// tools can drive events through the returned sender directly.
-///
-/// ## Stale-snapshot race fix (wire-persistence-race)
-///
-/// The previous implementation spawned a fresh `tokio::task` per event,
-/// each capturing its own `store.clone()` snapshot at hook time. The
-/// `file_lock` only serialized the *rename* step, not the snapshot
-/// capture — so two concurrent writers could land on disk in
-/// capture-time order, not event order: an older snapshot could clobber
-/// a newer one if it grabbed the file lock last.
-///
-/// This implementation funnels every event through an `mpsc::unbounded_channel`
-/// into a single persistence worker. The worker applies the event, takes
-/// the latest snapshot under the same lock release, then persists it.
-/// Events are processed strictly in arrival order, and the on-disk file
-/// is always the result of applying every prior event.
-///
-/// The advisory `fs2` lock is retained as belt-and-suspenders: in the
-/// pathological case where the worker task itself dies and a replacement
-/// process is started mid-write, the lock keeps external observers from
-/// reading a half-written `acp_sessions.json`.
+fn stored_key(record: &crate::acp::session::PersistedAcpSession) -> SessionKey {
+    SessionKey::with_name(
+        &record.harness_id,
+        &record.cwd,
+        record.session_name.as_deref(),
+    )
+}
+
+/// Owns the persistence worker until every accepted event has reached disk.
+pub struct AcpPersistence {
+    close: tokio::sync::oneshot::Sender<()>,
+    worker: tokio::task::JoinHandle<Result<()>>,
+    #[cfg(test)]
+    sender: tokio::sync::mpsc::UnboundedSender<crate::acp::AcpSessionEvent>,
+}
+
+impl AcpPersistence {
+    /// Stop accepting events, drain the queue, and observe the final write.
+    pub async fn close_and_await(self) -> Result<()> {
+        let _ = self.close.send(());
+        self.worker
+            .await
+            .map_err(|error| AlephError::other(format!("ACP persistence worker failed: {error}")))?
+    }
+}
+
+/// Install the writer before returning saved associations for caller-owned restore.
 pub async fn wire_persistence(
     manager: &AcpAdapterManager,
-) -> tokio::sync::mpsc::UnboundedSender<crate::acp::AcpSessionEvent> {
-    use crate::sync_primitives::Mutex;
-
-    let sessions = Arc::new(Mutex::new(
-        tokio::task::spawn_blocking(load_persisted_sessions)
-            .await
-            .unwrap_or_else(|e| {
-                warn!("ACP session load task failed: {}", e);
-                Vec::new()
-            }),
-    ));
-
-    // UnboundedSender is already a cheap cloneable channel endpoint.
+) -> (
+    AcpPersistence,
+    Vec<crate::acp::session::PersistedAcpSession>,
+) {
+    let persisted = tokio::task::spawn_blocking(load_persisted_sessions)
+        .await
+        .unwrap_or_else(|error| {
+            warn!(%error, "ACP session load task failed");
+            Vec::new()
+        });
+    let mut sessions = persisted.clone();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<crate::acp::AcpSessionEvent>();
-
-    // Single persistence worker. All events flow through this task
-    // serially, so every disk write reflects the cumulative state of
-    // every prior event — the race that existed when each event
-    // spawned its own task is gone.
-    let worker_sessions = Arc::clone(&sessions);
-    tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            // 1. Apply event to in-memory store (under mutex) and snapshot
-            //    the post-application state in the SAME critical section.
-            //    No concurrent writer exists — this worker is the only writer.
-            let snapshot = {
-                let mut store = worker_sessions.lock().unwrap_or_else(|e| e.into_inner());
-                apply_event_to_store(&mut store, &event);
-                store.clone()
-            };
-
-            // 2. Persist the just-updated snapshot under the file lock. The
-            //    lock is now strictly an external-collision safeguard — within
-            //    this worker there is exactly one concurrent writer (itself).
-            //
-            //    The lock file's directory is created *before* the lock, the
-            //    same way every other `with_file_lock` writer in this crate
-            //    does it: `with_file_lock` opens the lock file with
-            //    `create(true)` but never creates its parent, and
-            //    `save_persisted_sessions` only creates the directory once it
-            //    is already inside the lock. On a fresh data dir the lock
-            //    therefore failed with NotFound on every event — and the
-            //    first cut of this worker checked only the `spawn_blocking`
-            //    join, dropping the closure's own `io::Result`, so nothing was
-            //    ever written and nothing was ever logged.
-            let outcome = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-                let lock_path = crate::acp::manager::persistence::acp_sessions_path()
-                    .with_extension("json.lock");
-                if let Some(parent) = lock_path.parent() {
-                    std::fs::create_dir_all(parent)?;
+    let (close, mut closing) = tokio::sync::oneshot::channel();
+    let worker = tokio::spawn(async move {
+        let mut final_result = Ok(());
+        loop {
+            let event = tokio::select! {
+                biased;
+                _ = &mut closing => {
+                    // Explicit receiver closure drains even while hooks retain senders.
+                    rx.close();
+                    break;
                 }
-                crate::utils::atomic_io::with_file_lock(&lock_path, |_guard| {
-                    save_persisted_sessions(&snapshot);
-                    Ok(())
-                })
-            })
-            .await;
-            match outcome {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => tracing::warn!(
-                    error = %e,
-                    "persist_sessions: could not lock or write acp_sessions.json; \
-                     on-disk ACP sessions are now behind the in-memory state"
-                ),
-                Err(e) => tracing::warn!(?e, "persist_sessions: spawn_blocking failed"),
-            }
+                event = rx.recv() => event,
+            };
+            let Some(event) = event else {
+                return final_result;
+            };
+            apply_event_to_store(&mut sessions, &event);
+            final_result = persist_snapshot(sessions.clone()).await;
         }
+        while let Some(event) = rx.recv().await {
+            apply_event_to_store(&mut sessions, &event);
+            final_result = persist_snapshot(sessions.clone()).await;
+        }
+        final_result
     });
-
-    // Hook is now a pure channel sender: no locking, no spawning, no
-    // snapshot capture. The cost per event is one bounded `unbounded_send`.
     let hook_tx = tx.clone();
     manager
         .set_persistence_hook(Arc::new(move |event| {
-            // `send` only fails if the worker task has exited (e.g.
-            // runtime shutdown). Drop the event in that case — losing
-            // the on-disk write is strictly better than blocking the
-            // caller on a dead channel, and the in-memory state already
-            // reflects the event. The failure is logged (with the harness
-            // id) instead of being discarded silently, so a dead
-            // persistence worker is visible in the logs.
-            if let Err(e) = hook_tx.send(event) {
-                let harness_id = match &e.0 {
-                    crate::acp::AcpSessionEvent::Created { harness_id, .. }
-                    | crate::acp::AcpSessionEvent::Removed { harness_id, .. } => {
-                        harness_id.as_str()
-                    }
-                };
-                warn!(
-                    harness_id,
-                    "persist_sessions: persistence hook channel closed; ACP session event dropped"
-                );
+            if hook_tx.send(event).is_err() {
+                warn!("ACP persistence hook channel closed; session event dropped");
             }
         }))
         .await;
+    (
+        AcpPersistence {
+            close,
+            worker,
+            #[cfg(test)]
+            sender: tx,
+        },
+        persisted,
+    )
+}
 
-    // Restore existing sessions
-    let persisted = sessions.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    if !persisted.is_empty() {
-        let restored = manager.restore_sessions(persisted).await;
-        if !restored.is_empty() {
-            info!(count = restored.len(), "Restored ACP sessions from disk");
+async fn persist_snapshot(sessions: Vec<crate::acp::session::PersistedAcpSession>) -> Result<()> {
+    let result = tokio::task::spawn_blocking(move || -> Result<()> {
+        let lock_path = acp_sessions_path().with_extension("json.lock");
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
+        crate::utils::atomic_io::with_file_lock(&lock_path, |_guard| {
+            write_sessions(&sessions).map_err(std::io::Error::other)
+        })?;
+        Ok(())
+    })
+    .await
+    .map_err(|error| AlephError::other(format!("ACP persistence write task failed: {error}")))?;
+    if let Err(error) = &result {
+        warn!(%error, "ACP sessions on disk are behind the in-memory state");
     }
-
-    tx
+    result
 }
 
 // Exposed to sibling test modules in `acp::manager::tests` so they can pin
@@ -262,8 +222,8 @@ mod wire_persistence_tests {
     //!
     //! These tests construct an `AcpAdapterManager`, wire persistence against
     //! a temp directory (so we don't touch the real `~/.aleph/data/` file),
-    //! fire a burst of `Created`/`Removed` events through the returned
-    //! sender, and verify the on-disk file reflects the cumulative state —
+    //! fire a burst of `Created`/`Removed` events through retained
+    //! senders, and verify the on-disk file reflects the cumulative state —
     //! i.e. that the stale-snapshot race is dead.
 
     use super::*;
@@ -294,56 +254,14 @@ mod wire_persistence_tests {
         f(tmp.path().to_path_buf()).await;
     }
 
-    /// The key every test sends *last*. The worker applies events strictly
-    /// in arrival order and persists after each one, so once this entry is
-    /// on disk every event sent before it has been applied and written.
-    /// Waiting for it is how a test waits for the worker to drain.
-    ///
-    /// # Why not poll for the final state directly
-    ///
-    /// The interleaved test's final state is "empty", which is also the
-    /// state before the first event lands and after every `Removed` — a
-    /// poll for it passes vacuously (判据 §2). And the fixed 300 ms sleep
-    /// this replaced read a half-drained file on a slow disk: 168 of 200
-    /// on Windows.
-    const SENTINEL_HARNESS: &str = "h-sentinel";
-
-    fn mk_sentinel() -> crate::acp::AcpSessionEvent {
-        crate::acp::AcpSessionEvent::Created {
-            harness_id: SENTINEL_HARNESS.to_string(),
-            acp_session_id: "s-sentinel".to_string(),
-            cwd: "/tmp/cwd-sentinel".to_string(),
-            session_name: None,
-        }
-    }
-
-    /// Send the sentinel, poll the file until it lands, and return the
-    /// on-disk entries **without** it. Panics past `DRAIN_TIMEOUT` with the
-    /// last count it saw, so a worker that never writes reads as a failure
-    /// with a number in it rather than a stall.
     async fn drain_and_load(
-        tx: &tokio::sync::mpsc::UnboundedSender<crate::acp::AcpSessionEvent>,
+        writer: AcpPersistence,
     ) -> Vec<crate::acp::session::PersistedAcpSession> {
-        const DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
-        const POLL: std::time::Duration = std::time::Duration::from_millis(10);
-        tx.send(mk_sentinel()).expect("persistence worker is alive");
-        let deadline = std::time::Instant::now() + DRAIN_TIMEOUT;
-        loop {
-            let on_disk = load_persisted_sessions();
-            if on_disk.iter().any(|s| s.harness_id == SENTINEL_HARNESS) {
-                return on_disk
-                    .into_iter()
-                    .filter(|s| s.harness_id != SENTINEL_HARNESS)
-                    .collect();
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "persistence worker did not drain within {DRAIN_TIMEOUT:?}; \
-                 last on-disk count {} — is it writing at all?",
-                on_disk.len()
-            );
-            tokio::time::sleep(POLL).await;
-        }
+        tokio::time::timeout(std::time::Duration::from_secs(30), writer.close_and_await())
+            .await
+            .expect("writer must drain despite retained hook sender")
+            .expect("final write");
+        load_persisted_sessions()
     }
 
     fn mk_event_created(i: usize, suffix: &str) -> crate::acp::AcpSessionEvent {
@@ -363,6 +281,72 @@ mod wire_persistence_tests {
         }
     }
 
+    #[tokio::test]
+    async fn idle_writer_closes_with_live_manager_and_sender() {
+        with_temp_data_dir(|_| async {
+            let manager = AcpAdapterManager::new();
+            let (writer, persisted) = wire_persistence(&manager).await;
+            assert!(persisted.is_empty());
+            let sender = writer.sender.clone();
+            assert!(drain_and_load(writer).await.is_empty());
+            assert!(sender.send(mk_event_created(1, "")).is_err());
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn wire_returns_saved_associations_without_changing_timestamps() {
+        with_temp_data_dir(|_| async {
+            let mut saved = Vec::new();
+            apply_event_to_store(&mut saved, &mk_event_created(1, ""));
+            let original = chrono::Utc::now() - chrono::Duration::days(1);
+            saved[0].created_at = original;
+            saved[0].last_used_at = original;
+            write_sessions(&saved).unwrap();
+            let manager = AcpAdapterManager::new();
+            let (writer, persisted) = wire_persistence(&manager).await;
+            assert_eq!(persisted.len(), 1);
+            assert_eq!(persisted[0].created_at, original);
+            assert_eq!(persisted[0].last_used_at, original);
+            let on_disk = drain_and_load(writer).await;
+            assert_eq!(on_disk[0].created_at, original);
+            assert_eq!(on_disk[0].last_used_at, original);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn close_reports_final_write_failure() {
+        with_temp_data_dir(|_| async move {
+            let manager = AcpAdapterManager::new();
+            let (writer, _) = wire_persistence(&manager).await;
+            // A file at the data directory makes every real write fail.
+            let data = acp_sessions_path().parent().unwrap().to_path_buf();
+            std::fs::create_dir_all(data.parent().unwrap()).unwrap();
+            std::fs::write(&data, b"blocked").unwrap();
+            writer.sender.send(mk_event_created(1, "")).unwrap();
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(10), writer.close_and_await())
+                    .await
+                    .expect("failed writes must still join");
+            assert!(result.is_err(), "final I/O failure must be observable");
+        })
+        .await;
+    }
+
+    #[test]
+    fn existing_created_timestamp_is_preserved() {
+        let mut store = Vec::new();
+        apply_event_to_store(&mut store, &mk_event_created(1, ""));
+        let original = chrono::Utc::now() - chrono::Duration::days(1);
+        store[0].created_at = original;
+        store[0].last_used_at = original;
+        apply_event_to_store(&mut store, &mk_event_created(1, "-updated"));
+        assert_eq!(store[0].created_at, original);
+        assert!(store[0].last_used_at > original);
+        assert_eq!(store[0].acp_session_id, "s-1-updated");
+    }
+
     /// Fire a burst of Created events from N tasks concurrently. The
     /// final file must contain every (harness_id, cwd) tuple exactly once,
     /// proving no event was lost to the stale-snapshot race.
@@ -370,7 +354,8 @@ mod wire_persistence_tests {
     async fn burst_of_creates_no_event_lost() {
         with_temp_data_dir(|_| async {
             let manager = AcpAdapterManager::new();
-            let tx = wire_persistence(&manager).await;
+            let (writer, _) = wire_persistence(&manager).await;
+            let tx = writer.sender.clone();
 
             const N: usize = 200;
             let mut handles = Vec::with_capacity(N);
@@ -384,7 +369,8 @@ mod wire_persistence_tests {
             for h in handles {
                 h.await.expect("task join");
             }
-            let on_disk = drain_and_load(&tx).await;
+            let on_disk = drain_and_load(writer).await;
+            assert!(tx.send(mk_event_created(N, "")).is_err());
             assert_eq!(
                 on_disk.len(),
                 N,
@@ -408,14 +394,15 @@ mod wire_persistence_tests {
     async fn interleaved_create_remove_no_cancelled_create() {
         with_temp_data_dir(|_| async {
             let manager = AcpAdapterManager::new();
-            let tx = wire_persistence(&manager).await;
+            let (writer, _) = wire_persistence(&manager).await;
+            let tx = writer.sender.clone();
 
             const N: usize = 100;
             for i in 0..N {
                 let _ = tx.send(mk_event_created(i, ""));
                 let _ = tx.send(mk_event_removed(i));
             }
-            let on_disk = drain_and_load(&tx).await;
+            let on_disk = drain_and_load(writer).await;
             assert!(
                 on_disk.is_empty(),
                 "after {N} Created+Removed pairs the store must be empty, \
@@ -432,13 +419,14 @@ mod wire_persistence_tests {
     async fn repeated_created_preserves_created_at() {
         with_temp_data_dir(|_| async {
             let manager = AcpAdapterManager::new();
-            let tx = wire_persistence(&manager).await;
+            let (writer, _) = wire_persistence(&manager).await;
+            let tx = writer.sender.clone();
 
             let before = chrono::Utc::now();
             for _ in 0..5 {
                 let _ = tx.send(mk_event_created(7, ""));
             }
-            let on_disk = drain_and_load(&tx).await;
+            let on_disk = drain_and_load(writer).await;
             let after = chrono::Utc::now();
 
             assert_eq!(on_disk.len(), 1, "exactly one entry expected");
