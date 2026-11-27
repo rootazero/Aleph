@@ -269,6 +269,37 @@ async fn mounted_graph_reads_prepare_without_an_idempotency_key() {
 }
 
 #[tokio::test]
+async fn v1_mounts_questionnaire_reads_and_guarded_writes() {
+    let caller = peer("questionnaire-member").snapshot().await.unwrap();
+    let pending = "clarification.pending";
+    assert!(super::super::v1_mounted(pending));
+    assert_eq!(Lane::for_method(pending), Lane::Query);
+    assert!(prepare(
+        &JsonRpcRequest::with_id(pending, None, json!(1)),
+        &caller,
+        true
+    )
+    .is_ok());
+
+    let resolve = "clarification.resolve";
+    assert!(super::super::v1_mounted(resolve));
+    assert!(Lane::for_method(resolve).needs_idempotency());
+    assert!(prepare(
+        &JsonRpcRequest::with_id(resolve, None, json!(2)),
+        &caller,
+        true
+    )
+    .is_err());
+    let params = json!({"idempotency_key": uuid::Uuid::new_v4()});
+    assert!(prepare(
+        &JsonRpcRequest::with_id(resolve, Some(params), json!(3)),
+        &caller,
+        true
+    )
+    .is_ok());
+}
+
+#[tokio::test]
 async fn ordinary_rpc_uses_one_inflight_slot() {
     let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let release = Arc::new(Notify::new());
