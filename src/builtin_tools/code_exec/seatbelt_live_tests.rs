@@ -104,6 +104,7 @@ async fn run(
             profile,
             Duration::from_secs(20),
             4096,
+            None,
         )
         .await
         .expect("sandbox-exec spawns")
