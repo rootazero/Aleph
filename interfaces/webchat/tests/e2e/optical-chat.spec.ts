@@ -12,13 +12,15 @@ type Request = { id?: unknown; method: string; params?: Record<string, unknown> 
 type Fixture = {
     requests: Request[];
     releaseDetail: () => void;
+    translationDelta: (text: string) => void;
     releaseTranslation: () => void;
     event: (topic: string, data: unknown) => void;
 };
 
-async function installFixture(page: Page, { deferDetail = false, deferTranslation = false } = {}): Promise<Fixture> {
+async function installFixture(page: Page, { deferDetail = false, deferTranslation = false, deferAi = false } = {}): Promise<Fixture> {
     const requests: Request[] = [];
     let finishDetail: (() => void) | undefined;
+    let sendDelta: ((text: string) => void) | undefined;
     let finishTranslation: (() => void) | undefined;
     let emit: ((topic: string, data: unknown) => void) | undefined;
     await page.routeWebSocket('**/ws', (socket: WebSocketRoute) => {
@@ -74,8 +76,15 @@ async function installFixture(page: Page, { deferDetail = false, deferTranslatio
                         request_id: request.params?.request_id,
                         update: { type: 'completed', text: `${engine} fixture translation` },
                     });
-                    if (deferTranslation) finishTranslation = finish;
-                    else finish();
+                    if (deferTranslation || (deferAi && engine === 'ai')) {
+                        sendDelta = (text) => emit?.('thought.translation.update', {
+                            request_id: request.params?.request_id,
+                            update: { type: 'delta', text },
+                        });
+                        finishTranslation = finish;
+                    } else {
+                        finish();
+                    }
                     break;
                 }
                 default:
@@ -86,6 +95,10 @@ async function installFixture(page: Page, { deferDetail = false, deferTranslatio
     return {
         requests,
         releaseDetail: () => finishDetail?.(),
+        translationDelta: (text) => {
+            if (!sendDelta) throw new Error('Fixture translation has not started');
+            sendDelta(text);
+        },
         releaseTranslation: () => finishTranslation?.(),
         event: (topic, data) => {
             if (!emit) throw new Error('WebSocket fixture is not connected');
@@ -168,7 +181,8 @@ test('compaction replaces the measured level and hiding the page stops both anim
 });
 
 test('thought reader discloses the destination before each engine sends an addressed block', async ({ page }) => {
-    const { requests } = await installFixture(page);
+    const fixture = await installFixture(page, { deferAi: true });
+    const { requests } = fixture;
     await page.goto('/');
     await selectSession(page, 'Measured session');
     await page.getByRole('button', { name: 'Read thoughts' }).click();
@@ -182,6 +196,11 @@ test('thought reader discloses the destination before each engine sends an addre
     await page.getByLabel('Translation engine').selectOption('ai');
     await expect(page.getByText('Sends this block to fixture-provider/fixture-model')).toBeVisible();
     await page.getByRole('button', { name: 'Translate this block' }).click();
+    await expect.poll(() => requests.some(({ method, params }) =>
+        method === 'thought.translation.start' && params?.engine === 'ai')).toBe(true);
+    fixture.translationDelta('ai partial');
+    await expect(page.getByText('ai partial')).toBeVisible();
+    fixture.releaseTranslation();
     await expect(page.getByText('ai fixture translation')).toBeVisible();
     await page.getByLabel('Reading mode').selectOption('translated');
     await expect(page.getByText('Original settled thought')).toHaveCount(0);
