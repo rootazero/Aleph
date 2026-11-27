@@ -1015,30 +1015,39 @@ pub fn default_skill_dirs() -> Vec<PathBuf> {
 /// resolved through `ALEPH_HOME` / the project dir, so `/var` vs
 /// `/private/var` or a literal `$HOME` vs a canonicalised root are both
 /// reachable). `None` = no published dir covers `path`.
-fn plugin_id_from_published_dirs(path: &Path) -> Option<String> {
+fn published_skill_owner(path: &Path) -> Option<crate::utils::paths::PublishedPluginSkillDir> {
     let published = crate::utils::paths::plugin_skill_dirs();
     if published.is_empty() {
         return None;
     }
-    let longest_covering = |covers: &dyn Fn(&Path) -> bool| {
-        published
-            .iter()
-            .filter(|d| covers(&d.dir))
-            .max_by_key(|d| d.dir.components().count())
-            .map(|d| {
-                crate::extension::visibility::PluginInstanceKey::new(
-                    d.scope_key.clone(),
-                    d.plugin_id.clone(),
-                )
-                .runtime_key()
-            })
+    let matches = |path: &Path, root: &Path, exact_file: bool| {
+        if exact_file {
+            path == root
+        } else {
+            path.starts_with(root)
+        }
     };
-    longest_covering(&|dir| path.starts_with(dir)).or_else(|| {
+    let longest_covering =
+        |covers: &dyn Fn(&crate::utils::paths::PublishedPluginSkillDir) -> bool| {
+            published
+                .iter()
+                .filter(|entry| {
+                    covers(entry) && (!entry.exact_file || entry.selected_file_is_current())
+                })
+                .max_by_key(|entry| (entry.dir.components().count(), entry.exact_file))
+                .cloned()
+        };
+    longest_covering(&|entry| matches(path, &entry.dir, entry.exact_file)).or_else(|| {
         let canonical = crate::extension::visibility::canonical_root(path);
-        longest_covering(&|dir| {
-            canonical.starts_with(crate::extension::visibility::canonical_root(dir))
+        longest_covering(&|entry| {
+            let root = crate::extension::visibility::canonical_root(&entry.dir);
+            matches(&canonical, &root, entry.exact_file)
         })
     })
+}
+
+fn plugin_id_from_published_dirs(path: &Path) -> Option<String> {
+    published_skill_owner(path).map(|entry| entry.runtime_key())
 }
 
 /// FALLBACK owner for a plugin skill path that no published dir covers:

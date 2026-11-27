@@ -312,12 +312,9 @@ pub fn inline_shell_command(
                 bounded_env_value(ARGUMENTS_VAR, args.raw, "$1 … $N"),
             );
     }
-    // A data directory for plugin-owned commands only, as for a hook: a
-    // label that is not a plugin id has none.
     let vars = site
         .plugin
-        .filter(|(id, _)| crate::extension::manifest::validate_plugin_id(id).is_ok())
-        .map(|(id, root)| PluginVars::new(id, root));
+        .and_then(|(owner, root)| PluginVars::for_owner(owner, root));
     set_or_remove(
         &mut command,
         &PLUGIN_ROOT_VARIABLES,
@@ -1297,16 +1294,23 @@ mod tests {
     async fn the_path_variables_come_from_the_site() {
         let cwd = TempDir::new().unwrap();
         let root = TempDir::new().unwrap();
-        let shown = shown_env(cwd.path(), Some(("plug", root.path()))).await;
-        let root = root.path().to_string_lossy().to_string();
-        assert_eq!(shown[..3], [root.clone(), root.clone(), root], "{shown:?}");
-        for data in &shown[3..5] {
-            assert!(
-                Path::new(data).ends_with("data/plug"),
-                "not the plugin's data directory: {shown:?}"
-            );
+        let project_owner = crate::extension::visibility::PluginInstanceKey::new(
+            crate::extension::visibility::ScopeKey::project(cwd.path()),
+            "plug".to_owned(),
+        )
+        .runtime_key();
+        for owner in ["plug", &project_owner] {
+            let shown = shown_env(cwd.path(), Some((owner, root.path()))).await;
+            let root_text = root.path().to_string_lossy();
+            assert_eq!(shown[..3], [root_text.as_ref(); 3], "{shown:?}");
+            for data in &shown[3..5] {
+                assert!(
+                    Path::new(data).ends_with(Path::new("data").join(owner)),
+                    "{shown:?}"
+                );
+            }
+            assert_eq!(shown[5], cwd.path().to_string_lossy(), "{shown:?}");
         }
-        assert_eq!(shown[5], cwd.path().to_string_lossy(), "{shown:?}");
     }
 
     /// The line the shell receives for a plugin's inline command, on this

@@ -153,11 +153,8 @@ pub fn command_hook_invocation(
     // Derived once, so the stdin payload and the environment read the same
     // answer.
     let facts = SessionFacts::derive(context);
-    // The data directory: plugin-owned hooks only — a settings source label
-    // such as `user:project` is not a plugin id and has none.
     let plugin_vars = plugin_root
-        .filter(|_| crate::extension::manifest::validate_plugin_id(plugin_name).is_ok())
-        .map(|root| crate::extension::plugin_vars::PluginVars::new(plugin_name, root));
+        .and_then(|root| crate::extension::plugin_vars::PluginVars::for_owner(plugin_name, root));
 
     // What the shell parses. On unix: the command as written. Every
     // variable — the path variables included — reaches the child through
@@ -2992,28 +2989,46 @@ mod tests {
     #[tokio::test]
     async fn a_plugin_hooks_data_directory_reaches_it_through_the_environment() {
         let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
-        let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("out");
-        let mut hook = interceptor_command_hook(&format!(
-            r#"printf '%s|%s' "${{CLAUDE_PLUGIN_DATA}}" "${{ALEPH_PLUGIN_DATA}}" > '{}'"#,
-            out.display()
-        ));
-        hook.plugin_name = "fmt".into();
-        hook.plugin_root = dir.path().to_path_buf();
-        let data = crate::extension::plugin_data_dir("fmt");
-        HookExecutor::new(vec![hook])
-            .execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
-            .await
-            .expect("the hook runs");
-        let data_str = data.to_string_lossy();
-        assert_eq!(
-            std::fs::read_to_string(&out).expect("the hook ran"),
-            format!("{data_str}|{data_str}")
-        );
-        assert!(
-            data.is_dir(),
-            "a template that names the directory creates it"
-        );
+        let global = tempfile::tempdir().unwrap();
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let runtime_owner = |root| {
+            crate::extension::visibility::PluginInstanceKey::new(
+                ScopeKey::project(root),
+                "fmt".to_owned(),
+            )
+            .runtime_key()
+        };
+        let owners = [
+            "fmt".to_owned(),
+            runtime_owner(a.path()),
+            runtime_owner(b.path()),
+        ];
+        let mut directories = std::collections::HashSet::new();
+        for (owner, root) in owners.iter().zip([global.path(), a.path(), b.path()]) {
+            let mut hook = interceptor_command_hook(
+                r#"printf '%s|%s' "${CLAUDE_PLUGIN_DATA}" "${ALEPH_PLUGIN_DATA}" > "${ALEPH_PLUGIN_DATA}/out""#,
+            );
+            hook.plugin_name.clone_from(owner);
+            hook.plugin_root = root.to_path_buf();
+            let data = crate::extension::plugin_data_dir(owner);
+            assert!(directories.insert(data.clone()));
+            assert!(!data.exists());
+            HookExecutor::new(vec![hook])
+                .execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
+                .await
+                .expect("the hook runs");
+            let data_str = data.to_string_lossy();
+            assert_eq!(
+                std::fs::read_to_string(data.join("out"))
+                    .expect("the hook wrote to its data directory"),
+                format!("{data_str}|{data_str}")
+            );
+            assert!(
+                data.is_dir(),
+                "a template that names the directory creates it"
+            );
+        }
     }
 
     /// A settings hook has a root but no data directory, and a hook with no

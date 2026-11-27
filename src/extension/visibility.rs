@@ -141,10 +141,17 @@ impl PluginInstanceKey {
 
     /// Logical group for the existing registry's exact runtime lookup.
     pub(crate) fn runtime_group(runtime_key: &str) -> &str {
-        runtime_key
-            .strip_prefix("p_")
-            .and_then(|key| key.split_once('_'))
-            .map_or(runtime_key, |(_, id)| id)
+        Self::project_runtime_group(runtime_key).unwrap_or(runtime_key)
+    }
+
+    pub(super) fn project_runtime_group(runtime_key: &str) -> Option<&str> {
+        let (digest, id) = runtime_key.strip_prefix("p_")?.split_once('_')?;
+        (digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            && super::manifest::validate_plugin_id(id).is_ok())
+        .then_some(id)
     }
 
     /// Exact runtime IDs may be used inside the authorized project that owns them.
@@ -152,13 +159,11 @@ impl PluginInstanceKey {
         if !runtime_key.starts_with("p_") {
             return true;
         }
+        let Some(id) = Self::project_runtime_group(runtime_key) else {
+            return false;
+        };
         ctx.project_root.as_ref().is_some_and(|root| {
-            Self::new(
-                ScopeKey::Project(root.clone()),
-                Self::runtime_group(runtime_key).to_owned(),
-            )
-            .runtime_key()
-                == runtime_key
+            Self::new(ScopeKey::Project(root.clone()), id.to_owned()).runtime_key() == runtime_key
         })
     }
 

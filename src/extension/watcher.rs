@@ -345,6 +345,10 @@ impl ExtensionWatcher {
     fn default_runtime_data_dirs() -> Vec<PathBuf> {
         [
             crate::utils::paths::get_data_dir().ok(),
+            crate::utils::paths::get_config_dir()
+                .ok()
+                .map(|dir| dir.join("raw")),
+            Some(super::hooks::ShellHookConsent::default_path()),
             crate::utils::paths::get_runtimes_dir().ok(),
             crate::utils::paths::get_note_memory_dir()
                 .ok()
@@ -723,6 +727,22 @@ mod tests {
              exclusions = {dirs:?}",
             event.display()
         );
+    }
+
+    #[test]
+    fn raw_transcripts_and_hook_consents_do_not_trigger_extension_reload() {
+        let watcher = ExtensionWatcher::new_with_dirs(vec![], |_| {});
+        let dirs = watcher.effective_runtime_data_dirs();
+        let raw = crate::utils::paths::get_config_dir()
+            .unwrap()
+            .join("raw/sessions/session/turn.md");
+        let consent = super::super::hooks::ShellHookConsent::default_path();
+        for path in [raw, consent] {
+            assert!(ExtensionWatcher::is_runtime_data_path(
+                &canonicalize_best_effort(&path),
+                &dirs,
+            ));
+        }
     }
 
     /// A plugin's own persistent state lives under `${ALEPH_PLUGIN_DATA}`

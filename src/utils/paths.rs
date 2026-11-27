@@ -795,6 +795,14 @@ pub struct PublishedPluginSkillDir {
 }
 
 impl PublishedPluginSkillDir {
+    pub(crate) fn runtime_key(&self) -> String {
+        crate::extension::visibility::PluginInstanceKey::new(
+            self.scope_key.clone(),
+            self.plugin_id.clone(),
+        )
+        .runtime_key()
+    }
+
     pub(crate) fn selected_file_is_current(&self) -> bool {
         self.dir.is_file()
             && std::fs::canonicalize(&self.dir).ok().is_some_and(|file| {
@@ -1186,14 +1194,7 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     let extension = crate::extension::try_extension_manager();
     for published in plugin_skill_dirs() {
         let visible = match extension {
-            Some(manager) => {
-                let owner = crate::extension::visibility::PluginInstanceKey::new(
-                    published.scope_key.clone(),
-                    published.plugin_id.clone(),
-                )
-                .runtime_key();
-                manager.plugin_visible(&owner, &visibility)
-            }
+            Some(manager) => manager.plugin_visible(&published.runtime_key(), &visibility),
             None => crate::extension::visibility::visible_to(&published.scope_key, &visibility),
         };
         if visible && published.exact_file {

@@ -446,7 +446,11 @@ impl ReadSkillTool {
                 .consent
                 .clone()
                 .unwrap_or_else(ShellHookConsent::shared);
-            let ctx = crate::skill::SkillPreprocessContext::for_read(skill_dir.clone(), consent);
+            let ctx = crate::skill::SkillPreprocessContext::for_manifest_read(
+                &skill_manifest,
+                skill_dir.clone(),
+                consent,
+            );
             crate::skill::preprocess_skill_content(&raw_content, &ctx)
                 .await
                 .map_err(|e| ToolError::Execution(format!("skill preprocessing refused: {e}")))?
