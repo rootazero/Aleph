@@ -2621,6 +2621,8 @@ impl DashboardState {
                 match handshake {
                     Handshake::Superseded => Ok(()),
                     Handshake::Authorized => {
+                        let reconnecting =
+                            self.has_connected_once.try_get_untracked() == Some(true);
                         self.is_connected.set(true);
                         self.connection_error.set(None);
                         self.connection_failure.set(None);
@@ -2668,6 +2670,14 @@ impl DashboardState {
                                 web_sys::console::error_1(
                                     &format!("events.subscribe {topic}: error (replay)").into(),
                                 );
+                            }
+                            // Mounts seed their own initial view. A socket drop can
+                            // lose a one-shot ask or terminal frame without remounting.
+                            if reconnecting {
+                                let _ = crate::api::ClarificationApi::refresh_pending(
+                                    &state_for_subscribe,
+                                )
+                                .await;
                             }
                         });
                         Ok(())

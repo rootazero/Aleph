@@ -1,7 +1,7 @@
 use aleph_protocol::clarification::{
     ClarificationActionParams, ClarificationActionResponse, PendingListResponse,
 };
-use leptos::prelude::Update;
+use leptos::prelude::{GetUntracked, Update};
 
 use crate::context::DashboardState;
 
@@ -23,6 +23,7 @@ impl ClarificationApi {
     /// named no request — reading is always safe, so it is also the recovery
     /// path after a failed mutation.
     pub async fn refresh_pending(state: &DashboardState) -> Result<(), String> {
+        let epoch = state.connection_epoch.get_untracked();
         let start = state
             .clarifications
             .try_update(|board| board.begin_snapshot())
@@ -32,9 +33,11 @@ impl ClarificationApi {
             .await?;
         let snapshot: PendingListResponse = serde_json::from_value(result)
             .map_err(|e| format!("Failed to parse pending clarifications: {e}"))?;
-        state.clarifications.update(|board| {
-            board.apply_snapshot(&snapshot, start);
-        });
+        if state.connection_epoch.try_get_untracked() == Some(epoch) {
+            let _ = state.clarifications.try_update(|board| {
+                board.apply_snapshot(&snapshot, start);
+            });
+        }
         Ok(())
     }
 
