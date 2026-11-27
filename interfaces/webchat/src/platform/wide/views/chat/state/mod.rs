@@ -699,7 +699,7 @@ pub struct ChatState {
     /// to whichever conversation the user switched to next.
     pub stop_suppresses_next_drain: RwSignal<bool>,
     /// Latest context-window occupancy, set on each `run_complete` and read by
-    /// the composer's [`super::context_gauge::ContextGauge`]. `None` until the
+    /// the composer's [`super::context_vial::ContextVial`]. `None` until the
     /// first run reports usage. Ephemeral (excluded from [`SessionSnapshot`]);
     /// it simply repopulates on the next completed turn after a tab swap.
     pub context_usage: RwSignal<Option<ContextUsage>>,

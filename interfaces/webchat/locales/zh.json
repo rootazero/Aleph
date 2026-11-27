@@ -439,6 +439,16 @@
     "context_usage_title": "上下文占用 {{ pct }}% · {{ used }} / {{ window }} tokens（本轮累计 {{ total }}）",
     "context_usage_measured_title": "上下文占用 {{ pct }}% · {{ used }} / {{ window }} tokens",
     "context_usage_previous_title": "上次实测上下文占用 {{ pct }}% · {{ used }} / {{ window }} tokens",
+    "context_vial_capacity": "上下文容量 {{ window }} tokens · 占用未知",
+    "context_vial_unknown": "上下文占用未知",
+    "context_vial_detail": "上下文明细",
+    "context_vial_close": "关闭",
+    "context_vial_loading": "正在加载上下文…",
+    "context_vial_unavailable": "暂无可用的请求测量。",
+    "context_vial_request": "最近实测请求 · 第 {{ turn }} 轮",
+    "context_vial_system": "发送的系统提示",
+    "context_vial_tools": "工具定义",
+    "context_vial_results": "工具结果 · 预估 token",
     "cache_hit_title": "上一次调用的提示词缓存命中率 {{ pct }}% · read / (input + read)（与 TUI 状态栏同口径）",
     "starter_search_label": "搜索网络",
     "starter_search_prompt": "帮我搜索今天的科技要闻，并总结 3 个重点",
@@ -2416,6 +2426,7 @@
     "last_run_unanswered": "上一条消息没有得到回答 — 运行在开始前就中断了，恢复会重试"
   },
   "appearance": {
+    "pixel_companion": "像素伙伴",
     "mode": {
       "system": "跟随系统",
       "light": "明亮",

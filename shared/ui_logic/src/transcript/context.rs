@@ -3,7 +3,7 @@
 //! inflated estimate (pi-cc-extensions `context.ts` H.4, but Aleph's layer
 //! bytes are MEASURED, not chars/4).
 
-use aleph_protocol::context_breakdown::ContextBreakdown;
+use aleph_protocol::context_breakdown::{ContextBreakdown, LayerSizeView, ToolSchemaSize};
 
 /// Occupancy for a single prompt and the model window that served it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,8 +97,21 @@ mod occupancy_tests {
 
 /// Selected counts for the Panel's last-request view. Per-layer attribution
 /// precedes trimming, and conversation counts remain local estimates.
+#[derive(serde::Serialize)]
+pub struct PanelContextDetail<'a> {
+    pub session_key: &'a str,
+    pub turn: u64,
+    pub system_prompt_bytes: Option<u64>,
+    pub skill_pre_trim_bytes: u64,
+    pub tool_schema_bytes: u64,
+    pub tools: &'a [ToolSchemaSize],
+    pub tool_result_tokens: Option<u64>,
+    pub provider_total: Option<u64>,
+    pub layers: &'a [LayerSizeView],
+}
+
 #[must_use]
-pub fn panel_context_view(report: &ContextBreakdown) -> serde_json::Value {
+pub fn project_context_detail(report: &ContextBreakdown) -> PanelContextDetail<'_> {
     let stable_bytes: u64 = report
         .layers
         .iter()
@@ -111,17 +124,24 @@ pub fn panel_context_view(report: &ContextBreakdown) -> serde_json::Value {
         .filter(|layer| layer.name == "skill_instructions")
         .map(|layer| layer.bytes)
         .sum();
-    serde_json::json!({
-        "session_key": report.session_key,
-        "turn": report.turn,
-        "system_prompt_bytes": report.dynamic_bytes_sent.map(|dynamic| stable_bytes + dynamic),
-        "skill_pre_trim_bytes": skill_bytes,
-        "tool_schema_bytes": report.tool_bytes(),
-        "tools": report.tools,
-        "tool_result_tokens": report.messages.map(|messages| messages.tool_results),
-        "provider_total": reconcile(report).total,
-        "layers": report.layers,
-    })
+    PanelContextDetail {
+        session_key: &report.session_key,
+        turn: report.turn,
+        system_prompt_bytes: report
+            .dynamic_bytes_sent
+            .map(|dynamic| stable_bytes + dynamic),
+        skill_pre_trim_bytes: skill_bytes,
+        tool_schema_bytes: report.tool_bytes(),
+        tools: &report.tools,
+        tool_result_tokens: report.messages.map(|messages| messages.tool_results),
+        provider_total: reconcile(report).total,
+        layers: &report.layers,
+    }
+}
+
+#[must_use]
+pub fn panel_context_view(report: &ContextBreakdown) -> serde_json::Value {
+    serde_json::json!(project_context_detail(report))
 }
 
 /// Provider count vs. our total: beyond this fraction the provider wins.

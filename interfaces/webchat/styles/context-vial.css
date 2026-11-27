@@ -1,0 +1,141 @@
+.panel-context-vial {
+  position: relative;
+  flex: none;
+  align-self: center;
+}
+
+.panel-context-vial-trigger {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.panel-context-vial-trigger:hover,
+.panel-context-vial-trigger[aria-expanded="true"] {
+  background: var(--color-surface-sunken);
+  border-color: var(--color-border);
+}
+
+.panel-context-vial-trigger:focus-visible,
+.panel-context-vial-action:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.panel-context-vial-trigger:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.panel-context-vial-neck {
+  width: 10px;
+  height: 4px;
+  border: 1px solid currentColor;
+  border-radius: 2px 2px 0 0;
+}
+
+.panel-context-vial-glass {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  width: 18px;
+  height: 21px;
+  border: 1px solid currentColor;
+  border-radius: 5px 5px 8px 8px;
+  background: linear-gradient(110deg, color-mix(in oklch, var(--color-primary) 11%, transparent), transparent 52%);
+  box-shadow: inset 2px 0 0 color-mix(in oklch, var(--color-text-secondary) 12%, transparent);
+}
+
+.panel-context-vial-glass[data-level="unknown"] {
+  border-style: dotted;
+}
+
+.panel-context-vial-fill {
+  position: absolute;
+  inset: auto 0 0;
+  display: block;
+  background: var(--color-primary);
+}
+
+.panel-context-vial-fill[hidden],
+.panel-context-vial-canvas[hidden] {
+  display: none;
+}
+
+.panel-context-vial-canvas {
+  color: var(--color-primary);
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.panel-context-vial-detail {
+  position: absolute;
+  z-index: 50;
+  right: 0;
+  bottom: calc(100% + 10px);
+  display: grid;
+  gap: 10px;
+  width: min(320px, calc(100vw - 36px));
+  max-height: min(50vh, 400px);
+  padding: 12px;
+  overflow: auto;
+  color: var(--color-text-primary);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 16%);
+  font-size: 12px;
+}
+
+.panel-context-vial-detail h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.panel-context-vial-request {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 8px;
+}
+
+.panel-context-vial-detail dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+}
+
+.panel-context-vial-detail dd {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-context-vial-action {
+  color: var(--color-primary);
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-context-vial-fill[hidden] { display: block; }
+  .panel-context-vial-canvas { display: none; }
+}
+
+@media (max-width: 640px) {
+  .panel-context-vial-trigger {
+    min-width: 38px;
+    min-height: 38px;
+  }
+
+  .panel-context-vial-detail {
+    right: -34px;
+  }
+}

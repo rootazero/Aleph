@@ -1484,7 +1484,8 @@ pub(crate) fn InputArea() -> impl IntoView {
                                 dial=crate::views::chat::dial_picker::Dial::Memory />
                         </Show>
                         // Live context-window gauge (self-hides until first usage).
-                        <super::context_gauge::ContextGauge />
+                        <super::context_vial::ContextVial />
+                        <super::pixel_companion::PixelCompanion />
                         // Live last-call cache hit rate (self-hides until a
                         // call reports cache activity).
                         <super::context_gauge::CacheStat />

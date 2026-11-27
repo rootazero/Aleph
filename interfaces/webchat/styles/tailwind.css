@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "./ios.css";
+@import "./context-vial.css";
+@import "./pixel-companion.css";
 
 /* Scan Leptos Rust source files for class names */
 @source "../src/**/*.rs";

@@ -6,6 +6,7 @@ use crate::appearance::{
     read_accent, read_density, read_font_scale, read_material, read_mode, read_roundness, Accent,
     AppearanceLabel, Density, FontScale, Material, Roundness, ThemeMode,
 };
+use crate::appearance::{apply_pixel_companion, read_pixel_companion};
 use crate::i18n::{t, t_string};
 use crate::platform::phone::shell::PhoneShell;
 use leptos::prelude::*;
@@ -52,6 +53,11 @@ pub fn PhoneAppearance() -> impl IntoView {
                 label=move |m: Density| m.label(i18n)
                 on_pick=|m| apply_density(m)
             />
+            <label class="flex items-center gap-3 p-4 text-sm">
+                <input type="checkbox" checked=read_pixel_companion()
+                    on:change=move |event| apply_pixel_companion(event_target_checked(&event)) />
+                {t!(i18n, appearance.pixel_companion)}
+            </label>
         </PhoneShell>
     }
 }

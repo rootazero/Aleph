@@ -566,6 +566,7 @@ pub fn PhoneComposer() -> impl IntoView {
                 rows="1"
                 style="flex:1; resize:none; max-height:140px; min-height:38px; padding:9px 12px; border:1px solid var(--color-border); border-radius:var(--radius-xl); background:var(--color-surface-raised); color:var(--color-text-primary); font:inherit; font-size:15px; outline:none;"
             ></textarea>
+            <crate::views::chat::context_vial::ContextVial />
             {move || if running() {
                 view! {
                     <div style="flex:none; display:flex; align-items:flex-end; gap:8px;">

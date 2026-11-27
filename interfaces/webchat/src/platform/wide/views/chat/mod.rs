@@ -1,6 +1,8 @@
 pub mod agent_identity;
 pub mod composer;
 pub mod context_gauge;
+pub(crate) mod context_vial;
+mod pixel_companion;
 pub mod dial_picker;
 pub mod events;
 pub mod exec_tier_picker;

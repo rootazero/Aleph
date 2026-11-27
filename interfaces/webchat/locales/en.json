@@ -439,6 +439,16 @@
     "context_usage_title": "Context usage {{ pct }}% · {{ used }} / {{ window }} tokens (this turn: {{ total }})",
     "context_usage_measured_title": "Context usage {{ pct }}% · {{ used }} / {{ window }} tokens",
     "context_usage_previous_title": "Last measured context usage {{ pct }}% · {{ used }} / {{ window }} tokens",
+    "context_vial_capacity": "Context capacity {{ window }} tokens · occupancy unknown",
+    "context_vial_unknown": "Context occupancy unknown",
+    "context_vial_detail": "Context details",
+    "context_vial_close": "Close",
+    "context_vial_loading": "Loading context…",
+    "context_vial_unavailable": "No request measurements available.",
+    "context_vial_request": "Last measured request · turn {{ turn }}",
+    "context_vial_system": "System prompt sent",
+    "context_vial_tools": "Tool schemas",
+    "context_vial_results": "Tool results · estimated tokens",
     "cache_hit_title": "Prompt-cache hit rate of the last call {{ pct }}% · read / (input + read) (same formula as the TUI status bar)",
     "starter_search_label": "Search the web",
     "starter_search_prompt": "Search today's tech headlines and summarise the three that matter most.",
@@ -2416,6 +2426,7 @@
     "last_run_unanswered": "Your last message was not answered — the run stopped before it could start; recovery will retry it"
   },
   "appearance": {
+    "pixel_companion": "Pixel companion",
     "mode": {
       "system": "System",
       "light": "Light",

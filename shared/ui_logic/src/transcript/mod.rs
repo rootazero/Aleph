@@ -69,7 +69,7 @@ pub use affordance::{
     SPINNER_FRAMES, SPINNER_PERIOD_MS, VERBS_EN, VERBS_ZH, VERB_REROLL_MS,
 };
 pub use context::{
-    panel_context_view, project_occupancy, reconcile, ContextOccupancy, ContextRow, ContextRows,
-    PROVIDER_TOLERANCE,
+    panel_context_view, project_context_detail, project_occupancy, reconcile, ContextOccupancy,
+    ContextRow, ContextRows, PanelContextDetail, PROVIDER_TOLERANCE,
 };
 pub use turn_summary::{summarize_rows, summarize_turn, turn_summary_text, MIN_TOOLS_FOR_SUMMARY};

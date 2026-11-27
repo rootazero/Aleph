@@ -28,6 +28,7 @@ const KEY_FONT_SCALE: &str = "aleph-font-scale";
 const KEY_ROUNDNESS: &str = "aleph-roundness";
 const KEY_MATERIAL: &str = "aleph-material";
 const KEY_DENSITY: &str = "aleph-density";
+const KEY_PIXEL_COMPANION: &str = "aleph-pixel-companion";
 
 // ---------------------------------------------------------------------------
 // Shared axes
@@ -314,6 +315,22 @@ pub fn apply_density(density: Density) {
     persist(KEY_DENSITY, density.storage_value());
 }
 
+#[must_use]
+pub fn read_pixel_companion() -> bool {
+    read_key(KEY_PIXEL_COMPANION).as_deref() != Some("off")
+}
+
+pub fn apply_pixel_companion(enabled: bool) {
+    if let Some(html) = root() {
+        if enabled {
+            let _ = html.remove_attribute("data-pixel-companion");
+        } else {
+            let _ = html.set_attribute("data-pixel-companion", "off");
+        }
+    }
+    persist(KEY_PIXEL_COMPANION, (!enabled).then_some("off"));
+}
+
 pub fn apply_material(material: Material) {
     if let Some(html) = root() {
         if material == Material::Luxe {
@@ -369,6 +386,9 @@ pub fn init_appearance() {
     let material = read_material();
     if material != Material::Luxe {
         apply_material(material);
+    }
+    if !read_pixel_companion() {
+        apply_pixel_companion(false);
     }
 }
 

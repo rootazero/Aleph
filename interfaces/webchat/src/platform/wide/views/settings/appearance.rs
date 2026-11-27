@@ -12,6 +12,7 @@ use crate::appearance::{
     read_accent, read_density, read_font_scale, read_material, read_mode, read_roundness, Accent,
     AppearanceLabel, Density, FontScale, Material, Roundness, ThemeMode,
 };
+use crate::appearance::{apply_pixel_companion, read_pixel_companion};
 use crate::components::ui::SwatchButton;
 use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
@@ -26,6 +27,7 @@ pub fn AppearanceView() -> impl IntoView {
     let font_scale = RwSignal::new(read_font_scale());
     let roundness = RwSignal::new(read_roundness());
     let density = RwSignal::new(read_density());
+    let companion = RwSignal::new(read_pixel_companion());
 
     let reset = move |_| {
         apply_mode(ThemeMode::System);
@@ -40,6 +42,8 @@ pub fn AppearanceView() -> impl IntoView {
         font_scale.set(FontScale::Default);
         roundness.set(Roundness::Default);
         density.set(Density::Compact);
+        apply_pixel_companion(true);
+        companion.set(true);
     };
 
     view! {
@@ -161,6 +165,16 @@ pub fn AppearanceView() -> impl IntoView {
                         }).collect::<Vec<_>>()}
                     </div>
                 </SettingCard>
+
+                <label class="flex items-center gap-3 rounded-xl border border-border p-4 text-sm">
+                    <input type="checkbox" prop:checked=move || companion.get()
+                        on:change=move |event| {
+                            let enabled = event_target_checked(&event);
+                            apply_pixel_companion(enabled);
+                            companion.set(enabled);
+                        } />
+                    {t!(i18n, appearance.pixel_companion)}
+                </label>
 
                 // --- Live preview ----------------------------------------------
                 <div class="bg-surface-sunken/40 rounded-xl p-4">
