@@ -8,7 +8,9 @@ pub(crate) mod session_key;
 #[cfg(test)]
 mod tests;
 
-pub use persistence::{load_persisted_sessions, save_persisted_sessions, wire_persistence};
+pub use persistence::{
+    load_persisted_sessions, save_persisted_sessions, wire_persistence, AcpPersistence,
+};
 pub use session_key::SessionKey;
 
 use std::collections::HashMap;
