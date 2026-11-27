@@ -162,13 +162,26 @@ class Desktop:
         return next((w for w in windows if w['layer'] == 0 and w['name'] == 'Aleph'), None)
 
     def bring_to_front(self, pid):
-        # Stage Manager shows a background window as a small thumbnail; the
-        # capture needs the real window.
+        # A freshly launched shell may still be staged when activation returns.
         subprocess.run(
-            ['osascript', '-e',
-             f'tell application "System Events" to set frontmost of (first process whose unix id is {pid}) to true'],
+            ['osascript', '-e', 'tell application "System Events"', '-e',
+             f'tell first process whose unix id is {pid}', '-e', 'set visible to true',
+             '-e', 'set frontmost to true', '-e', 'try', '-e',
+             'perform action "AXRaise" of first window', '-e', 'end try',
+             '-e', 'end tell', '-e', 'end tell'],
             check=True, capture_output=True, timeout=20,
         )
+
+    def visible_window(self, child):
+        deadline = time.monotonic() + 12
+        window = self.main_window(child.pid)
+        while time.monotonic() < deadline and child.poll() is None:
+            if window and window['onscreen'] and window['width'] >= 400:
+                return window
+            self.bring_to_front(child.pid)
+            time.sleep(0.4)
+            window = self.main_window(child.pid)
+        return window
 
     def threads(self, pid):
         result = subprocess.run(['ps', '-M', '-p', str(pid)], capture_output=True, text=True, timeout=10)
@@ -200,12 +213,15 @@ class Desktop:
             while time.monotonic() < deadline and child.poll() is None:
                 peak_rss_kib = max(peak_rss_kib, self.rss_kib(child.pid))
                 time.sleep(0.25)
+            window = self.visible_window(child)
+            require(window and window['onscreen'] and window['width'] >= 400,
+                    f'{name}: the main window is not in front: {window}')
             if action is not None:
                 action(child.pid)
                 peak_rss_kib = max(peak_rss_kib, self.rss_kib(child.pid))
-            window = self.main_window(child.pid)
-            require(window and window['onscreen'] and window['width'] >= 400,
-                    f'{name}: the main window is not in front: {window}')
+                window = self.visible_window(child)
+                require(window and window['onscreen'] and window['width'] >= 400,
+                        f'{name}: the main window is not in front after interaction: {window}')
             require(child.poll() is None, f'{name}: the shell exited early')
             image = self.out / f'desktop-{name}.png'
             subprocess.run(['screencapture', '-x', '-o', f'-l{window["id"]}', str(image)], check=True, timeout=20)

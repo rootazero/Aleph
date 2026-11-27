@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, SQLite, `aleph-protocol`, `shared-ui-logic`, NSH 0.6 Canvas and TSX, v1 IPC and Web.
 
-**Spec:** [2026-11-27 NSH Memory Nebula](../specs/2026-11-27-nsh-memory-nebula-design.md).
+**Spec:** [2026-11-27 NSH Memory Nebula](../specs/2026-11-27-nsh-memory-nebula-design.md). Results are recorded in the [macOS and Web replay](../runs/2026-11-27-nsh-memory-nebula-verification.md). / 实施结果见验证记录。
 
 ## Global Constraints / 共同约束
 
