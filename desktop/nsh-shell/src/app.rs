@@ -3,23 +3,32 @@
 //! same component after presetting its launch.
 
 use crate::connect_form::{self, Switch, View};
+use crate::deep_link::{deep_link_action, DeepLink};
 #[cfg(feature = "embedded-core")]
 use crate::local_service::{LocalService, ServerPhase};
 use crate::shell_host::HostSettings;
-use crate::{autostart, credentials, launch, panel_bridge};
+use crate::update::{self, InstallStep, Updater};
+use crate::{autostart, credentials, launch, panel_bridge, target_store};
+use aleph_client::ConnectionTarget;
 use nsh_base::theme;
 use nsh_core::desktop::{Shortcut, TrayTitleRun};
 use nsh_core::element::desktop::{
-    main_window, quit, register_global_shortcut, set_tray, tray, MenuItem, WindowRef,
+    main_window, quit, register_global_shortcut, restart, set_tray, tray, MenuItem, WindowRef,
 };
+use nsh_core::notifications::Notification;
 use nsh_core::prelude::{
-    component, dynamic, element_ref, px, request_notification_permission, signal, spawn, text,
-    view, web_view, AnyElement, Element, IntoElement, ParentElement, Styled, WebNavigation,
+    background, blocking, cleanup, component, dynamic, element_ref, next_notification_press,
+    next_url_scheme_open, px, request_notification_permission, show_notification, signal, spawn,
+    text, view, web_view, AnyElement, Element, IntoElement, ParentElement, Styled, WebNavigation,
 };
 #[cfg(feature = "embedded-core")]
 use nsh_core::prelude::{when, Interactive};
+use nsh_updater::Available;
+use std::cell::{Cell, RefCell};
 use std::io::Write;
+use std::rc::Rc;
 use std::sync::Mutex;
+use std::time::Instant;
 
 // This single-window debug trace is not a Chat or Artifacts projection.
 static LAST_QA_EVENT: Mutex<Option<serde_json::Value>> = Mutex::new(None);
@@ -81,22 +90,38 @@ pub fn App() -> impl IntoElement {
             show();
         }
     };
+    // A QA run checks the window it was given, not the update feed.
+    let updates = launch
+        .qa
+        .is_none()
+        .then(Updater::current)
+        .flatten()
+        .map(|updater| Updates::new(updater, switch.clone()));
+    let mut menu = vec![
+        MenuItem::new("Show Aleph").on_select(show.clone()),
+        MenuItem::new("Connect to Server…").on_select(connect),
+    ];
+    if let Some(updates) = &updates {
+        let updates = updates.clone();
+        menu.push(MenuItem::new("Check for Updates…").on_select(move || updates.check(true)));
+    }
+    menu.push(MenuItem::new("Enable Notifications").on_select(|| {
+        let permission = request_notification_permission();
+        spawn(async move {
+            eprintln!("NSH notification permission: {:?}", permission.await);
+        });
+    }));
+    menu.push(MenuItem::new("Quit Aleph").on_select(quit));
     set_tray(
         tray()
             .title([TrayTitleRun::new("Aleph")])
             .tooltip("Aleph")
-            .menu([
-                MenuItem::new("Show Aleph").on_select(show.clone()),
-                MenuItem::new("Connect to Server…").on_select(connect),
-                MenuItem::new("Enable Notifications").on_select(|| {
-                    let permission = request_notification_permission();
-                    spawn(async move {
-                        eprintln!("NSH notification permission: {:?}", permission.await);
-                    });
-                }),
-                MenuItem::new("Quit Aleph").on_select(quit),
-            ]),
+            .menu(menu),
     );
+    listen_for_intents(show.clone(), updates.clone());
+    if let Some(updates) = updates {
+        updates.schedule();
+    }
     let hotkey = std::env::var("ALEPH_SHELL_HOTKEY").unwrap_or_else(|_| "mod+shift+a".into());
     if hotkey == "disabled" {
         eprintln!("NSH summon hotkey disabled");
@@ -154,6 +179,208 @@ pub fn App() -> impl IntoElement {
             },
         }))
         .into_element()
+}
+
+/// The links and notification presses the app receives. nsh holds one
+/// waiter for each, so this is the app's only listener; it routes each to
+/// the Panel shown now or to the updater.
+fn listen_for_intents(show: impl Fn() + 'static, updates: Option<Updates>) {
+    spawn(async move {
+        let mut next_url = next_url_scheme_open();
+        let mut next_press = next_notification_press();
+        loop {
+            tokio::select! {
+                // nsh keeps the links that came before this listener, the
+                // one that launched the app included.
+                url = &mut next_url => {
+                    if deep_link_action(&url) == Some(DeepLink::Open) {
+                        show();
+                        panel_bridge::open_chat_in_current_panel();
+                    }
+                    next_url = next_url_scheme_open();
+                }
+                press = &mut next_press => {
+                    if press == panel_bridge::CHAT_NOTIFICATION {
+                        show();
+                        panel_bridge::open_chat_in_current_panel();
+                    } else if press == update::NOTIFICATION {
+                        if let Some(updates) = &updates {
+                            updates.install();
+                        }
+                    }
+                    next_press = next_notification_press();
+                }
+            }
+        }
+    });
+}
+
+/// The app's updates: a check 90 s after launch and every 6 h after, and on
+/// demand from the tray. A notification offers what a check finds; pressing
+/// it installs that version and restarts.
+#[derive(Clone)]
+struct Updates {
+    updater: Updater,
+    switch: Switch,
+    /// The version the last notification offered.
+    offered: Rc<RefCell<Option<Available>>>,
+    installing: Rc<Cell<bool>>,
+}
+
+impl Updates {
+    fn new(updater: Updater, switch: Switch) -> Self {
+        Self {
+            updater,
+            switch,
+            offered: Rc::default(),
+            installing: Rc::default(),
+        }
+    }
+
+    fn schedule(&self) {
+        let updates = self.clone();
+        let launched = Instant::now();
+        spawn(async move {
+            let mut last_check = None;
+            loop {
+                let delay = update::next_check_delay(launched.elapsed(), last_check);
+                let _ = background(tokio::time::sleep(delay)).await;
+                last_check = Some(launched.elapsed());
+                updates.run_check(false).await;
+            }
+        });
+    }
+
+    /// Checks now. `asked`: the user asked, so say what came of it even when
+    /// there is nothing new.
+    fn check(&self, asked: bool) {
+        let updates = self.clone();
+        spawn(async move { updates.run_check(asked).await });
+    }
+
+    async fn run_check(&self, asked: bool) {
+        let updater = self.updater.clone();
+        let result = background(async move { updater.check().await })
+            .await
+            .unwrap_or_else(|_| Err("the update check stopped".into()));
+        match result {
+            Ok(Some(available)) => {
+                let repeated = self
+                    .offered
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|offered| offered.version == available.version);
+                if asked || !repeated {
+                    notify(
+                        update::NOTIFICATION,
+                        format!("Aleph {} 可以更新", available.version),
+                        "点按此通知以安装并重新启动 Aleph。".into(),
+                    );
+                }
+                *self.offered.borrow_mut() = Some(available);
+            }
+            Ok(None) => {
+                if asked {
+                    notify(
+                        update::NOTIFICATION,
+                        "Aleph 已是最新版本".into(),
+                        format!("当前版本 {}。", self.updater.version()),
+                    );
+                }
+            }
+            Err(error) => {
+                eprintln!("update check failed: {error}");
+                if asked {
+                    notify(update::NOTIFICATION, "检查更新失败".into(), error);
+                }
+            }
+        }
+    }
+
+    /// Installs the version offered last, then restarts. Pressing the
+    /// notification again while it runs does nothing.
+    fn install(&self) {
+        let Some(available) = self.offered.borrow().clone() else {
+            return;
+        };
+        if self.installing.replace(true) {
+            return;
+        }
+        let updates = self.clone();
+        spawn(async move {
+            if let Err(error) = updates.run_install(available).await {
+                eprintln!("update failed: {error}");
+                notify(update::NOTIFICATION, "更新失败".into(), error);
+            }
+            updates.installing.set(false);
+        });
+    }
+
+    /// Downloads and verifies while the app and its server keep running;
+    /// only the swap itself waits for the server to stop. A failed swap
+    /// leaves the installed app as it was and starts the server again.
+    async fn run_install(&self, available: Available) -> Result<(), String> {
+        notify(
+            update::NOTIFICATION,
+            format!("正在更新到 Aleph {}", available.version),
+            "下载并校验完成后，Aleph 会重新启动。".into(),
+        );
+        let updater = self.updater.clone();
+        let mut staged = Some(
+            background(async move { updater.prepare(&available).await })
+                .await
+                .map_err(|_| "the update download stopped".to_owned())??,
+        );
+        let target = match &self.switch.home {
+            Some(home) => target_store::load_target(home),
+            None => ConnectionTarget::Local,
+        };
+        for step in update::install_plan(&target) {
+            match step {
+                InstallStep::StopLocalServer => {
+                    #[cfg(feature = "embedded-core")]
+                    {
+                        let service = self.switch.service.clone();
+                        let _ = blocking(move || service.stop()).await;
+                    }
+                }
+                InstallStep::Install => {
+                    let staged = staged.take().expect("one install step");
+                    let finished = blocking(move || staged.finish())
+                        .await
+                        .map_err(|_| "the update swap stopped".to_owned())
+                        .and_then(|result| result.map_err(|error| error.to_string()));
+                    if let Err(error) = finished {
+                        self.resume_local_server(&target);
+                        return Err(error);
+                    }
+                }
+                InstallStep::Restart => restart(),
+            }
+        }
+        Ok(())
+    }
+
+    /// After a failed swap the installed app is unchanged, so its bundled
+    /// server, stopped for the swap, starts again.
+    fn resume_local_server(&self, target: &ConnectionTarget) {
+        #[cfg(feature = "embedded-core")]
+        if *target == ConnectionTarget::Local {
+            self.switch.service.start();
+        }
+        #[cfg(not(feature = "embedded-core"))]
+        let _ = target;
+    }
+}
+
+/// Shows a system notification; one the system refuses is only logged.
+fn notify(id: &str, title: String, body: String) {
+    let shown = show_notification(Notification::new(id, title.clone(), body));
+    spawn(async move {
+        if !shown.await {
+            eprintln!("notification not shown: {title}");
+        }
+    });
 }
 
 /// This computer's server: the bundled one once it is ready, or, in a build
@@ -263,6 +490,8 @@ fn panel(launch: &launch::Launch, window: WindowRef) -> AnyElement {
         credentials,
         autostart::Reader::new(nonce.as_deref()),
     );
+    let retiring = bridge.clone();
+    cleanup(move || retiring.retire());
     let navigation = bridge.clone();
     let terminated = bridge.clone();
     web_view(launch.settings.url.clone())

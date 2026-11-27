@@ -8,6 +8,10 @@
     "aleph"
   ],
   "singleInstance": true,
+  "updater": {
+    "url": "https://github.com/rootazero/Aleph/releases/latest/download/aleph-update.json",
+    "publicKey": "NS2wNeIErtH/FsHmeMxn37Aii08gdMfrfj4bFYw24Uo="
+  },
   "window": {
     "title": "Aleph",
     "defaultSize": {

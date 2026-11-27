@@ -24,6 +24,8 @@ mod connect_form;
 mod ipc_status;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod panel_bridge;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+mod update;
 #[cfg(feature = "tsx-panel")]
 mod panel_host;
 #[cfg(all(feature = "tsx-panel", target_os = "macos"))]

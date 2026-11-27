@@ -5,6 +5,7 @@ re-sign, and archive without AppleDouble files. Packaging takes minutes the
 first time (the nsh runner is compiled); later runs reuse its build.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "nsh_package.sh"
+MANIFEST_SCRIPT = ROOT / "scripts" / "nsh_update_manifest.sh"
 VERSION = (ROOT / "VERSION").read_text().strip()
 
 
@@ -72,11 +74,13 @@ class MacosPackage(unittest.TestCase):
         )
         self.assertEqual(verify.returncode, 0, verify.stderr)
 
-    def test_archive_holds_the_server_and_no_appledouble_files(self):
+    def archive(self) -> Path:
         machine = os.uname().machine
         arch = "aarch64" if machine == "arm64" else machine
-        archive = self.out / f"Aleph-{VERSION}-macos-{arch}.tar.gz"
-        with tarfile.open(archive) as tar:
+        return self.out / f"Aleph-{VERSION}-macos-{arch}.tar.gz"
+
+    def test_archive_holds_the_server_and_no_appledouble_files(self):
+        with tarfile.open(self.archive()) as tar:
             names = tar.getnames()
         self.assertIn("Aleph.app/Contents/MacOS/aleph-server", names)
         self.assertIn("Aleph.app/Contents/MacOS/AlephBridge", names)
@@ -91,6 +95,36 @@ class MacosPackage(unittest.TestCase):
             text=True,
         )
         self.assertIn("com.apple.security.device.audio-input", entitlements.stdout)
+
+    def test_package_carries_the_update_configuration(self):
+        config = self.app / "Contents" / "Resources" / "nsh" / "assets" / "nsh-updater.json"
+        nsh_json = json.loads((ROOT / "desktop" / "nsh-shell" / "nsh.json").read_text())
+        text = config.read_text()
+        self.assertIn(nsh_json["updater"]["url"], text)
+        self.assertIn(nsh_json["updater"]["publicKey"], text)
+
+    @unittest.skipUnless(
+        os.environ.get("ALEPH_UPDATE_KEY_FILE"),
+        "set ALEPH_UPDATE_KEY_FILE to the update key's .secret: nsh signs only with "
+        "the key of nsh.json's updater.publicKey",
+    )
+    def test_manifest_is_aleph_update_json_with_its_signature(self):
+        with tempfile.TemporaryDirectory(prefix="aleph-nsh-manifest-") as work:
+            out = Path(work) / "release"
+            result = subprocess.run(
+                ["bash", str(MANIFEST_SCRIPT), "--out", str(out),
+                 "--key", os.environ["ALEPH_UPDATE_KEY_FILE"], str(self.archive())],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue((out / "aleph-update.json").is_file())
+            self.assertTrue((out / "latest.json.sig").is_file())
+            self.assertFalse((out / "latest.json").exists())
+            manifest = (out / "aleph-update.json").read_text()
+            self.assertIn(VERSION, manifest)
+            self.assertIn(self.archive().name, manifest)
 
 
 if __name__ == "__main__":
