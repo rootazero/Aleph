@@ -358,11 +358,55 @@ where
 /// The optional live tail remains pre-scrub and must be gated by its readers.
 /// Only the direct child is reaped here; this is not a process-tree guarantee.
 pub async fn run_child_with_drain(
+    child: Child,
+    stdin_data: Option<&[u8]>,
+    timeout: Duration,
+    max_output_bytes: usize,
+    lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
+) -> Result<SandboxOutput, SandboxError> {
+    run_child(
+        child,
+        stdin_data,
+        timeout,
+        max_output_bytes,
+        lifecycle,
+        ChildTeardown::Direct,
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+pub(super) async fn run_strict_shell_child(
+    child: Child,
+    timeout: Duration,
+    max_output_bytes: usize,
+    lifecycle: &crate::sandbox::shell_lifecycle::ShellLifecycle,
+    scope: crate::sandbox::cgroup_v2::StrictShellCgroup,
+) -> Result<SandboxOutput, SandboxError> {
+    run_child(
+        child,
+        None,
+        timeout,
+        max_output_bytes,
+        Some(lifecycle),
+        ChildTeardown::StrictShell(scope),
+    )
+    .await
+}
+
+enum ChildTeardown {
+    Direct,
+    #[cfg(target_os = "linux")]
+    StrictShell(crate::sandbox::cgroup_v2::StrictShellCgroup),
+}
+
+async fn run_child(
     mut child: Child,
     stdin_data: Option<&[u8]>,
     timeout: Duration,
     max_output_bytes: usize,
     lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
+    teardown: ChildTeardown,
 ) -> Result<SandboxOutput, SandboxError> {
     let start = Instant::now();
     let stdin = child.stdin.take();
@@ -435,8 +479,22 @@ pub async fn run_child_with_drain(
                 _ = cancel => None,
             };
             let elapsed_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-            if !matches!(exit, Some(Ok(Ok(_)))) {
-                kill_and_reap(&mut child).await?;
+            let forced = !matches!(exit, Some(Ok(Ok(_))));
+            match teardown {
+                ChildTeardown::Direct => {
+                    if forced {
+                        kill_and_reap(&mut child).await?;
+                    }
+                }
+                #[cfg(target_os = "linux")]
+                ChildTeardown::StrictShell(scope) => {
+                    // Close the writer before any lingering wrapper is drained.
+                    // The terminal phase is not published until the group is empty.
+                    if let Some(control) = lifecycle {
+                        control.retire_input();
+                    }
+                    reap_strict_shell_child(&mut child, scope, forced).await?;
+                }
             }
             Ok::<_, SandboxError>((exit, elapsed_ms))
         };
@@ -480,6 +538,26 @@ pub async fn run_child_with_drain(
             "shell child cancelled and reaped".into(),
         )),
     }
+}
+
+#[cfg(target_os = "linux")]
+pub(super) async fn reap_strict_shell_child(
+    child: &mut Child,
+    scope: crate::sandbox::cgroup_v2::StrictShellCgroup,
+    forced: bool,
+) -> Result<(), SandboxError> {
+    if forced {
+        // Always try to reap the direct child, including if group signalling fails.
+        let signal = scope.kill();
+        kill_and_reap(child).await?;
+        signal.map_err(strict_shell_teardown_error)?;
+    }
+    scope.finish().await.map_err(strict_shell_teardown_error)
+}
+
+#[cfg(target_os = "linux")]
+fn strict_shell_teardown_error(error: io::Error) -> SandboxError {
+    SandboxError::ExecutionFailed(format!("strict shell group teardown unconfirmed: {error}"))
 }
 
 async fn wait_with_startup_stdin(

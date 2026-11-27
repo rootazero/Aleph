@@ -90,6 +90,11 @@ impl MetaLocks {
         fresh
     }
 
+    /// Exclude metadata and directory mutations for a key, without reading the document.
+    pub(crate) async fn acquire(&self, key: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        self.slot(key).lock_owned().await
+    }
+
     /// Take the session's write lock and read its metadata under it.
     ///
     /// The returned guard holds the lock until it is committed or dropped.
@@ -101,13 +106,20 @@ impl MetaLocks {
         key: &str,
         path: PathBuf,
     ) -> Result<MetaGuard, SessionStoreError> {
-        let permit = self.slot(key).lock_owned().await;
-        let meta = read(&path).await?;
-        Ok(MetaGuard {
-            path,
-            meta,
-            _permit: permit,
-        })
+        MetaGuard::read_under(self.acquire(key).await, path).await
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) async fn try_lock_existing(
+        &self,
+        key: &str,
+        path: PathBuf,
+    ) -> Result<Option<MetaGuard>, SessionStoreError> {
+        let Ok(permit) = self.slot(key).try_lock_owned() else {
+            return Ok(None);
+        };
+        let guard = MetaGuard::read_under(permit, path).await?;
+        Ok(guard.existing().is_some().then_some(guard))
     }
 
     /// How many slots the table is holding. Test-only observability for the
@@ -127,10 +139,27 @@ impl MetaLocks {
 pub(crate) struct MetaGuard {
     path: PathBuf,
     meta: Option<SessionMetadata>,
-    _permit: tokio::sync::OwnedMutexGuard<()>,
+    permit: Arc<tokio::sync::OwnedMutexGuard<()>>,
 }
 
 impl MetaGuard {
+    async fn read_under(
+        permit: tokio::sync::OwnedMutexGuard<()>,
+        path: PathBuf,
+    ) -> Result<Self, SessionStoreError> {
+        let meta = read(&path).await?;
+        Ok(Self {
+            path,
+            meta,
+            permit: Arc::new(permit),
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn mutex(&self) -> &Arc<tokio::sync::Mutex<()>> {
+        tokio::sync::OwnedMutexGuard::mutex(&self.permit)
+    }
+
     /// Mutable access to the existing document. `None` means there is nothing
     /// to update — use [`Self::insert`] to create one.
     pub(crate) const fn existing_mut(&mut self) -> Option<&mut SessionMetadata> {
@@ -173,7 +202,7 @@ impl MetaGuard {
                 "commit with no metadata to write".to_string(),
             ));
         };
-        write(&self.path, &meta).await?;
+        write(&self.path, &meta, self.permit).await?;
         Ok(meta)
     }
 
@@ -187,7 +216,7 @@ impl MetaGuard {
                 "write_back with no metadata to write".to_string(),
             ));
         };
-        write(&self.path, meta).await
+        write(&self.path, meta, self.permit.clone()).await
     }
 }
 
@@ -235,7 +264,11 @@ pub(crate) async fn read(path: &Path) -> Result<Option<SessionMetadata>, Session
 /// The per-session lock above now means two writers no longer overlap at all.
 /// This stays atomic anyway: it is what bounds the damage from a crash or a
 /// full disk *during* the write, which no lock can prevent.
-async fn write(path: &Path, meta: &SessionMetadata) -> Result<(), SessionStoreError> {
+async fn write(
+    path: &Path,
+    meta: &SessionMetadata,
+    permit: Arc<tokio::sync::OwnedMutexGuard<()>>,
+) -> Result<(), SessionStoreError> {
     #[cfg(test)]
     if failpoint::take(path) {
         return Err(SessionStoreError::DatabaseError(
@@ -250,9 +283,13 @@ async fn write(path: &Path, meta: &SessionMetadata) -> Result<(), SessionStoreEr
     let contents = serde_json::to_string_pretty(meta).map_err(|e| {
         SessionStoreError::DatabaseError(format!("Failed to serialize metadata: {e}"))
     })?;
-    crate::utils::atomic_write::atomic_write_file(path, &contents)
-        .await
-        .map_err(|e| SessionStoreError::DatabaseError(format!("Failed to write metadata: {e}")))
+    crate::utils::atomic_write::atomic_write_bytes_with_rename_guard(
+        path,
+        contents.as_bytes(),
+        permit,
+    )
+    .await
+    .map_err(|e| SessionStoreError::DatabaseError(format!("Failed to write metadata: {e}")))
 }
 
 /// Test-only failure injection for `write`, keyed by path so parallel tests

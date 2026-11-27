@@ -37,6 +37,8 @@ pub use bootstrap_tickets::{
     BootstrapTicketError, ConsumedBootstrapTicket, OutstandingBootstrapTicket,
 };
 pub use slot::{install_degraded_users_store, install_users_store};
+#[cfg(target_os = "linux")]
+pub(crate) use tokens::ShellAccountGuard;
 pub use types::*;
 pub use users::{UserRecord, UserRole, UserStatus, OWNER_USER_ID};
 

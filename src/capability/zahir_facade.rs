@@ -1733,6 +1733,49 @@ impl ZahirFacade {
         }
     }
 
+    /// Commit one Shell pipe operation without calling a handler under the
+    /// provider, registry, or ownership guards.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn commit_shell_pipe_attempt(
+        &self,
+        lease: &BackendLease,
+        attempt: crate::sandbox::shell_input::ShellPipeAttempt,
+    ) -> Result<
+        crate::sandbox::shell_input::ShellEffectResult,
+        crate::sandbox::shell_input::ShellEffectDenied,
+    > {
+        use crate::sandbox::shell_input::ShellEffectDenied;
+        let BackendSourceEvidence::Tool {
+            canonical_entry,
+            provider_generation,
+        } = &lease.source
+        else {
+            return Err(ShellEffectDenied::Stale);
+        };
+        let descriptor = &canonical_entry.entry().descriptor;
+        if lease.descriptor.id != tool_id("bash")
+            || descriptor.source != crate::tools::service::ToolSource::Builtin
+            || !lease.required_resources.is_empty()
+            || canonical_entry.provider_generation() != *provider_generation
+            || crate::capability::backend::to_descriptor(descriptor) != lease.descriptor
+        {
+            return Err(ShellEffectDenied::Stale);
+        }
+        // This private profile does not consume a domain policy attachment.
+        // Do not treat the absence of an attachment as permission to bypass it.
+        if self.policy.is_configured(&lease.descriptor.id)
+            || canonical_entry.entry().domain_policy.is_some()
+        {
+            return Err(ShellEffectDenied::UnverifiedPolicy);
+        }
+        self.adapter.registry.commit_shell_pipe_attempt(
+            canonical_entry,
+            &self.tree,
+            &Self::binding(lease),
+            attempt,
+        )
+    }
+
     /// Commit one admission with both captured bindings under the same tree gate.
     pub(crate) fn admit_memory(
         &self,
@@ -2614,6 +2657,75 @@ mod tests {
         tree.bump(LifetimeScope::Runtime)
             .expect("runtime bump succeeds");
         assert_eq!(host.validate_lease(&lease), Err(ResolveError::StaleOwner));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shell_effect_rejects_same_descriptor_replacement() {
+        use crate::sandbox::shell_input::{
+            nonblocking_test_pipe, JsonlFrame, ShellEffectDenied, ShellEffectResult,
+            ShellInputAction, ShellPipeAttempt,
+        };
+        use crate::sandbox::shell_lifecycle::ShellLifecycle;
+        use std::io::{ErrorKind, Read};
+        use std::time::{Duration, Instant};
+
+        let (host, registry, tree) = host_parts(&["bash", "other"]);
+        let id = tool_id("bash");
+        let original = host.resolve(ref_for(&id)).unwrap();
+        let unrelated = host.resolve(ref_for(&tool_id("other"))).unwrap();
+        let (mut reader, writer) = nonblocking_test_pipe();
+        let job = Arc::new(ShellLifecycle::default());
+        job.spawn(|| Ok(())).unwrap();
+        job.ready_with_input(writer).unwrap();
+        let attempt = || {
+            ShellPipeAttempt::new_for_test(
+                job.clone(),
+                0,
+                Instant::now() + Duration::from_secs(10),
+                ShellInputAction::Write(JsonlFrame::from_record(&Value::Null).unwrap()),
+            )
+        };
+        let mut bytes = [0; 5];
+        assert_eq!(
+            host.commit_shell_pipe_attempt(&unrelated, attempt()),
+            Err(ShellEffectDenied::Stale)
+        );
+        assert_eq!(
+            reader.read(&mut bytes).unwrap_err().kind(),
+            ErrorKind::WouldBlock
+        );
+        registry
+            .replace(
+                ToolCapabilityDescriptor::from_definition(&fake_def("bash"), 0),
+                Arc::new(fake_handler("bash")),
+            )
+            .unwrap();
+        assert_eq!(
+            host.commit_shell_pipe_attempt(&original, attempt()),
+            Err(ShellEffectDenied::Stale)
+        );
+        assert_eq!(
+            reader.read(&mut bytes).unwrap_err().kind(),
+            ErrorKind::WouldBlock
+        );
+        let current = host.resolve(ref_for(&id)).unwrap();
+        tree.bump(LifetimeScope::Runtime).unwrap();
+        assert_eq!(
+            host.commit_shell_pipe_attempt(&current, attempt()),
+            Err(ShellEffectDenied::Stale)
+        );
+        assert_eq!(
+            reader.read(&mut bytes).unwrap_err().kind(),
+            ErrorKind::WouldBlock
+        );
+        let current = host.resolve(ref_for(&id)).unwrap();
+        assert_eq!(
+            host.commit_shell_pipe_attempt(&current, attempt()),
+            Ok(ShellEffectResult::Written(5))
+        );
+        reader.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes, b"null\n");
     }
 
     #[test]

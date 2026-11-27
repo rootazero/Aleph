@@ -41,6 +41,16 @@ pub async fn atomic_write_file(path: &Path, content: &str) -> Result<(), AlephEr
 /// mode (e.g. drop the executable bit from a `0755` script). A brand-new file
 /// keeps the `0600` staging default.
 pub async fn atomic_write_bytes(path: &Path, content: &[u8]) -> Result<(), AlephError> {
+    atomic_write_bytes_with_rename_guard(path, content, ()).await
+}
+
+/// Keep a caller's mutation guard through the filesystem commit, even if the
+/// awaiting task is cancelled after the rename has been scheduled.
+pub(crate) async fn atomic_write_bytes_with_rename_guard<G: Send + 'static>(
+    path: &Path,
+    content: &[u8],
+    guard: G,
+) -> Result<(), AlephError> {
     let parent = path.parent().ok_or_else(|| AlephError::ConfigError {
         message: format!("Path has no parent directory: {path:?}"),
         suggestion: None,
@@ -95,14 +105,19 @@ pub async fn atomic_write_bytes(path: &Path, content: &[u8]) -> Result<(), Aleph
         }
     }
 
-    fs::rename(&tmp_path, path)
-        .await
-        .map_err(|e| AlephError::ConfigError {
-            message: format!("Failed to rename {tmp_path:?} -> {path:?}: {e}"),
+    let destination = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        std::fs::rename(tmp.path(), &destination).map_err(|e| AlephError::ConfigError {
+            message: format!("Failed to rename {tmp_path:?} -> {destination:?}: {e}"),
             suggestion: None,
-        })?;
-
-    Ok(())
+        })
+    })
+    .await
+    .map_err(|e| AlephError::ConfigError {
+        message: format!("Atomic rename task failed for {path:?}: {e}"),
+        suggestion: None,
+    })?
 }
 
 #[cfg(test)]

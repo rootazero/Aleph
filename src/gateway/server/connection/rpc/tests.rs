@@ -66,6 +66,129 @@ async fn execute(
 }
 
 #[tokio::test]
+async fn shell_origin_cannot_be_replayed_or_rebound() {
+    assert_shell_origin(false).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires a delegated Linux supervisor subgroup and ALEPH_TEST_FIXED_JSONL_SERVER"]
+async fn paired_shell_approval_reaches_fixed_consumer() {
+    assert!(std::env::var_os("ALEPH_TEST_FIXED_JSONL_SERVER").is_some());
+    assert_shell_origin(true).await;
+}
+
+async fn assert_shell_origin(_native: bool) {
+    use crate::gateway::security::DeviceTokenManager;
+    use crate::gateway::server::connection::dispatch::current_paired_shell_origin;
+
+    let store = Arc::new(SecurityStore::in_memory().unwrap());
+    store
+        .create_user("alice", "Alice", UserRole::Member)
+        .unwrap();
+    let manager = DeviceTokenManager::new(store.clone());
+    let ticket = manager
+        .create_bootstrap_ticket(None, Some("alice"))
+        .unwrap();
+    let paired = manager
+        .exchange_bootstrap_ticket(&ticket, Some("device-alice".into()), None, None)
+        .unwrap();
+    let credential = manager
+        .validate_device_token(&paired.device_token)
+        .unwrap()
+        .unwrap();
+    let mut state = fixture_state("alice");
+    state.verified_device_token_id = Some(credential.token_id.clone());
+    let connections = Arc::new(RwLock::new(HashMap::from([("first".into(), state)])));
+    let panel = DispatchPeer::panel(
+        connections.clone(),
+        "first".into(),
+        false,
+        Some(store.clone()),
+    );
+    let mut handlers = HandlerRegistry::new();
+    let saved_origin = Arc::new(std::sync::Mutex::new(None));
+    for method in ["chat.send", "agent.run"] {
+        let saved_origin = saved_origin.clone();
+        #[cfg(target_os = "linux")]
+        let account_store = store.clone();
+        handlers.register(method, move |req| {
+            let saved_origin = saved_origin.clone();
+            #[cfg(target_os = "linux")]
+            let account_store = account_store.clone();
+            async move {
+                let captured = current_paired_shell_origin();
+                let bound = match captured {
+                    Some(binding) => {
+                        *saved_origin.lock().unwrap() = Some(binding.clone());
+                        #[cfg(target_os = "linux")]
+                        if req.id.as_ref().and_then(serde_json::Value::as_str) == Some("attached") {
+                            crate::gateway::execution_engine::assert_paired_shell_effect_order(
+                                binding.clone(),
+                                &account_store,
+                                _native,
+                            )
+                            .await;
+                        }
+                        tokio::spawn(async move { binding.still_connected().await })
+                            .await
+                            .unwrap()
+                    }
+                    None => false,
+                };
+                assert!(
+                    !tokio::spawn(async { current_paired_shell_origin().is_some() })
+                        .await
+                        .unwrap()
+                );
+                JsonRpcResponse::success(req.id, json!({"bound": bound}))
+            }
+        });
+    }
+    let executor = executor(handlers, Arc::new(RateLimiter::new(Default::default())));
+    let request = |method, key| {
+        JsonRpcRequest::with_id(
+            method,
+            Some(json!({"idempotency_key": key, "verified_device_token_id": credential.token_id})),
+            json!(key),
+        )
+    };
+    let attached = invoke(&executor, &panel, request("chat.send", "attached")).await;
+    assert_eq!(attached["result"]["bound"], true, "{attached}");
+    let fallback = invoke(&executor, &panel, request("agent.run", "fallback")).await;
+    assert_eq!(fallback["result"]["bound"], false, "{fallback}");
+
+    #[cfg(target_os = "linux")]
+    {
+        let origin = saved_origin.lock().unwrap().clone().unwrap();
+        let guard = origin.try_effect_guard().unwrap();
+        assert_eq!(guard.role_at_effect(), Some(UserRole::Member));
+        assert!(connections.try_write().is_err());
+    }
+
+    let mut table = connections.write().await;
+    let state = table.remove("first").unwrap();
+    table.insert("second".into(), state);
+    drop(table);
+    let old_origin = saved_origin.lock().unwrap().take().unwrap();
+    assert!(!old_origin.still_connected().await);
+    #[cfg(target_os = "linux")]
+    assert!(matches!(
+        old_origin.try_effect_guard(),
+        Err(crate::sandbox::shell_input::ShellEffectDenied::Stale)
+    ));
+    let untrusted = DispatchPeer::legacy(connections.clone(), "second".into(), true);
+    let legacy = invoke(&executor, &untrusted, request("chat.send", "legacy")).await;
+    assert_eq!(legacy["result"]["bound"], false, "{legacy}");
+
+    assert!(store.revoke_device_token(&credential.token_id).unwrap());
+    assert!(store.is_device_approved(&paired.device_id).unwrap());
+    let second = DispatchPeer::panel(connections, "second".into(), false, Some(store));
+    let revoked = invoke(&executor, &second, request("chat.send", "revoked")).await;
+    assert_eq!(revoked["result"]["bound"], false, "{revoked}");
+}
+
+#[tokio::test]
 async fn mounted_graph_reads_prepare_without_an_idempotency_key() {
     let peer = peer("graph-reader");
     let caller = peer.snapshot().await.unwrap();

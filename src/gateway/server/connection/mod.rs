@@ -427,10 +427,16 @@ pub async fn handle_connection(
         idempotency: ctx.idempotency_guard.clone(),
         class: ctx.channel_class,
     };
-    let rpc_peer = dispatch::DispatchPeer::legacy(
+    let paired_store = ctx.security_store.as_ref().filter(|store| {
+        ctx.device_token_mgr
+            .as_ref()
+            .is_some_and(|manager| Arc::ptr_eq(store, manager.store()))
+    });
+    let rpc_peer = dispatch::DispatchPeer::panel(
         ctx.connections.clone(),
         conn_id.clone(),
         ctx.client_is_local,
+        paired_store.cloned(),
     );
     let mut ui_effects = acknowledged_effects::AcknowledgedEffects::new();
     let ui_dispatch = acknowledged_effects::EffectDispatch {
@@ -889,10 +895,10 @@ pub async fn handle_connection(
                                                     // authorization and is the sole source of the
                                                     // credential-verified device id (never the request's
                                                     // claimed id; node admission below cannot reach it).
-                                                    let (authorized, resolved_user, resolved_role, verified_user) =
+                                                    let (authorized, resolved_user, resolved_role, verified_user, token_id) =
                                                         if conns.contains_key(&conn_id) {
-                                                            let (fresh_ok, fresh_verified_device_id) =
-                                                                auth::revalidate_connect_credential_source(
+                                                            let (fresh_ok, fresh_credential) =
+                                                                auth::revalidate_connect_credential(
                                                                     &auth_outcome,
                                                                     req.params.as_ref(),
                                                                     ctx.device_token_mgr.as_deref(),
@@ -902,12 +908,15 @@ pub async fn handle_connection(
                                                                 authorized,
                                                                 ctx.client_is_local,
                                                                 authed_device_id.as_deref(),
-                                                                fresh_verified_device_id.as_deref(),
+                                                                fresh_credential.as_ref().map(|c| c.device_id.as_str()),
                                                                 ctx.security_store.as_deref(),
                                                             );
-                                                            (authorized, u, r, v)
+                                                            let token_id = fresh_credential
+                                                                .filter(|_| v.is_some())
+                                                                .map(|c| c.token_id);
+                                                            (authorized, u, r, v, token_id)
                                                         } else {
-                                                            (false, None, "guest", None)
+                                                            (false, None, "guest", None, None)
                                                         };
                                                     // What the client is told, and what the event
                                                     // scope grants. A connect can be
@@ -991,6 +1000,7 @@ pub async fn handle_connection(
                                                             state.caller_role = resolved_role.to_string();
                                                             state.caller_user = resolved_user;
                                                             state.verified_user = verified_user;
+                                                            state.verified_device_token_id = token_id;
                                                             // Device binding for the per-device revoke.
                                                             // Same value as the connection-local latch
                                                             // above, written under this one lock: the

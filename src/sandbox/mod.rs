@@ -33,7 +33,13 @@ pub mod resource_governor;
 pub mod sandbox_init;
 pub mod scrub;
 pub mod security_kernel_hook;
+#[cfg(target_os = "linux")]
+pub(crate) mod shell_input;
 pub mod shell_lifecycle;
+#[cfg(target_os = "linux")]
+pub(crate) mod shell_policy;
+#[cfg(target_os = "linux")]
+pub(crate) mod shell_workspace;
 pub mod summary;
 pub mod windows_init;
 pub mod workspace;
@@ -74,6 +80,13 @@ pub trait Sandbox: Send + Sync + 'static {
     /// for injection into the LLM system prompt. Default `None` keeps
     /// mock / no-op implementations silent. See [`SandboxSummary`].
     fn summary(&self) -> Option<SandboxSummary> {
+        None
+    }
+
+    /// Obtain the concrete, policy-bearing workspace without discovering a
+    /// second sandbox or using a downcast. Disabled and mock sandboxes opt out.
+    #[cfg(target_os = "linux")]
+    fn as_workspace(&self) -> Option<&workspace::WorkspaceSandbox> {
         None
     }
 

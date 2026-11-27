@@ -99,6 +99,26 @@ pub struct ApprovalAction {
 }
 
 impl ApprovalAction {
+    /// A single effect on a fixed-profile Shell job. Do not fingerprint or
+    /// summarize the record; even the ledger must not receive its contents.
+    #[cfg(target_os = "linux")]
+    pub(in crate::sandbox) fn for_shell_input(job: u64, bytes: Option<usize>) -> Self {
+        let summary = match bytes {
+            Some(bytes) => format!("Send one JSON record ({bytes} bytes) to Shell job {job}"),
+            None => format!("Close input to Shell job {job}"),
+        };
+        Self {
+            tool_name: "bash".into(),
+            summary,
+            cwd: None,
+            analysis: None,
+            reason: "Live Shell input requires one-time approval".into(),
+            grant_key: None,
+            allowed_decisions: crate::exec::allowed_decisions::once_only(),
+            rule_id: None,
+        }
+    }
+
     /// A tool call: `name` plus the call's raw JSON `input`.
     #[must_use]
     pub fn for_tool_call(name: &str, input: &Value, reason: impl Into<String>) -> Self {

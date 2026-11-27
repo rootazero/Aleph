@@ -155,6 +155,14 @@ where
         read(&self.snapshot.load_full())
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn try_guard_current(
+        &self,
+    ) -> Option<(std::sync::MutexGuard<'_, ()>, Arc<VersionedSnapshot<T>>)> {
+        let guard = self.mutation_lock.try_lock().ok()?;
+        Some((guard, self.snapshot.load_full()))
+    }
+
     #[must_use]
     pub(crate) fn revision(&self) -> u64 {
         self.snapshot.load().revision

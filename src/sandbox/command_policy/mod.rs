@@ -75,6 +75,7 @@ pub use rules::{default_rules, hardline_rules, EnforcementMode, PolicyRule, Rule
 /// `MAX_VIEW_BYTES`). Matching stays linear in that total, so the ceiling is a
 /// small constant factor above this window rather than this window exactly.
 const MAX_SCAN_BYTES: usize = 256 * 1024;
+const MAX_COMMAND_TEXT_BYTES: usize = 2 * MAX_SCAN_BYTES;
 
 /// A compiled command policy: a [`RegexSet`] of tunable rules (with parallel
 /// metadata arrays: matched index → action + name + description) under a global
@@ -231,7 +232,7 @@ impl CommandPolicy {
         // cross-boundary match. All slice ends land on char boundaries to
         // keep `&str` valid (UTF-8 safe).
         let scan_buf;
-        let windowed: &str = if command_text.len() <= 2 * MAX_SCAN_BYTES {
+        let windowed: &str = if command_text.len() <= MAX_COMMAND_TEXT_BYTES {
             command_text
         } else {
             let len = command_text.len();
@@ -264,8 +265,10 @@ impl CommandPolicy {
         // The original command is unchanged; this only affects what the regexes
         // see. Borrowed (no allocation) when clean.
         let normalized = normalize::normalize_for_matching(windowed);
-        let scan: &str = &normalized;
+        self.evaluate_normalized(&normalized)
+    }
 
+    fn evaluate_normalized(&self, scan: &str) -> PolicyEvaluation {
         let mut eval = PolicyEvaluation::default();
         let mut block_reason: Option<String> = None;
         let mut warn_reason: Option<String> = None;
@@ -343,7 +346,7 @@ impl CommandPolicy {
 /// "keep the first N" was a bypass rather than a budget.
 #[must_use]
 pub fn command_text(cmd: &SandboxCommand) -> String {
-    const CAP: usize = 2 * MAX_SCAN_BYTES;
+    const CAP: usize = MAX_COMMAND_TEXT_BYTES;
 
     let mut s = String::with_capacity(cmd.program.len() + 16);
     s.push_str(&cmd.program);
@@ -426,6 +429,23 @@ fn ceil_boundary(s: &str, mut i: usize) -> usize {
     i
 }
 
+/// Use the ordinary command-text projection only if it retains every byte.
+#[cfg(target_os = "linux")]
+pub(super) fn complete_command_text(cmd: &SandboxCommand) -> Option<String> {
+    let prefix = cmd.args.iter().try_fold(cmd.program.len(), |len, arg| {
+        len.checked_add(1)?.checked_add(arg.len())
+    })?;
+    let expected = match &cmd.stdin {
+        Some(stdin) => {
+            std::str::from_utf8(stdin).ok()?;
+            // A prefix already at the cap takes the early return in command_text.
+            prefix.checked_add(1)?.checked_add(stdin.len())?
+        }
+        None => prefix,
+    };
+    (expected <= MAX_COMMAND_TEXT_BYTES).then(|| command_text(cmd))
+}
+
 /// `SandboxBeforeHook` that evaluates each command against a [`CommandPolicy`]
 /// and denies execution when a `Block` rule (or any hardline rule) fires.
 /// `Warn` matches (and all matches under `Warn` enforcement) are logged to the
@@ -438,6 +458,11 @@ impl CommandPolicyHook {
     #[must_use]
     pub const fn new(policy: CommandPolicy) -> Self {
         Self { policy }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn evaluate_complete_view(&self, view: &str) -> PolicyEvaluation {
+        self.policy.evaluate_normalized(view)
     }
 }
 

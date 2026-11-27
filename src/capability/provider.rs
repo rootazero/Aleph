@@ -273,6 +273,13 @@ impl ProviderHandle {
         read(&lifecycle)
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn try_lifecycle_guard(
+        &self,
+    ) -> Option<std::sync::MutexGuard<'_, ProviderLifecycle>> {
+        self.lifecycle.try_lock().ok()
+    }
+
     /// Atomically commit Starting -> Ready with a canonical registry batch.
     /// Only local state is prepared first. On callback error neither state nor
     /// notifications change. The callback must not re-enter this provider or

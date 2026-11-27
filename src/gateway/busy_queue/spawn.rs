@@ -8,11 +8,75 @@
 //! one implementation for stream surfaces.
 
 use super::{deliver_with_ticket, durable, register_run, BusyQueueConfig, DeliveryOutcome};
-use crate::gateway::agent_instance::AgentInstance;
+use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
 use crate::gateway::execution_engine::{ExecutionError, RunRequest};
 use crate::gateway::i18n::Locale;
+use crate::gateway::router::SessionKey;
+use crate::gateway::server::connection::dispatch::{
+    current_paired_shell_origin, PairedShellOrigin,
+};
 use crate::gateway::{EventEmitter, ExecutionEngine, StreamEvent};
 use crate::sync_primitives::Arc;
+
+/// The live owners mounted by the Panel chat route. These are not a grant.
+/// A caller still needs the authenticated connection and exact queued run.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct PanelShellOwners {
+    pub config: Arc<tokio::sync::RwLock<crate::Config>>,
+    pub agents: Arc<AgentRegistry>,
+    pub agent_manager: Arc<crate::AgentManager>,
+    pub sessions: Arc<dyn crate::gateway::session_store::SessionStore>,
+}
+
+struct PairedShellRun {
+    origin: PairedShellOrigin,
+    owners: PanelShellOwners,
+    run_id: String,
+    session: SessionKey,
+}
+
+impl PairedShellRun {
+    fn capture(request: &RunRequest, owners: PanelShellOwners) -> Option<Self> {
+        Some(Self {
+            origin: current_paired_shell_origin()?,
+            owners,
+            run_id: request.run_id.clone(),
+            session: request.session_key.clone(),
+        })
+    }
+}
+
+tokio::task_local! {
+    static PAIRED_SHELL_RUN: Option<PairedShellRun>;
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn paired_shell_owners_for_run(
+    request: &RunRequest,
+) -> Option<(PairedShellOrigin, PanelShellOwners)> {
+    PAIRED_SHELL_RUN
+        .try_with(|binding| {
+            let binding = binding.as_ref()?;
+            // Inline nested execution shares task-locals, but not the live
+            // provenance of this queued run and its full session key.
+            (binding.run_id == request.run_id && binding.session == request.session_key)
+                .then(|| (binding.origin.clone(), binding.owners.clone()))
+        })
+        .ok()
+        .flatten()
+}
+
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) async fn with_paired_shell_worker_fixture<F: std::future::Future>(
+    request: &RunRequest,
+    owners: PanelShellOwners,
+    future: F,
+) -> F::Output {
+    PAIRED_SHELL_RUN
+        .scope(PairedShellRun::capture(request, owners), future)
+        .await
+}
 
 /// Spawn a Panel / CLI run onto the shared per-session busy wait lane.
 ///
@@ -42,6 +106,45 @@ pub fn spawn_queued_run<P, R, E>(
     cfg: BusyQueueConfig,
     locale: Locale,
     label: &'static str,
+) where
+    P: crate::thinker::ProviderRegistry + 'static,
+    R: crate::executor::ToolRegistry + 'static,
+    E: EventEmitter + Send + Sync + 'static,
+{
+    spawn_queued_run_with_origin(engine, request, agent, emitter, cfg, locale, label, None);
+}
+
+/// Carry the authenticated Panel request origin into this live worker only.
+pub fn spawn_panel_queued_run<P, R, E>(
+    engine: Arc<ExecutionEngine<P, R>>,
+    request: RunRequest,
+    agent: Arc<AgentInstance>,
+    emitter: Arc<E>,
+    cfg: BusyQueueConfig,
+    locale: Locale,
+    label: &'static str,
+    owners: Option<PanelShellOwners>,
+) where
+    P: crate::thinker::ProviderRegistry + 'static,
+    R: crate::executor::ToolRegistry + 'static,
+    E: EventEmitter + Send + Sync + 'static,
+{
+    let paired_run = owners.and_then(|owners| PairedShellRun::capture(&request, owners));
+    spawn_queued_run_with_origin(
+        engine, request, agent, emitter, cfg, locale, label, paired_run,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_queued_run_with_origin<P, R, E>(
+    engine: Arc<ExecutionEngine<P, R>>,
+    request: RunRequest,
+    agent: Arc<AgentInstance>,
+    emitter: Arc<E>,
+    cfg: BusyQueueConfig,
+    locale: Locale,
+    label: &'static str,
+    paired_run: Option<PairedShellRun>,
 ) where
     P: crate::thinker::ProviderRegistry + 'static,
     R: crate::executor::ToolRegistry + 'static,
@@ -83,20 +186,27 @@ pub fn spawn_queued_run<P, R, E>(
     }
 
     tokio::spawn(async move {
-        let outcome = match ticket {
-            None => DeliveryOutcome::Rejected,
-            Some(ticket) => {
-                let mut attempt =
-                    || engine.execute(request.clone(), agent.clone(), emitter.clone());
-                // The lane's own surface for "still waiting" — the shared
-                // constructor carries the addressed-vs-derived session rule
-                // and the failure policy; see `run_queued_reporter`.
-                let report_emitter: Arc<dyn EventEmitter + Send + Sync> = emitter.clone();
-                let mut report =
-                    super::run_queued_reporter(report_emitter, run_id.clone(), session_key.clone());
-                deliver_with_ticket(ticket, cfg, &mut attempt, &mut report).await
-            }
-        };
+        let outcome = PAIRED_SHELL_RUN
+            .scope(paired_run, async {
+                match ticket {
+                    None => DeliveryOutcome::Rejected,
+                    Some(ticket) => {
+                        let mut attempt =
+                            || engine.execute(request.clone(), agent.clone(), emitter.clone());
+                        // The lane's own surface for "still waiting" — the shared
+                        // constructor carries the addressed-vs-derived session rule
+                        // and the failure policy; see `run_queued_reporter`.
+                        let report_emitter: Arc<dyn EventEmitter + Send + Sync> = emitter.clone();
+                        let mut report = super::run_queued_reporter(
+                            report_emitter,
+                            run_id.clone(),
+                            session_key.clone(),
+                        );
+                        deliver_with_ticket(ticket, cfg, &mut attempt, &mut report).await
+                    }
+                }
+            })
+            .await;
 
         // Which failure (if any) this surface still owes a terminal frame for.
         // `DeliveryOutcome::user_error` covers the two never-ran outcomes; the
