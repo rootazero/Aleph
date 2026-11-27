@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "./ios.css";
+@import "./panel-optical.css";
 
 /* Scan Leptos Rust source files for class names */
 @source "../src/**/*.rs";

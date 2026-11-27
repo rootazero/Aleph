@@ -501,7 +501,7 @@ pub fn PhoneComposer() -> impl IntoView {
     };
 
     view! {
-        <div style="flex:none; display:flex; flex-direction:column; gap:6px; padding:6px 12px calc(8px + env(safe-area-inset-bottom)); border-top:1px solid var(--color-border-subtle); background:var(--color-surface);">
+        <div class="phone-composer-optic" style="flex:none; display:flex; flex-direction:column; gap:6px; padding:6px 12px calc(8px + env(safe-area-inset-bottom)); border-top:1px solid var(--color-border-subtle); background:var(--color-surface);">
             // Staged files, above everything — same chip strip the wide
             // composer renders, self-hiding while the tray is empty.
             <div class="relative">

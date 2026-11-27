@@ -1,0 +1,64 @@
+/* Aleph optical accents stay attached to existing composer, nav and reasoning
+   surfaces so theme and density tokens remain the source of truth. */
+.panel-composer-optic,
+.phone-composer-optic {
+  position: relative;
+  border: 1px solid color-mix(in oklch, var(--color-border-strong) 58%, transparent);
+  border-radius: var(--radius-2xl);
+  background: linear-gradient(145deg,
+    color-mix(in oklch, var(--color-surface-raised) 96%, var(--color-primary) 4%),
+    var(--color-surface-raised) 58%);
+  box-shadow: var(--shadow-md), inset 0 1px 0 color-mix(in oklch, white 52%, transparent);
+  transition: border-color var(--duration-normal) var(--ease-spring),
+    box-shadow var(--duration-normal) var(--ease-spring),
+    transform var(--duration-normal) var(--ease-spring);
+}
+
+.panel-composer-optic:focus-within,
+.phone-composer-optic:focus-within {
+  border-color: color-mix(in oklch, var(--color-primary) 62%, var(--color-border));
+  box-shadow: var(--shadow-lg), var(--focus-ring);
+}
+
+.nav-optic-selected {
+  position: relative;
+  isolation: isolate;
+  background: linear-gradient(100deg,
+    color-mix(in oklch, var(--color-sidebar-active) 88%, var(--color-primary) 12%),
+    var(--color-sidebar-active));
+  box-shadow: inset 2px 0 0 var(--color-sidebar-accent),
+    0 1px 3px color-mix(in oklch, var(--color-text-primary) 8%, transparent);
+  transition: background-color var(--duration-normal) var(--ease-spring),
+    box-shadow var(--duration-normal) var(--ease-spring);
+}
+
+.reasoning-card-optic > .glass-inset {
+  border: 1px solid color-mix(in oklch, var(--color-border) 82%, var(--color-primary) 18%);
+  background: linear-gradient(135deg,
+    color-mix(in oklch, var(--color-surface-raised) 92%, var(--color-primary) 8%),
+    var(--color-surface));
+  box-shadow: var(--shadow-sm), inset 0 1px 0 color-mix(in oklch, white 36%, transparent);
+}
+
+.reasoning-card-optic button:focus-visible,
+.nav-optic-selected:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@media (max-width: 640px) {
+  .phone-composer-optic {
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    border-bottom: 0;
+    box-shadow: 0 -4px 20px color-mix(in oklch, var(--color-text-primary) 8%, transparent),
+      inset 0 1px 0 color-mix(in oklch, white 42%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-composer-optic,
+  .phone-composer-optic,
+  .nav-optic-selected {
+    transition-duration: 0.01ms;
+  }
+}

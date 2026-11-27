@@ -1254,7 +1254,7 @@ pub(crate) fn InputArea() -> impl IntoView {
 
     view! {
         <div class="absolute inset-x-0 bottom-0 z-10 px-4 pb-4 pt-2 pointer-events-none">
-            <div class="w-full min-w-0 max-w-5xl mx-auto pointer-events-auto" node_ref=stack_ref>
+            <div class="w-full min-w-0 max-w-5xl mx-auto pointer-events-auto panel-composer-optic" node_ref=stack_ref>
                 // Single-chat sticky Todo panel — top of the bottom input
                 // stack (below the message flow, above the input box).
                 // Hidden when no active plan. Living inside `stack_ref` lets
