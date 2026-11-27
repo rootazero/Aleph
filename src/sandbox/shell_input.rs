@@ -113,6 +113,19 @@ impl ShellPipeAttempt {
         cancel: CancellationToken,
         action: ShellInputAction,
     ) -> Result<Self, ShellEffectDenied> {
+        if matches!(action, ShellInputAction::Close) && job.has_explicit_eof() {
+            if cancel.is_cancelled() {
+                return Err(ShellEffectDenied::Expired);
+            }
+            return Ok(Self {
+                job,
+                prefix_bytes: 0,
+                deadline: Instant::now() + OperatorApprovalRequester::ONCE_WINDOW,
+                account_expiry: None,
+                cancel,
+                action: ShellInputAction::ObserveClosed,
+            });
+        }
         if cancel.is_cancelled() || Instant::now() >= deadline {
             return Err(ShellEffectDenied::Expired);
         }

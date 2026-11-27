@@ -75,21 +75,17 @@ pub struct BubblewrapDriver {
     /// `generate_args` fail closed with [`SandboxError::UnsupportedPolicy`];
     /// the default empty vec leaves the floor off and the driver unchanged.
     deny_read_globs: Vec<String>,
+    #[cfg(feature = "test-helpers")]
+    test_sandbox_init: Option<PathBuf>,
 }
 
 impl BubblewrapDriver {
     pub fn new() -> Self {
-        Self {
-            options: LinuxSandboxOptions::default(),
-            deny_read_globs: Vec::new(),
-        }
+        Self::with_options_and_deny_globs(LinuxSandboxOptions::default(), Vec::new())
     }
 
     pub fn with_options(options: LinuxSandboxOptions) -> Self {
-        Self {
-            options,
-            deny_read_globs: Vec::new(),
-        }
+        Self::with_options_and_deny_globs(options, Vec::new())
     }
 
     /// Build a driver that records `SandboxConfig.deny_read_globs`.
@@ -105,7 +101,16 @@ impl BubblewrapDriver {
         Self {
             options,
             deny_read_globs,
+            #[cfg(feature = "test-helpers")]
+            test_sandbox_init: None,
         }
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[doc(hidden)]
+    pub fn with_test_sandbox_init(mut self, path: PathBuf) -> Self {
+        self.test_sandbox_init = Some(path);
+        self
     }
 
     fn find_bwrap(&self) -> Option<PathBuf> {
@@ -609,6 +614,11 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
     #[allow(clippy::too_many_arguments)]
     fn supports_shell_lifecycle(&self) -> bool {
         true
+    }
+
+    #[cfg(target_os = "linux")]
+    fn can_run_fixed_jsonl(&self) -> bool {
+        self.fixed_jsonl_preflight()
     }
 
     async fn run_fixed_jsonl(

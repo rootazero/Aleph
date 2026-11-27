@@ -416,8 +416,9 @@ fn promote_text_tool_calls(
         .enumerate()
         .map(|(i, c)| NativeToolCall {
             id: format!("promoted_{i}_{nonce}"),
+            arguments: crate::builtin_tools::bash_jsonl::project_arguments(&c.name, &c.arguments)
+                .unwrap_or(c.arguments),
             name: c.name,
-            arguments: c.arguments,
             thought_signature: None,
         })
         .collect();
@@ -1137,6 +1138,9 @@ impl AgentHarness {
 
         // 5. Stage 6a (#10): VerifierChain runs every turn — StopHook + ToolLoop.
         for tc in &response.tool_calls {
+            if crate::builtin_tools::bash_jsonl::is_private(&tc.name, &tc.arguments) {
+                continue;
+            }
             if tool_history.len() == TOOL_HISTORY_WINDOW {
                 tool_history.pop_front();
             }

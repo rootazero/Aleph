@@ -346,7 +346,11 @@ Three things about this pair are load-bearing:
 
 Plain `bash` waits for completion (default 60 s, ceiling 170 s). `background: true` starts a managed job with a 3600 s default and a 14400 s ceiling. `yield_ms` (1–10000) limits only the first wait: return the final result if it settles in time, otherwise return a `process_id`. Setting `yield_ms` alone does not opt into the longer background execution budget. Owned worktrees do not support either detached form.
 
-后续调用复用 `bash`：`list` 查作业，`poll` 看状态或滚动尾巴，`wait` 等完成（默认 60 秒，上限 170 秒），`kill` 请求取消；`read` 在同一会话内用 `next_cursor` 增量读取 stdout/stderr。游标只在本次 daemon 生命周期和原进程有效，终态保留同一滚动窗口直到淘汰；没有恢复、重放或任意 stdin/EOF 写入。`read` 按源字节报告流各自的 `lost`（已滚出）、`withheld`（不能安全展示）和 `pending`（等待完整行）。保留窗口不是完整 transcript；终态 `poll`/`wait` 仍返回原有最终结果。详见 [Shell 生命周期](PROCESS_MANAGEMENT.md#agent-shell-子进程-agent-shell-children)。
+后续调用复用 `bash`：`list` 查作业，`poll` 看状态或滚动尾巴，`wait` 等完成（默认 60 秒，上限 170 秒），`kill` 请求取消；`read` 在同一会话内用 `next_cursor` 增量读取 stdout/stderr。游标只在本次 daemon 生命周期和原进程有效，终态保留同一滚动窗口直到淘汰。`read` 按源字节报告流各自的 `lost`（已滚出）、`withheld`（不能安全展示）和 `pending`（等待完整行）。保留窗口不是完整 transcript；终态 `poll`/`wait` 仍返回原有最终结果。详见 [Shell 生命周期](PROCESS_MANAGEMENT.md#agent-shell-子进程-agent-shell-children)。
+
+**受控 JSONL / Controlled JSONL** — 仅符合条件的 Linux 配对 Gateway turn 发布以下参数。启动需 `stdin_profile: "jsonl_inspect"` 与 `background: true` 或 `yield_ms`，工作区和固定消费者由 Core 绑定。`write_stdin` 带 `process_id` 和一个 JSON `record`（含 `null`），单帧最多 4096 字节（含换行），累计最多 16 KiB，并受原生 pipe 与策略预算限制。`close_stdin` 只带 `process_id`，首次关闭与每次写入均需单次操作员审批。`written` 表示字节由管道接收，`read` 返回 jq 已产出的类型和计数。
+
+Only the eligible Linux paired Gateway turn advertises this profile. The route requires a verified delegated cgroup and an attended operator. It refuses calls when a configured tool hook or tool-call guardrail would need the record. The same `process_id` is used for input, EOF and the existing lifecycle actions. `already_closed` confirms a prior explicit EOF for a still-authorized caller. Model-visible results contain fixed type/count lines and structural receipts. See [the sandbox prerequisites](SANDBOX.md#execution-pipeline--执行顺序).
 
 ### Web & Search
 

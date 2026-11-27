@@ -177,6 +177,10 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
     /// This is the main implementation point. Implement your tool logic here.
     async fn call(&self, args: Self::Args) -> Result<Self::Output>;
 
+    fn validate_json_args(&self, _args: &Value) -> Result<()> {
+        Ok(())
+    }
+
     /// Execute the tool with JSON arguments.
     ///
     /// Default implementation deserializes args, calls `call()`, and serializes output.
@@ -195,6 +199,7 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
     /// conservative) recovery rules. The borrowed `&args` deserialize keeps the
     /// happy path allocation-free while leaving `args` available for recovery.
     async fn call_json(&self, args: Value) -> Result<Value> {
+        self.validate_json_args(&args)?;
         let typed: Self::Args = match Self::Args::deserialize(&args) {
             Ok(v) => v,
             Err(err) => {

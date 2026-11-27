@@ -1,6 +1,8 @@
 //! Optional lifecycle control for a one-shot shell command. The platform
 //! driver owns the child and records proof; the registry never owns a PID.
 
+#[cfg(target_os = "linux")]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Mutex;
 
@@ -35,6 +37,8 @@ pub struct ShellLifecycle {
     cancel: CancellationToken,
     spawn_fence: Mutex<ShellFence>,
     phase: AtomicU8,
+    #[cfg(target_os = "linux")]
+    explicit_eof: AtomicBool,
 }
 
 impl ShellLifecycle {
@@ -121,6 +125,11 @@ impl ShellLifecycle {
     }
 
     #[cfg(target_os = "linux")]
+    pub(crate) fn has_explicit_eof(&self) -> bool {
+        self.explicit_eof.load(Ordering::Acquire)
+    }
+
+    #[cfg(target_os = "linux")]
     pub(super) fn commit_input(
         &self,
         prefix_bytes: usize,
@@ -133,6 +142,15 @@ impl ShellLifecycle {
             .spawn_fence
             .try_lock()
             .map_err(|_| ShellEffectDenied::Busy)?;
+        if attempt_cancel.is_cancelled()
+            || std::time::Instant::now() >= deadline
+            || account_expiry.is_some_and(|expiry| std::time::SystemTime::now() >= expiry)
+        {
+            return Err(ShellEffectDenied::Expired);
+        }
+        if matches!(action, ShellInputAction::ObserveClosed) && self.has_explicit_eof() {
+            return Ok(ShellEffectResult::AlreadyClosed);
+        }
         if self.cancellation_requested() || self.phase.load(Ordering::Acquire) != RUNNING {
             return Err(ShellEffectDenied::Stale);
         }
@@ -140,13 +158,10 @@ impl ShellLifecycle {
         if input.prefix().len() != prefix_bytes {
             return Err(ShellEffectDenied::Stale);
         }
-        if attempt_cancel.is_cancelled()
-            || std::time::Instant::now() >= deadline
-            || account_expiry.is_some_and(|expiry| std::time::SystemTime::now() >= expiry)
-        {
-            return Err(ShellEffectDenied::Expired);
-        }
         let effect = input.apply(action)?;
+        if effect == ShellEffectResult::Closed {
+            self.explicit_eof.store(true, Ordering::Release);
+        }
         if effect == ShellEffectResult::Ambiguous {
             self.cancel.cancel();
             fence.discard_input();

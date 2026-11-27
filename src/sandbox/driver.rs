@@ -120,6 +120,12 @@ pub trait OsSandboxDriverTrait: Send + Sync + 'static {
         false
     }
 
+    #[cfg(target_os = "linux")]
+    #[doc(hidden)]
+    fn can_run_fixed_jsonl(&self) -> bool {
+        false
+    }
+
     /// Separate native contract for the fixed record consumer. A driver must
     /// not emulate this through ordinary stdin or downgrade its process scope.
     #[cfg(target_os = "linux")]

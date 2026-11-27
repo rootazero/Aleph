@@ -144,7 +144,7 @@ fn the_fire_sites_are_where_the_design_puts_them() {
     let child_policy = once(&inner, "explicit.for_children()");
     let own = once(
         &inner,
-        "let tool_service = super::super::build_request_tool_service(",
+        "let tool_service = build_scoped_request_tool_service(",
     );
     assert!(
         children < child_policy && child_policy < own,

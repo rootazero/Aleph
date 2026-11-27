@@ -443,10 +443,16 @@ impl ScopedToolService {
         if self.unattended
             || !self.is_allowed(NAME)
             || self.inner.is_request_local(NAME)
-            || self
-                .hook_executor
-                .as_ref()
-                .is_some_and(|hooks| hooks.has_hooks_for(HookEvent::BeforeToolCall))
+            || self.hook_executor.as_ref().is_some_and(|hooks| {
+                [
+                    HookEvent::BeforeToolCall,
+                    HookEvent::AfterToolCall,
+                    HookEvent::AfterToolCallFailure,
+                    HookEvent::PermissionDenied,
+                ]
+                .into_iter()
+                .any(|event| hooks.has_hooks_for(event))
+            })
         {
             return Err(ShellEffectDenied::Stale);
         }
@@ -485,6 +491,191 @@ impl ScopedToolService {
             return Err(ShellEffectDenied::UnverifiedPolicy);
         }
         Ok((facade.clone(), lease))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn can_offer_shell_jsonl(&self) -> bool {
+        self.paired_shell
+            .as_ref()
+            .is_some_and(|route| route.can_offer())
+            && self.turn_context.is_some()
+            && matches!(
+                self.config_approval_requester,
+                Some(super::ConfigApprovalRequester::Operator(_))
+            )
+            && self.capture_paired_shell().is_ok()
+    }
+
+    pub(super) async fn dispatch_shell_jsonl(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        let unavailable = || ToolError::PermissionDenied {
+            name: name.into(),
+            reason: "fixed JSONL input requires an eligible paired Bash call".into(),
+        };
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (input, cancel);
+            Err(unavailable())
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use crate::builtin_tools::bash_jsonl::Operation;
+            use crate::builtin_tools::process_registry::{process_registry, WaitOutcome};
+            use crate::sandbox::shell_input::{
+                ShellEffectDenied, ShellEffectResult, ShellInputAction,
+            };
+            use serde_json::json;
+            use std::time::Duration;
+
+            if name != "bash" || !self.can_offer_shell_jsonl() {
+                return Err(unavailable());
+            }
+            let operation =
+                Operation::parse(input).map_err(|reason| ToolError::ValidationFailed {
+                    name: name.into(),
+                    cause: reason.into(),
+                })?;
+            let denied = |reason: ShellEffectDenied| ToolError::PermissionDenied {
+                name: name.into(),
+                reason: format!("fixed JSONL effect refused ({reason:?})"),
+            };
+            let value = match operation {
+                Operation::Launch {
+                    background,
+                    yield_ms,
+                } => {
+                    let timeout = Duration::from_secs(if background { 3600 } else { 60 });
+                    let id = self
+                        .launch_paired_shell(timeout, &cancel)
+                        .await
+                        .map_err(denied)?;
+                    let mut value =
+                        json!({"process_id": id, "status": "starting", "background": true});
+                    if let Some(ms) = yield_ms {
+                        let caller = self.turn_context.as_ref().map(|turn| {
+                            crate::builtin_tools::process_registry::encode_session_label(
+                                &turn.session_key,
+                            )
+                        });
+                        let duration = Duration::from_millis(ms);
+                        let registry = process_registry();
+                        tokio::select! {
+                            _ = cancel.cancelled() => {
+                                let _ = registry.kill(id, caller.as_deref());
+                                value["status"] = json!("stopping");
+                            }
+                            outcome = registry.wait(id, caller.as_deref(), duration) => {
+                                value["status"] = match outcome {
+                                    WaitOutcome::Done(_) => json!("done"),
+                                    WaitOutcome::Killed => json!("killed"),
+                                    WaitOutcome::TimedOut { state, .. } => json!(state.label()),
+                                    WaitOutcome::NotFound => json!("not_found"),
+                                };
+                            }
+                        }
+                    }
+                    value
+                }
+                action => {
+                    let (id, action) = match action {
+                        Operation::Write { id, frame } => (id, ShellInputAction::Write(frame)),
+                        Operation::Close { id } => (id, ShellInputAction::Close),
+                        Operation::Launch { .. } => unreachable!(),
+                    };
+                    match self
+                        .input_paired_shell(id, &cancel, action)
+                        .await
+                        .map_err(denied)?
+                    {
+                        ShellEffectResult::Written(bytes) => {
+                            json!({"process_id": id, "status": "written", "bytes": bytes})
+                        }
+                        ShellEffectResult::Closed => json!({"process_id": id, "status": "closed"}),
+                        ShellEffectResult::AlreadyClosed => {
+                            json!({"process_id": id, "status": "already_closed"})
+                        }
+                        ShellEffectResult::Ambiguous => {
+                            json!({"process_id": id, "status": "outcome_unknown", "stopping": true})
+                        }
+                    }
+                }
+            };
+            Ok(ToolOutput {
+                value,
+                metadata: Default::default(),
+            })
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn launch_paired_shell(
+        &self,
+        timeout: std::time::Duration,
+        cancel: &CancellationToken,
+    ) -> Result<u64, crate::sandbox::shell_input::ShellEffectDenied> {
+        use crate::sandbox::shell_input::ShellEffectDenied;
+        let route = self.paired_shell.as_ref().ok_or(ShellEffectDenied::Stale)?;
+        let turn = self.turn_context.clone().ok_or(ShellEffectDenied::Stale)?;
+        crate::tools::turn_context::TURN_CONTEXT
+            .scope(turn, route.launch(self, timeout, cancel))
+            .await
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn input_paired_shell(
+        &self,
+        id: u64,
+        cancel: &CancellationToken,
+        action: crate::sandbox::shell_input::ShellInputAction,
+    ) -> Result<
+        crate::sandbox::shell_input::ShellEffectResult,
+        crate::sandbox::shell_input::ShellEffectDenied,
+    > {
+        use crate::sandbox::shell_input::ShellEffectDenied;
+        let route = self.paired_shell.as_ref().ok_or(ShellEffectDenied::Stale)?;
+        let Some(super::ConfigApprovalRequester::Operator(approval)) =
+            self.config_approval_requester.as_ref()
+        else {
+            return Err(ShellEffectDenied::ApprovalRequired);
+        };
+        let turn = self.turn_context.clone().ok_or(ShellEffectDenied::Stale)?;
+        crate::tools::turn_context::TURN_CONTEXT
+            .scope(turn, route.input(self, approval, id, cancel, action))
+            .await
+    }
+
+    #[cfg(all(feature = "test-helpers", target_os = "linux"))]
+    #[doc(hidden)]
+    pub async fn test_launch_fixed_shell(&self, cancel: &CancellationToken) -> Result<u64, String> {
+        self.launch_paired_shell(std::time::Duration::from_secs(15), cancel)
+            .await
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    #[cfg(all(feature = "test-helpers", target_os = "linux"))]
+    #[doc(hidden)]
+    pub async fn test_fixed_shell_input(
+        &self,
+        id: u64,
+        cancel: &CancellationToken,
+        record: Option<Value>,
+    ) -> Result<(), String> {
+        use crate::sandbox::shell_input::{JsonlFrame, ShellEffectResult, ShellInputAction};
+        let action = match record {
+            Some(record) => ShellInputAction::Write(
+                JsonlFrame::from_record(&record).map_err(|error| format!("{error:?}"))?,
+            ),
+            None => ShellInputAction::Close,
+        };
+        match self.input_paired_shell(id, cancel, action).await {
+            Ok(ShellEffectResult::Written(_) | ShellEffectResult::Closed) => Ok(()),
+            Ok(unexpected) => Err(format!("{unexpected:?}")),
+            Err(denied) => Err(format!("{denied:?}")),
+        }
     }
 
     /// Every gate, then the call — the body [`Self::execute_inner`] wraps.
@@ -2336,6 +2527,13 @@ impl ScopedToolService {
         }
 
         let effective_input = hook_result.updated_input.unwrap_or_else(|| input.clone());
+        if crate::builtin_tools::bash_jsonl::is_private(name, &effective_input) {
+            return Err(ToolError::Refused {
+                name: name.to_string(),
+                by: RefusedBy::Hook,
+                reason: "hook rewrite produced a fixed JSONL operation".into(),
+            });
+        }
         let same_authorized_bytes = already_authorized && effective_input == input;
         let mut hook_authorized = false;
 

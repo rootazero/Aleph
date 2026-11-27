@@ -35,6 +35,7 @@ pub mod artifact_publish;
 pub mod ask_user;
 pub mod automation_tool;
 pub mod bash_exec;
+pub(crate) mod bash_jsonl;
 // `src/browser/` lives at the crate root (see `lib.rs`); it is NOT a
 // `builtin_tools` sub-module. Earlier revisions of this file declared
 // `pub mod browser;` here, and the old "deleted; Task 13 recreates with
