@@ -44,6 +44,9 @@ pub(crate) const fn effective_config_path_slot() -> &'static dyn SlotStatus {
 struct SecuritySsrfOverrides {
     enabled: Option<bool>,
     allow_tool_private_network: Option<bool>,
+    // Retired webhook policy from older desktop configs. It never grants
+    // access under the current policy, even if the old value was true.
+    allow_webhook_private_network: Option<bool>,
     max_redirects: Option<i64>,
     allowed_hosts: Option<Vec<String>>,
     blocked_hosts: Option<Vec<String>>,
@@ -440,6 +443,11 @@ impl Config {
         if let Some(v) = overrides.allow_tool_private_network {
             config.ssrf.allow_private_network = v;
         }
+        if overrides.allow_webhook_private_network.is_some() {
+            warn!(
+                "security.ssrf.allow_webhook_private_network is retired and ignored; remove it from the config file"
+            );
+        }
         if let Some(v) = overrides.max_redirects {
             // Validate rather than silently clamp: a 9999 (or negative) value
             // was previously coerced to 255/0 and accepted, defeating the
@@ -612,6 +620,18 @@ allow_tool_private_network = true
 "#,
         );
         assert!(cfg.ssrf.allow_private_network);
+    }
+
+    #[test]
+    fn retired_webhook_private_network_setting_does_not_block_upgrade_or_change_policy() {
+        for old_value in [false, true] {
+            let cfg = load_with_toml(&format!(
+                "[security.ssrf]\nallow_webhook_private_network = {old_value}\nmax_redirects = 2\n"
+            ));
+            assert!(cfg.ssrf.enabled);
+            assert!(!cfg.ssrf.allow_private_network);
+            assert_eq!(cfg.ssrf.max_redirects, 2);
+        }
     }
 
     #[test]

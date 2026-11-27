@@ -1,6 +1,8 @@
 //! Compatibility admission only; HTTP documents do not authenticate the peer.
 
-use aleph_protocol::gateway_probe::{Health, Readiness, ReadinessPhase};
+use aleph_protocol::gateway_probe::{
+    Health, Readiness, ReadinessPhase, PANEL_SHELL_HEADER, PANEL_SHELL_NSH_V1,
+};
 use reqwest::{Client, StatusCode};
 use serde::de::DeserializeOwned;
 
@@ -13,6 +15,7 @@ enum Admission {
     Free,
     Ready,
     Booting,
+    UnsupportedPanel,
     Incompatible,
 }
 
@@ -36,6 +39,9 @@ async fn probe(client: &Client, port: u16) -> Admission {
 }
 
 const INCOMPATIBLE: &str = "cannot establish compatible local Gateway readiness";
+const UNSUPPORTED_PANEL: &str = "The local Gateway does not advertise an NSH-compatible Panel. \
+If you are replacing Tauri, choose ‘Quit & Stop Aleph’ in the old app, \
+then retry here. Your existing Aleph data directory is reused.";
 
 pub(super) async fn ensure(
     port: u16,
@@ -44,6 +50,7 @@ pub(super) async fn ensure(
     let client = loopback_client().map_err(|_| "could not initialize local Gateway probe")?;
     match probe(&client, port).await {
         Admission::Ready => return Ok(()),
+        Admission::UnsupportedPanel => return Err(UNSUPPORTED_PANEL.to_owned()),
         Admission::Incompatible => return Err(INCOMPATIBLE.to_owned()),
         Admission::Free => start().await?,
         Admission::Booting => {}
@@ -52,6 +59,7 @@ pub(super) async fn ensure(
         loop {
             match probe(&client, port).await {
                 Admission::Ready => return Ok(()),
+                Admission::UnsupportedPanel => return Err(UNSUPPORTED_PANEL.to_owned()),
                 Admission::Incompatible => return Err(INCOMPATIBLE.to_owned()),
                 Admission::Free | Admission::Booting => tokio::time::sleep(POLL_INTERVAL).await,
             }
@@ -62,7 +70,7 @@ pub(super) async fn ensure(
 }
 
 async fn read_admission(client: &Client, port: u16) -> Option<Admission> {
-    let (health_status, health) = document::<Health>(client, port, "/health").await?;
+    let (health_status, _, health) = document::<Health>(client, port, "/health").await?;
     if health_status != StatusCode::OK
         || health.version.trim().is_empty()
         || health.instance_id.trim().is_empty()
@@ -70,12 +78,16 @@ async fn read_admission(client: &Client, port: u16) -> Option<Admission> {
     {
         return None;
     }
-    let (status, readiness) = document::<Readiness>(client, port, "/ready").await?;
+    let (status, supports_panel, readiness) = document::<Readiness>(client, port, "/ready").await?;
     if readiness.version != health.version {
         return None;
     }
     match (status, readiness.ready, readiness.phase) {
-        (StatusCode::OK, true, ReadinessPhase::Complete) => Some(Admission::Ready),
+        (StatusCode::OK, true, ReadinessPhase::Complete) => Some(if supports_panel {
+            Admission::Ready
+        } else {
+            Admission::UnsupportedPanel
+        }),
         (StatusCode::SERVICE_UNAVAILABLE, false, ReadinessPhase::Booting) => {
             Some(Admission::Booting)
         }
@@ -87,13 +99,17 @@ async fn document<T: DeserializeOwned>(
     client: &Client,
     port: u16,
     path: &str,
-) -> Option<(StatusCode, T)> {
+) -> Option<(StatusCode, bool, T)> {
     let mut response = client
         .get(format!("http://{DAEMON_HOST}:{port}{path}"))
         .send()
         .await
         .ok()?;
     let status = response.status();
+    let supports_panel = response
+        .headers()
+        .get(PANEL_SHELL_HEADER)
+        .is_some_and(|version| version == PANEL_SHELL_NSH_V1);
     if !matches!(status, StatusCode::OK | StatusCode::SERVICE_UNAVAILABLE)
         || response
             .content_length()
@@ -108,12 +124,14 @@ async fn document<T: DeserializeOwned>(
         }
         body.extend_from_slice(&chunk);
     }
-    Some((status, serde_json::from_slice(&body).ok()?))
+    Some((status, supports_panel, serde_json::from_slice(&body).ok()?))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure, loopback_client, probe, Admission};
+    use super::{
+        ensure, loopback_client, probe, Admission, PANEL_SHELL_HEADER, PANEL_SHELL_NSH_V1,
+    };
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::TcpListener;
 
@@ -172,7 +190,7 @@ mod tests {
 
     fn reply(status: &str, body: &str) -> String {
         format!(
-            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "HTTP/1.1 {status}\r\n{PANEL_SHELL_HEADER}: {PANEL_SHELL_NSH_V1}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         )
     }
@@ -188,6 +206,21 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_legacy_panel_is_refused_without_replacing_the_listener() {
+        let legacy = reply("200 OK", READY).replace(
+            &format!("{PANEL_SHELL_HEADER}: {PANEL_SHELL_NSH_V1}\r\n"),
+            "",
+        );
+        with_listener(reply("200 OK", HEALTH), [legacy], async |port| {
+            let error = ensure(port, async || panic!("legacy listener was replaced"))
+                .await
+                .expect_err("the old Panel cannot use the NSH bridge");
+            assert!(error.contains("Quit & Stop Aleph"), "{error}");
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -418,7 +451,9 @@ mod tests {
 
     #[tokio::test]
     async fn chunked_body_is_bounded_without_a_content_length() {
-        let head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+        let head = format!(
+            "HTTP/1.1 200 OK\r\n{PANEL_SHELL_HEADER}: {PANEL_SHELL_NSH_V1}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+        );
         let valid = format!("{head}{:x}\r\n{READY}\r\n0\r\n\r\n", READY.len());
         assert_eq!(
             observe(reply("200 OK", HEALTH), valid).await,

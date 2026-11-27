@@ -2,6 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
+/// `/ready` response header advertising the desktop Panel's NSH bridge.
+/// Keep this out of the strict readiness JSON: older clients also read it.
+pub const PANEL_SHELL_HEADER: &str = "x-aleph-panel-shell";
+/// The typed NSH Panel bridge in `crate::panel_shell`.
+pub const PANEL_SHELL_NSH_V1: &str = "nsh-v1";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HealthStatus {
