@@ -203,6 +203,9 @@ pub enum Msg<'a> {
     ClarifyReplyPickOne,
     /// Reply hint under a pick-several menu.
     ClarifyReplyPickMany,
+    ClarifyNoChannelQuestion,
+    ClarifyCancelled,
+    ClarifyPrivateChannelReply,
 
     // --- plan-approval card (`scratchpad(action='request_approval')`) ---
     /// Verdict label: approve as written.
@@ -557,6 +560,18 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
         // replaced, so an install that never calls `install_locale`
         // renders exactly what it rendered before the catalog existed.
         // ============================================================
+        (Msg::ClarifyNoChannelQuestion, Locale::En) => {
+            "No question is available in this channel.".into()
+        }
+        (Msg::ClarifyNoChannelQuestion, Locale::Zh) => "当前通道没有可操作的问题。".into(),
+        (Msg::ClarifyCancelled, Locale::En) => "Questionnaire cancelled.".into(),
+        (Msg::ClarifyCancelled, Locale::Zh) => "已取消问卷。".into(),
+        (Msg::ClarifyPrivateChannelReply, Locale::En) => {
+            "This question accepts replies only in the Panel or TUI.".into()
+        }
+        (Msg::ClarifyPrivateChannelReply, Locale::Zh) => {
+            "此问题只能在 Panel 或 TUI 中回答。".into()
+        }
         (Msg::ClarifyReplyFreeText, Locale::En) => "Reply with your answer.".into(),
         (Msg::ClarifyReplyFreeText, Locale::Zh) => "请回复你的答案。".into(),
         (Msg::ClarifyReplyPickOne, Locale::En) => "Reply with the number or your answer.".into(),
@@ -1277,6 +1292,9 @@ mod tests {
             Msg::ClarifyReplyFreeText,
             Msg::ClarifyReplyPickOne,
             Msg::ClarifyReplyPickMany,
+            Msg::ClarifyNoChannelQuestion,
+            Msg::ClarifyCancelled,
+            Msg::ClarifyPrivateChannelReply,
             Msg::PlanApproveLabel,
             Msg::PlanReviseLabel,
             Msg::PlanRejectLabel,

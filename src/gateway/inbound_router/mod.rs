@@ -46,7 +46,8 @@ use crate::group_chat::GroupChatExecutor;
 use crate::routing::config::{RouteBinding, SessionConfig};
 
 use command_handler::{
-    classify_special_slash, parse_clarify_index, strip_bot_mention, SpecialSlash,
+    classify_clarification_command, classify_special_slash, strip_bot_mention,
+    ClarificationCommand, SpecialSlash,
 };
 use dedup::InboundDedupTracker;
 use types::check_link_access;
@@ -656,10 +657,9 @@ impl InboundMessageRouter {
 
         let channel_id = msg.channel_id.as_str();
         info!(
-            "[Router] Handling message from {}:{} - {}",
+            "[Router] Handling message from {}:{}",
             channel_id,
-            msg.sender_id.as_str(),
-            msg.text.chars().take(50).collect::<String>()
+            msg.sender_id.as_str()
         );
 
         // Approval-callback short-circuit: intercept before normal routing.
@@ -739,24 +739,6 @@ impl InboundMessageRouter {
             }
         };
 
-        // Extension hooks observe inbound channel traffic (post-permission).
-        // MESSAGE_PREVIEW is capped at 256 chars to keep message content out of
-        // an unbounded env var.
-        crate::extension::hooks::fire_global_observer(
-            crate::extension::HookEvent::MessageReceived,
-            &ctx.session_key.to_key_string(),
-            vec![
-                ("CHANNEL_ID", channel_id.to_string()),
-                ("SENDER_ID", msg.sender_id.as_str().to_string()),
-                ("MESSAGE_CHARS", msg.text.chars().count().to_string()),
-                (
-                    "MESSAGE_PREVIEW",
-                    msg.text.chars().take(256).collect::<String>(),
-                ),
-            ],
-        )
-        .await;
-
         // Voice STT: transcribe audio attachments before further processing.
         // P7 degradation (local endpoint failure → one cloud retry) lives
         // inside the source-aware transcription path.
@@ -785,7 +767,22 @@ impl InboundMessageRouter {
 
         // HITL interception: a reply to a pending approval or `ask_user`
         // clarification is resolved here instead of starting a new agent turn.
-        if self.try_intercept_hitl(&ctx).await {
+        let intercepted = self.try_intercept_hitl(&ctx).await;
+        // Preserve the observer notification, without sharing interaction replies
+        // (including rejected private input) with extension hooks.
+        let observer_text = if intercepted { "" } else { &msg.text };
+        crate::extension::hooks::fire_global_observer(
+            crate::extension::HookEvent::MessageReceived,
+            &ctx.session_key.to_key_string(),
+            vec![
+                ("CHANNEL_ID", channel_id.to_string()),
+                ("SENDER_ID", msg.sender_id.as_str().to_string()),
+                ("MESSAGE_CHARS", observer_text.chars().count().to_string()),
+                ("MESSAGE_PREVIEW", observer_text.chars().take(256).collect()),
+            ],
+        )
+        .await;
+        if intercepted {
             return Ok(());
         }
 
@@ -1290,32 +1287,44 @@ impl InboundMessageRouter {
             return true;
         }
 
-        // Clarification button callback: `clarify:<1-based index>` from an
-        // inline keyboard (the clarification twin of the `approve:` callback,
-        // built by `clarification::render`). Only a well-formed
-        // positive integer suffix is treated as a callback — buttons are
-        // 1-based, so `0` and any non-numeric suffix are malformed. A
-        // malformed `clarify:` falls through without consuming so the raw
-        // token is never taken as a free-text reply (which would also strip
-        // the pending state) and a legitimate answer can still be sent.
-        if let Some(suffix) = raw.strip_prefix("clarify:") {
-            match parse_clarify_index(suffix) {
-                Some(idx) => {
-                    if let Some(ref mgr) = self.clarification_manager {
-                        if mgr.has_pending(&session_key).await {
-                            let outcome = mgr.resolve(&session_key, &idx.to_string()).await;
-                            if outcome.consumed() {
-                                info!(
-                                    "[Router] Routed button callback to pending clarification for {session_key}"
-                                );
-                            }
-                            self.deliver_next_question(ctx, outcome).await;
-                        }
-                    }
-                    return true;
+        use crate::clarification::render::{parse_button_callback, CLARIFICATION_BUTTON_PREFIX};
+        use crate::clarification::session::ChannelReplyDisposition;
+        use crate::clarification::ResolveOutcome;
+        use crate::gateway::i18n::Msg;
+
+        // Reserve the namespace even for old or malformed buttons. Only a
+        // callback envelope can exercise an indexed selection.
+        if raw.starts_with(CLARIFICATION_BUTTON_PREFIX) {
+            if ctx.message.id.as_str().starts_with(CB_MESSAGE_ID_PREFIX) {
+                if let (Some(mgr), Some(button)) =
+                    (&self.clarification_manager, parse_button_callback(&raw))
+                {
+                    let outcome = mgr.resolve_channel_button(&session_key, button).await;
+                    self.deliver_next_question(ctx, outcome).await;
                 }
-                None => return false,
             }
+            return true;
+        }
+
+        if let Some(command) = classify_clarification_command(&ctx.message.text) {
+            let status = match (command, &self.clarification_manager) {
+                (ClarificationCommand::Show, Some(mgr)) => {
+                    if let Some(question) = mgr.pending_channel_question(&session_key).await {
+                        self.send_channel_question(ctx, question).await;
+                        return true;
+                    }
+                    Msg::ClarifyNoChannelQuestion
+                }
+                (ClarificationCommand::Cancel, Some(mgr)) => {
+                    match mgr.cancel_channel_question(&session_key).await {
+                        ResolveOutcome::Cancelled => Msg::ClarifyCancelled,
+                        _ => Msg::ClarifyNoChannelQuestion,
+                    }
+                }
+                (_, None) => Msg::ClarifyNoChannelQuestion,
+            };
+            self.send_clarification_notice(ctx, status).await;
+            return true;
         }
 
         // Any slash command must reach its dedicated handler below, never be
@@ -1338,23 +1347,18 @@ impl InboundMessageRouter {
             return false;
         }
 
-        // Clarification reply: any message while an `ask_user` is pending for
-        // this session is taken as the answer. Resolve against `raw` — the same
-        // normalized text (`.trim()` + `/cmd@bot` collapsed) the sibling
-        // `clarify:` button and `/approve` branches above already use — so all
-        // three HITL paths interpret one text source and never drift.
         if let Some(ref mgr) = self.clarification_manager {
-            if mgr.has_pending(&session_key).await {
-                let outcome = mgr.resolve(&session_key, &raw).await;
-                if outcome.consumed() {
-                    info!("[Router] Routed reply to pending clarification for {session_key}");
-                    // A multi-question request advances one question per
-                    // message on a text channel. The surface that received
-                    // answer *k* is the only one holding a transport, so it is
-                    // the one that must ask question *k+1*.
+            match mgr.resolve_channel_text(&session_key, &raw).await {
+                ChannelReplyDisposition::PrivateQuestion => {
+                    self.send_clarification_notice(ctx, Msg::ClarifyPrivateChannelReply)
+                        .await;
+                    return true;
+                }
+                ChannelReplyDisposition::Resolved(outcome) if outcome.consumed() => {
                     self.deliver_next_question(ctx, outcome).await;
                     return true;
                 }
+                _ => {}
             }
         }
 
@@ -1387,23 +1391,43 @@ impl InboundMessageRouter {
         outcome: crate::clarification::ResolveOutcome,
     ) {
         use crate::clarification::ResolveOutcome;
-        let ResolveOutcome::More { next, .. } = outcome else {
-            return;
-        };
-        let message = super::channel::OutboundMessage {
-            conversation_id: ctx.reply_route.conversation_id.clone(),
-            text: next.text,
-            attachments: vec![],
-            reply_to: None,
-            inline_keyboard: next.keyboard,
-            metadata: Default::default(),
-        };
+        if let ResolveOutcome::More {
+            next: Some(next), ..
+        } = outcome
+        {
+            self.send_channel_question(ctx, *next).await;
+        }
+    }
+
+    async fn send_clarification_notice(
+        &self,
+        ctx: &InboundContext,
+        status: crate::gateway::i18n::Msg<'_>,
+    ) {
+        self.send_channel_question(
+            ctx,
+            crate::clarification::render::RenderedQuestion {
+                text: crate::gateway::i18n::t_ui(status),
+                keyboard: None,
+            },
+        )
+        .await;
+    }
+
+    async fn send_channel_question(
+        &self,
+        ctx: &InboundContext,
+        question: crate::clarification::render::RenderedQuestion,
+    ) {
+        let mut message =
+            OutboundMessage::text(ctx.reply_route.conversation_id.as_str(), question.text);
+        message.inline_keyboard = question.keyboard;
         if let Err(e) = self
             .channel_registry
             .send(&ctx.reply_route.channel_id, message)
             .await
         {
-            warn!(error = %e, "[Router] failed to deliver the next clarification question");
+            warn!(error = %e, "[Router] failed to send clarification message");
         }
     }
 
@@ -2192,13 +2216,10 @@ mod tests {
         assert!(first.result.is_none());
     }
 
-    /// A `clarify:<idx>` button callback resolves the pending clarification for
-    /// the session — the twin of the `approve:` callback path. The bare index is
-    /// interpreted exactly like a typed number.
     #[tokio::test]
-    async fn clarify_button_callback_resolves_pending_clarification() {
+    async fn addressed_buttons_select_by_index_on_current_cursor() {
         use crate::clarification::{
-            ClarificationManager, ClarificationOption, ClarificationRequest,
+            ClarificationManager, ClarificationOption, ClarificationQuestion, ClarificationRequest,
         };
         use crate::exec::manager::ExecApprovalManager;
         use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
@@ -2207,15 +2228,31 @@ mod tests {
 
         let session_key = SessionKey::ephemeral("clarify-cb-test");
         let clarification = Arc::new(ClarificationManager::new());
-        let request = ClarificationRequest::select(
-            "Pick:",
-            vec![
-                ClarificationOption::new("alpha", "Alpha"),
-                ClarificationOption::new("beta", "Beta"),
-            ],
-        );
-        let rx = clarification
-            .register(
+        let make_question = |id, prompt| {
+            ClarificationQuestion::select(
+                id,
+                prompt,
+                vec![
+                    ClarificationOption::new("alpha", "2"),
+                    ClarificationOption::new("beta", "Beta"),
+                ],
+            )
+        };
+        let request = ClarificationRequest::new(vec![
+            make_question("q1", "First pick:"),
+            make_question("q2", "Second pick:"),
+        ])
+        .unwrap();
+        let (old_request, _old_waiter) = clarification
+            .register_with_identity(
+                session_key.to_string(),
+                request.clone(),
+                Duration::from_secs(60),
+                "",
+            )
+            .await;
+        let (request_id, mut rx) = clarification
+            .register_with_identity(
                 session_key.to_string(),
                 request,
                 Duration::from_secs(60),
@@ -2228,7 +2265,7 @@ mod tests {
             Arc::new(SqlitePairingStore::in_memory().unwrap()),
             RoutingConfig::default(),
         )
-        .with_hitl(Arc::new(ExecApprovalManager::new()), clarification);
+        .with_hitl(Arc::new(ExecApprovalManager::new()), clarification.clone());
 
         let msg = InboundMessage {
             id: MessageId::new("cb_clar"),
@@ -2249,12 +2286,37 @@ mod tests {
 
         assert!(
             router.try_intercept_hitl(&ctx).await,
-            "clarify callback must be consumed as a clarification reply"
+            "legacy callback must be swallowed, not forwarded to chat"
         );
-        let result = rx.await.unwrap();
-        // Button 2 → 1-based index "2" → option index 1, value "beta".
-        assert_eq!(result.selected_index(), Some(1));
-        assert_eq!(result.value(), Some("beta"));
+        assert_eq!(clarification.list_pending().await[0].answered, 0);
+
+        let request_id = uuid::Uuid::parse_str(&request_id).unwrap().simple();
+        let old_request = uuid::Uuid::parse_str(&old_request).unwrap().simple();
+        let mut addressed = ctx;
+        addressed.message.text = format!("clarify:{old_request}:0:2");
+        assert!(router.try_intercept_hitl(&addressed).await);
+        assert_eq!(clarification.list_pending().await[0].answered, 0);
+
+        addressed.message.text = format!("clarify:{request_id}:0:2");
+        addressed.message.id = MessageId::new("ordinary-message");
+        assert!(router.try_intercept_hitl(&addressed).await);
+        assert_eq!(clarification.list_pending().await[0].answered, 0);
+        addressed.message.id = MessageId::new("cb_current");
+        assert!(router.try_intercept_hitl(&addressed).await);
+        assert_eq!(clarification.list_pending().await[0].answered, 1);
+        assert!(router.try_intercept_hitl(&addressed).await);
+        assert_eq!(clarification.list_pending().await[0].answered, 1);
+
+        addressed.message.text = format!("clarify:{request_id}:1:1");
+        assert!(router.try_intercept_hitl(&addressed).await);
+        let result = rx
+            .try_recv()
+            .expect("addressed buttons unblock the actual waiter");
+        // The first option's numeric label must not steal the second button.
+        assert_eq!(result.answers[0].selected_indices, [1]);
+        assert_eq!(result.answers[0].value, "beta");
+        assert_eq!(result.answers[1].selected_indices, [0]);
+        assert_eq!(result.answers[1].value, "alpha");
     }
 
     /// A `clarify:` callback with nothing pending is still consumed (returns
@@ -2303,13 +2365,8 @@ mod tests {
         );
     }
 
-    /// Malformed `clarify:` callbacks (`abc`, empty, `0`) must NOT consume the
-    /// pending clarification and must NOT be returned as consumed — the router
-    /// should fall through to the normal message path so a legitimate answer
-    /// can still be sent and the raw `clarify:<garbage>` token is not silently
-    /// promoted to a free-text reply that would also strip the pending state.
     #[tokio::test]
-    async fn malformed_clarify_callback_keeps_pending_alive() {
+    async fn old_or_malformed_callbacks_never_answer_or_become_chat() {
         use crate::clarification::{ClarificationManager, ClarificationRequest};
         use crate::exec::manager::ExecApprovalManager;
         use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
@@ -2360,10 +2417,11 @@ mod tests {
             "clarify:0",
             "clarify:  ",
             "clarify:-1",
+            "clarify:1",
         ] {
             assert!(
-                !router.try_intercept_hitl(&make_ctx(bad_text)).await,
-                "{bad_text:?} must NOT be consumed as a clarification callback"
+                router.try_intercept_hitl(&make_ctx(bad_text)).await,
+                "{bad_text:?} must not be forwarded to chat"
             );
             assert!(
                 clarification.has_pending(&session_key.to_string()).await,
@@ -2372,13 +2430,10 @@ mod tests {
         }
 
         assert!(
-            router.try_intercept_hitl(&make_ctx("clarify:1")).await,
-            "a well-formed clarify:1 callback still resolves the pending clarification"
+            router.try_intercept_hitl(&make_ctx("use staging")).await,
+            "ordinary text still resolves the pending clarification"
         );
-        assert!(
-            !clarification.has_pending(&session_key.to_string()).await,
-            "clarify:1 must consume the pending clarification"
-        );
+        assert!(!clarification.has_pending(&session_key.to_string()).await);
     }
 
     /// F3 — a slash command typed while an `ask_user` is pending must reach its
@@ -2452,6 +2507,144 @@ mod tests {
             !clarification.has_pending(&session_key.to_string()).await,
             "the clarification must be resolved by the path answer"
         );
+    }
+
+    #[tokio::test]
+    async fn question_commands_recover_failed_delivery_without_answering() {
+        use crate::clarification::{
+            ClarificationManager, ClarificationQuestion, ClarificationRequest,
+            ClarificationResultType,
+        };
+        use crate::gateway::channel::{
+            ChannelCapabilities, ChannelInfo, ChannelState, ChannelStatus,
+        };
+        use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
+        use crate::routing::session_key::SessionKey;
+        use std::time::Duration;
+
+        let key = SessionKey::ephemeral("question-command-test");
+        let clarification = Arc::new(ClarificationManager::new());
+        let mut result = clarification
+            .register(
+                key.to_string(),
+                ClarificationRequest::new(vec![
+                    ClarificationQuestion::text("q1", "First question?"),
+                    ClarificationQuestion::text("q2", "Second question?"),
+                ])
+                .unwrap(),
+                Duration::from_secs(60),
+                "",
+            )
+            .await;
+        let channels = Arc::new(ChannelRegistry::new());
+        let router = InboundMessageRouter::new(
+            channels.clone(),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_hitl(
+            Arc::new(crate::exec::manager::ExecApprovalManager::new()),
+            clarification.clone(),
+        );
+        let make_ctx = |text: &str| {
+            let msg = InboundMessage {
+                id: MessageId::new("question-command"),
+                channel_id: ChannelId::new("telegram"),
+                conversation_id: ConversationId::new("u1"),
+                sender_id: UserId::new("u1"),
+                sender_name: None,
+                text: text.into(),
+                attachments: vec![],
+                timestamp: chrono::Utc::now(),
+                reply_to: None,
+                is_group: false,
+                raw: None,
+                metadata: vec![],
+            };
+            let route = ReplyRoute::new(ChannelId::new("telegram"), ConversationId::new("u1"));
+            InboundContext::new(msg, route, key.clone())
+        };
+        // The next send fails against an empty registry; the reply itself advances Q1.
+        assert!(
+            router
+                .try_intercept_hitl(&make_ctx("answer to the first question"))
+                .await
+        );
+        assert_eq!(clarification.list_pending().await[0].answered, 1);
+
+        let (replies, mut reply_rx) = tokio::sync::mpsc::unbounded_channel();
+        channels
+            .register(Box::new(RecordingReplyChannel {
+                info: ChannelInfo {
+                    id: ChannelId::new("telegram"),
+                    name: "Clarification probe".into(),
+                    channel_type: "test".into(),
+                    status: ChannelStatus::Connected,
+                    capabilities: ChannelCapabilities::default(),
+                },
+                state: ChannelState::new(8),
+                replies,
+            }))
+            .await;
+        assert!(!router.try_intercept_hitl(&make_ctx("/help")).await);
+        assert!(!router.try_intercept_hitl(&make_ctx("/stop")).await);
+        assert!(router.try_intercept_hitl(&make_ctx("/question")).await);
+        let displayed = reply_rx
+            .try_recv()
+            .expect("redisplay reaches the recovered channel");
+        assert!(displayed.text.contains("Second question"));
+        assert_eq!(clarification.list_pending().await[0].answered, 1);
+        assert!(
+            router
+                .try_intercept_hitl(&make_ctx("/cancel-question"))
+                .await
+        );
+        let cancelled = result
+            .try_recv()
+            .expect("cancellation reached the actual waiter");
+        assert_eq!(cancelled.result_type, ClarificationResultType::Cancelled);
+        assert!(cancelled.answers.is_empty());
+        assert!(!clarification.has_pending(&key.to_string()).await);
+
+        let (private_id, mut private_waiter) = clarification
+            .register_with_identity(
+                key.to_string(),
+                ClarificationRequest::new(vec![
+                    ClarificationQuestion::text("q1", "Public step"),
+                    ClarificationQuestion::text("q2", "Private prompt marker").with_secret(true),
+                ])
+                .unwrap(),
+                Duration::from_secs(60),
+                "",
+            )
+            .await;
+        while reply_rx.try_recv().is_ok() {} // Drop the previous request's acknowledgements.
+        assert!(
+            router
+                .try_intercept_hitl(&make_ctx("answer to public step"))
+                .await
+        );
+        let private_id = uuid::Uuid::parse_str(&private_id).unwrap().simple();
+        for text in [
+            "/question",
+            "/cancel-question",
+            "Private reply marker",
+            &format!("clarify:{private_id}:1:1"),
+        ] {
+            assert!(
+                router.try_intercept_hitl(&make_ctx(text)).await,
+                "do not forward {text:?}"
+            );
+            assert_eq!(clarification.list_pending().await[0].answered, 1);
+        }
+        while let Ok(message) = reply_rx.try_recv() {
+            assert!(!message.text.contains("Private prompt marker"));
+            assert!(!message.text.contains("Private reply marker"));
+        }
+        assert!(matches!(
+            private_waiter.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
     }
 
     /// H1 — a zero-config (no route bindings) group message must resolve to a
@@ -3073,16 +3266,15 @@ mod tests {
         }
     }
 
-    /// Capture actual public refusal replies, so admitting a negative SMS
-    /// during cooldown is observable even though it does not cancel a run.
-    struct SmsCooldownReplyChannel {
+    /// Captures the actual outbound message instead of counting calls to `send`.
+    struct RecordingReplyChannel {
         info: crate::gateway::channel::ChannelInfo,
         state: crate::gateway::channel::ChannelState,
         replies: tokio::sync::mpsc::UnboundedSender<OutboundMessage>,
     }
 
     #[async_trait::async_trait]
-    impl crate::gateway::channel::Channel for SmsCooldownReplyChannel {
+    impl crate::gateway::channel::Channel for RecordingReplyChannel {
         fn info(&self) -> &crate::gateway::channel::ChannelInfo {
             &self.info
         }
@@ -3130,7 +3322,7 @@ mod tests {
         let channels = Arc::new(ChannelRegistry::new());
         let (replies, mut reply_rx) = tokio::sync::mpsc::unbounded_channel();
         channels
-            .register(Box::new(SmsCooldownReplyChannel {
+            .register(Box::new(RecordingReplyChannel {
                 info: ChannelInfo {
                     id: ChannelId::new("sms"),
                     name: "SMS cooldown probe".into(),

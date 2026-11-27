@@ -35,13 +35,13 @@
 //! let rx = manager
 //!     .register("telegram:bot:123:user", request, Duration::from_secs(600), "")
 //!     .await;
-//! // ... inbound router calls `manager.resolve(session_key, reply)` ...
+//! // ... an inbound transport delivers an answer to the manager ...
 //! let result = rx.await;
 //! # let _ = result;
 //! # }
 //! ```
 
-use super::render::{self, RenderedQuestion};
+use super::render::{self, ClarificationButton, RenderedQuestion};
 use super::{
     question_view, ClarificationAnswer, ClarificationQuestion, ClarificationRequest,
     ClarificationResult,
@@ -80,9 +80,9 @@ pub enum ResolveOutcome {
     Stale,
     /// The reply was recorded and questions remain.
     More {
-        /// The caller delivers this on the transport the reply arrived over.
-        next: Box<RenderedQuestion>,
-        /// How many questions — `next` included — are still unanswered.
+        /// An optional channel-safe rendering; private prompts stay on the event bus.
+        next: Option<Box<RenderedQuestion>>,
+        /// How many questions, including the current one, are still unanswered.
         /// Counted here rather than inferred by each face: "is there more" and
         /// "how much more" are the same fact, and a face that has to re-derive
         /// the second one from a boolean will get it wrong the first time it
@@ -106,9 +106,16 @@ impl ResolveOutcome {
     }
 }
 
+pub(crate) enum ChannelReplyDisposition {
+    NoQuestion,
+    PrivateQuestion,
+    Resolved(ResolveOutcome),
+}
+
 enum Resolution {
     Answers(Vec<ClarificationAnswer>),
     Cancel,
+    Ignore,
 }
 
 /// A clarification awaiting the user's reply.
@@ -148,6 +155,16 @@ impl PendingEntry {
     /// The question the next plain reply answers, if any remain.
     fn current(&self) -> Option<&ClarificationQuestion> {
         self.request.questions.get(self.answers.len())
+    }
+
+    fn render_channel_question(&self) -> Option<RenderedQuestion> {
+        let question = self.current().filter(|question| !question.secret)?;
+        Some(render::render_addressed(
+            question,
+            self.answers.len(),
+            self.request.len(),
+            &self.request_id,
+        ))
     }
 }
 
@@ -384,32 +401,33 @@ impl ClarificationManager {
     /// menu question a 1-based numeric reply picks that option, a reply
     /// matching an option label/value (case-insensitive) selects it, and
     /// anything else is taken as free text.
-    pub async fn resolve(&self, session_key: &str, reply: &str) -> ResolveOutcome {
+    #[cfg(test)]
+    pub(super) async fn resolve(&self, session_key: &str, reply: &str) -> ResolveOutcome {
         self.resolve_many(session_key, std::slice::from_ref(&reply))
             .await
     }
 
     /// Resolve consecutive questions from `replies`, one per question, starting
     /// at the cursor. Reject an invalid batch without recording any answers.
-    pub async fn resolve_many(&self, session_key: &str, replies: &[&str]) -> ResolveOutcome {
-        self.resolve_many_expected(session_key, replies, None, None)
+    #[cfg(test)]
+    async fn resolve_many(&self, session_key: &str, replies: &[&str]) -> ResolveOutcome {
+        self.resolve_many_expected_before_send(session_key, replies, None, None, || {})
             .await
     }
 
-    /// Compare optional identities under the very lock that advances answers.
-    /// A supersede or another reply cannot slip between the check and mutation.
-    pub async fn resolve_many_expected(
+    /// Compare both identities under the same lock that advances answers.
+    pub(crate) async fn resolve_many_expected(
         &self,
         session_key: &str,
         replies: &[&str],
-        expected_request_id: Option<&str>,
-        expected_question_id: Option<&str>,
+        expected_request_id: &str,
+        expected_question_id: &str,
     ) -> ResolveOutcome {
         self.resolve_many_expected_before_send(
             session_key,
             replies,
-            expected_request_id,
-            expected_question_id,
+            Some(expected_request_id),
+            Some(expected_question_id),
             || {},
         )
         .await
@@ -417,6 +435,102 @@ impl ClarificationManager {
 
     pub(crate) async fn resolve_action(&self, params: ClarificationActionParams) -> ResolveOutcome {
         self.resolve_action_before_send(params, || {}).await
+    }
+
+    pub(crate) async fn resolve_channel_button(
+        &self,
+        session_key: &str,
+        button: ClarificationButton,
+    ) -> ResolveOutcome {
+        let request_id = button.request_id.to_string();
+        self.transition(
+            session_key,
+            Some(&request_id),
+            None,
+            |entry| {
+                let Some(question) = entry.current().filter(|question| !question.secret) else {
+                    return Ok(Resolution::Ignore);
+                };
+                if entry.answers.len() != button.cursor || question.multi_select {
+                    return Ok(Resolution::Ignore);
+                }
+                let input = ClarificationAnswerInput {
+                    question_id: question.id.clone(),
+                    answer: ClarificationInput::Choices {
+                        indices: vec![button.index],
+                    },
+                };
+                Ok(Resolution::Answers(vec![validate_answer(question, input)?]))
+            },
+            || {},
+        )
+        .await
+    }
+
+    pub(crate) async fn resolve_channel_text(
+        &self,
+        session_key: &str,
+        reply: &str,
+    ) -> ChannelReplyDisposition {
+        let mut private = false;
+        let outcome = self
+            .transition(
+                session_key,
+                None,
+                None,
+                |entry| {
+                    let Some(question) = entry.current() else {
+                        return Ok(Resolution::Ignore);
+                    };
+                    if question.secret {
+                        private = true;
+                        return Ok(Resolution::Ignore);
+                    }
+                    if reply.trim().is_empty() {
+                        return Err("Expected a nonblank reply");
+                    }
+                    Ok(Resolution::Answers(vec![interpret_reply(question, reply)]))
+                },
+                || {},
+            )
+            .await;
+        if private {
+            ChannelReplyDisposition::PrivateQuestion
+        } else if outcome == ResolveOutcome::Stale {
+            ChannelReplyDisposition::NoQuestion
+        } else {
+            ChannelReplyDisposition::Resolved(outcome)
+        }
+    }
+
+    pub(crate) async fn pending_channel_question(
+        &self,
+        session_key: &str,
+    ) -> Option<RenderedQuestion> {
+        let pending = self.pending.read().await;
+        pending
+            .get(session_key)
+            .filter(|entry| entry.is_live())?
+            .render_channel_question()
+    }
+
+    pub(crate) async fn cancel_channel_question(&self, session_key: &str) -> ResolveOutcome {
+        self.transition(
+            session_key,
+            None,
+            None,
+            |entry| {
+                Ok(
+                    if entry.current().is_some_and(|question| !question.secret) {
+                        Resolution::Cancel
+                    } else {
+                        Resolution::Ignore
+                    },
+                )
+            },
+            || {},
+        )
+        .await
     }
 
     async fn resolve_action_before_send(
@@ -505,7 +619,11 @@ impl ClarificationManager {
             /// Waiter gone (run cancelled): retire the zombie card.
             Abandoned,
             /// Answers recorded, questions remain.
-            More(Box<RenderedQuestion>, usize, Option<Box<GatewayEventFrame>>),
+            More(
+                Option<Box<RenderedQuestion>>,
+                usize,
+                Option<Box<GatewayEventFrame>>,
+            ),
             /// Answers recorded, none remain.
             Complete,
             Cancel,
@@ -527,6 +645,7 @@ impl ClarificationManager {
                 Step::Absent
             }
             Some(entry) => match resolve(entry) {
+                Ok(Resolution::Ignore) => Step::Absent,
                 Ok(Resolution::Cancel) => Step::Cancel,
                 Err(error) => return ResolveOutcome::Invalid(error),
                 Ok(Resolution::Answers(answers)) => {
@@ -534,8 +653,8 @@ impl ClarificationManager {
                     let cursor = entry.answers.len();
                     let total = entry.request.len();
                     match entry.current() {
-                        Some(question) => {
-                            let rendered = render::render(question, cursor, total);
+                        Some(_) => {
+                            let rendered = entry.render_channel_question().map(Box::new);
                             let frame = (!entry.run_id.is_empty()).then(|| {
                                 ask_user_frame(
                                     &entry.run_id,
@@ -545,7 +664,7 @@ impl ClarificationManager {
                                     entry.answers.len(),
                                 )
                             });
-                            Step::More(Box::new(rendered), total - cursor, frame.map(Box::new))
+                            Step::More(rendered, total - cursor, frame.map(Box::new))
                         }
                         None => Step::Complete,
                     }
@@ -1064,7 +1183,10 @@ mod tests {
 
         let first = mgr.resolve("sess-seq", "2").await;
         match &first {
-            ResolveOutcome::More { next, remaining } => {
+            ResolveOutcome::More {
+                next: Some(next),
+                remaining,
+            } => {
                 assert_eq!(*remaining, 1, "one question left after the first answer");
                 assert!(next.text.contains("Ticket id?"), "{}", next.text);
                 // Progress marker: the user is halfway through a queue of two.
@@ -1129,7 +1251,9 @@ mod tests {
             )
             .await;
         match mgr.resolve_many("sess-short", &["1"]).await {
-            ResolveOutcome::More { next, .. } => assert!(next.text.contains("Ticket id?")),
+            ResolveOutcome::More {
+                next: Some(next), ..
+            } => assert!(next.text.contains("Ticket id?")),
             other => panic!("expected More, got {other:?}"),
         }
     }
@@ -1355,27 +1479,27 @@ mod tests {
         assert_eq!(snapshot[0].run_id, "run-new");
         assert_eq!(snapshot[0].questions[0].id, "env");
         assert_eq!(
-            mgr.resolve_many_expected("sess-guard", &["1"], Some(&old_id), Some("env"))
+            mgr.resolve_many_expected("sess-guard", &["1"], &old_id, "env")
                 .await,
             ResolveOutcome::Stale
         );
         assert_eq!(mgr.list_pending().await[0].answered, 0);
         assert!(!mgr.cancel_if_request("sess-guard", Some(&old_id)).await);
         assert!(matches!(
-            mgr.resolve_many_expected("sess-guard", &["1"], Some(&new_id), Some("env"))
+            mgr.resolve_many_expected("sess-guard", &["1"], &new_id, "env")
                 .await,
             ResolveOutcome::More { remaining: 1, .. }
         ));
         assert_eq!(mgr.list_pending().await[0].answered, 1);
         // Same request, but a reply dispatched against its previous cursor.
         assert_eq!(
-            mgr.resolve_many_expected("sess-guard", &["oops"], Some(&new_id), Some("env"))
+            mgr.resolve_many_expected("sess-guard", &["oops"], &new_id, "env")
                 .await,
             ResolveOutcome::Stale
         );
         assert_eq!(mgr.list_pending().await[0].answered, 1);
         assert_eq!(
-            mgr.resolve_many_expected("sess-guard", &["T-42"], Some(&new_id), Some("ticket"))
+            mgr.resolve_many_expected("sess-guard", &["T-42"], &new_id, "ticket")
                 .await,
             ResolveOutcome::Done
         );

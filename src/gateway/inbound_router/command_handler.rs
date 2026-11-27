@@ -72,15 +72,13 @@ pub(super) enum SpecialSlash {
 /// the side question's read-only ceiling lives in. A catalog has one table with
 /// two faces; a string appended here has only the face.
 ///
-/// Only `/btw` is listed. `/help`, `/stop` and `/abort` are conventions a chat
-/// user arrives already knowing; `/btw` is a verb this project invented, and a
-/// feature whose value is "ask without derailing the run" is worth nothing to
-/// someone who has never seen the word. That is the whole argument for the line
-/// — if a future router-owned command is equally unguessable, it belongs here
-/// too, and if it is not, it does not.
-const ROUTER_OWNED_HELP_LINES: &str =
-    "\n/btw <question> — ask a read-only side question without disturbing this \
-     conversation";
+/// List project-specific commands here rather than duplicating `/help`,
+/// `/stop`, and `/abort`.
+const ROUTER_OWNED_HELP_LINES: &str = concat!(
+    "\n/btw <question> — ask a read-only side question without disturbing this conversation",
+    "\n/question — show the current question again",
+    "\n/cancel-question — cancel the current questionnaire",
+);
 
 /// Classify a raw inbound text as a `SpecialSlash` variant.
 ///
@@ -103,29 +101,18 @@ pub(super) fn classify_special_slash(text: &str) -> Option<SpecialSlash> {
     }
 }
 
-/// Parse the suffix after `clarify:` into a 1-based option index.
-///
-/// Returns `Some(n)` when the suffix (after trimming) is a positive integer,
-/// matching the `ask_user::build_choice_keyboard` button contract — buttons
-/// are emitted as `clarify:1`, `clarify:2`, … so `0` and any non-numeric
-/// value are rejected as malformed.
-///
-/// `None` for empty, non-numeric, zero, or overflowing input. `@bot` is
-/// unrelated to this parser: the router strips Telegram's `@botname`
-/// suffix before this is called, and callback data never carries one.
-pub(super) fn parse_clarify_index(suffix: &str) -> Option<usize> {
-    let trimmed = suffix.trim();
-    if trimmed.is_empty() {
-        return None;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ClarificationCommand {
+    Show,
+    Cancel,
+}
+
+pub(super) fn classify_clarification_command(text: &str) -> Option<ClarificationCommand> {
+    match strip_bot_mention(text.trim()).to_ascii_lowercase().as_str() {
+        "/question" => Some(ClarificationCommand::Show),
+        "/cancel-question" => Some(ClarificationCommand::Cancel),
+        _ => None,
     }
-    if !trimmed.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let n: usize = trimmed.parse().ok()?;
-    if n == 0 {
-        return None;
-    }
-    Some(n)
 }
 
 /// Truncate a string to `max_chars` at a char boundary
@@ -603,7 +590,8 @@ async fn generate_topic_background(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_special_slash, parse_clarify_index, SpecialSlash, ROUTER_OWNED_HELP_LINES,
+        classify_clarification_command, classify_special_slash, ClarificationCommand, SpecialSlash,
+        ROUTER_OWNED_HELP_LINES,
     };
 
     mod topic_generation_regression {
@@ -738,7 +726,7 @@ mod tests {
     /// added here that the catalog also knows is both duplicated in the listing
     /// and — the expensive half — dispatchable, which for `/btw` means the fast
     /// path and no ceiling. Derives the router-answered vocabulary from
-    /// `classify_special_slash` and `BtwTurn::resolve` rather than listing it,
+    /// the production command classifiers rather than listing it,
     /// so a fourth router-owned command joins the rule automatically.
     #[test]
     fn every_word_in_the_router_owned_help_line_is_router_owned() {
@@ -753,13 +741,14 @@ mod tests {
         );
 
         for word in advertised {
-            let router_answers = classify_special_slash(word).is_some();
+            let router_answers = classify_special_slash(word).is_some()
+                || classify_clarification_command(word).is_some();
             let router_claims =
                 crate::gateway::btw::BtwTurn::resolve(&format!("{word} some question")).is_some();
             assert!(
                 router_answers || router_claims,
                 "`{word}` is advertised in the router's own help line but the \
-                 router neither answers it (`classify_special_slash`) nor claims \
+                 router neither answers it with a command classifier nor claims \
                  it (`BtwTurn::resolve`). If it is a catalog command, \
                  `render_command_help` already lists it and this line is both a \
                  duplicate and a claim the router cannot keep."
@@ -768,44 +757,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_clarify_index_accepts_positive_int() {
-        assert_eq!(parse_clarify_index("1"), Some(1));
-        assert_eq!(parse_clarify_index("2"), Some(2));
-        assert_eq!(parse_clarify_index("42"), Some(42));
-    }
-
-    #[test]
-    fn parse_clarify_index_trims_whitespace() {
-        assert_eq!(parse_clarify_index("  1  "), Some(1));
-        assert_eq!(parse_clarify_index("\t3\n"), Some(3));
-    }
-
-    #[test]
-    fn parse_clarify_index_rejects_zero() {
-        assert_eq!(parse_clarify_index("0"), None);
-        assert_eq!(parse_clarify_index(" 0 "), None);
-    }
-
-    #[test]
-    fn parse_clarify_index_rejects_empty() {
-        assert_eq!(parse_clarify_index(""), None);
-        assert_eq!(parse_clarify_index("   "), None);
-        assert_eq!(parse_clarify_index("\n"), None);
-    }
-
-    #[test]
-    fn parse_clarify_index_rejects_non_numeric() {
-        assert_eq!(parse_clarify_index("abc"), None);
-        assert_eq!(parse_clarify_index("1a"), None);
-        assert_eq!(parse_clarify_index("a1"), None);
-        assert_eq!(parse_clarify_index("-1"), None);
-        assert_eq!(parse_clarify_index("1.0"), None);
-    }
-
-    #[test]
-    fn parse_clarify_index_rejects_bot_suffix_artifact() {
-        assert_eq!(parse_clarify_index("1@MyBot"), None);
-        assert_eq!(parse_clarify_index("clarify:1"), None);
+    fn clarification_commands_match_an_exact_verb() {
+        assert_eq!(
+            classify_clarification_command("/Question@MyBot"),
+            Some(ClarificationCommand::Show)
+        );
+        assert_eq!(
+            classify_clarification_command(" /cancel-question "),
+            Some(ClarificationCommand::Cancel)
+        );
+        assert_eq!(classify_clarification_command("/question hello"), None);
+        assert_eq!(classify_clarification_command("/cancel"), None);
     }
 
     /// Face ④ of `extension::visibility`: this serializer is the single

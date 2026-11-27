@@ -123,12 +123,7 @@ async fn handle_resolve(
             return invalid("Expected nonblank clarification replies");
         }
         manager
-            .resolve_many_expected(
-                &params.session_key,
-                &replies,
-                Some(request_id),
-                Some(question_id),
-            )
+            .resolve_many_expected(&params.session_key, &replies, request_id, question_id)
             .await
     };
 
