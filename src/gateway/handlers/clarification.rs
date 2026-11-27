@@ -2,17 +2,15 @@
 //!
 //! Handlers for the clarification a parked `ask_user` tool is blocked on:
 //! - clarification.pending - List outstanding questions
-//! - clarification.resolve - Answer one, unblocking the tool
+//! - clarification.resolve - Apply an addressed answer, submission, or cancellation
 //!
-//! The clarification twin of [`super::exec_approvals`]. A channel (Telegram &
-//! co.) answers by replying in the conversation — the inbound router routes it
-//! to `ClarificationManager::resolve`. Panel traffic never traverses the
-//! inbound router, so this is the Panel's only way to answer; both paths land
-//! on the same manager, the same session key, and the same `interpret_reply`.
+//! RPC clients and channel replies share the same manager and parked waiter.
+//! Only the legacy string path interprets a reply as a label or number.
 
 use crate::sync_primitives::Arc;
 
 use aleph_protocol::{
+    ClarificationActionParams, ClarificationActionResponse, ClarificationActionStatus,
     ClarificationResolveParams, ClarificationResolveResponse, PendingListResponse,
 };
 use serde_json::json;
@@ -20,7 +18,7 @@ use serde_json::json;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use super::super::router::SessionKey;
 use super::HandlerRegistry;
-use crate::clarification::ClarificationManager;
+use crate::clarification::{ClarificationManager, ResolveOutcome};
 use crate::gateway::session_store::SessionStore;
 use crate::gateway::visibility;
 
@@ -55,32 +53,25 @@ pub fn register_handlers(
     }
 }
 
-/// Handle clarification.resolve
-///
-/// Answers the question the session's `ask_user` is parked on.
-///
-/// A stale answer is NOT an error: the question may have already been answered
-/// from another surface, superseded, or timed out. Reporting `resolved: false`
-/// (rather than a JSON-RPC error) consumes it silently, matching the inbound
-/// router's `clarify:` button branch — a stale tap there is swallowed too,
-/// never surfaced and never leaked into a new agent turn.
-///
-/// P1 (spec §11-1c): the Task-6 addressed-key pattern — resolve
-/// `session_key` and deny with `visibility::not_found_response` unless it is
-/// visible to the current caller, before ever touching the manager. A
-/// malformed `session_key` is a distinct, pre-existing validation error
-/// (`INVALID_PARAMS`), not an existence question.
+/// Apply an addressed action only after authorizing access to its session.
+/// Stale identities are a successful no-op, distinct from invalid input.
 async fn handle_resolve(
     request: JsonRpcRequest,
     manager: Arc<ClarificationManager>,
     sessions: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
-    let params: ClarificationResolveParams = match super::parse_params(&request) {
-        Ok(p) => p,
-        Err(e) => return e,
+    // Never reflect serde's error text: it can contain private answer input.
+    let invalid = |message| JsonRpcResponse::error(request.id.clone(), INVALID_PARAMS, message);
+    let Some(params) = request.params else {
+        return invalid("Missing clarification params");
     };
-
-    let key = match SessionKey::from_key_string(&params.session_key) {
+    let Some(session_key) = params
+        .get("session_key")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return invalid("Expected a session_key");
+    };
+    let key = match SessionKey::from_key_string(session_key) {
         Some(k) => k,
         None => {
             return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Invalid session_key format")
@@ -91,56 +82,80 @@ async fn handle_resolve(
         _ => return visibility::not_found_response(request.id),
     }
 
-    // `resolve_many` is the single truth: `Stale` unless the answer was
-    // actually recorded. The client MUST honour that — a `resolved: false`
-    // means its Enter-hijack was stale and the text is still an unsent
-    // message, not an answer.
-    let replies: Vec<&str> = if params.answers.is_empty() {
-        vec![params.reply.as_str()]
-    } else {
-        params.answers.iter().map(String::as_str).collect()
-    };
-    let outcome = manager
-        .resolve_many_expected(
-            &params.session_key,
-            &replies,
-            params.expected_request_id.as_deref(),
-            params.expected_question_id.as_deref(),
-        )
-        .await;
-    let resolved = outcome.consumed();
-    // `More` also carries a rendered text menu — that is for a *channel*. A
-    // Panel re-renders from the structured `questions` view instead, so this
-    // face passes on only the count.
-    //
-    // Track `stale` explicitly so a client never reads `pending_questions == 0`
-    // on a stale reply as "card is done": the manager had no live entry to
-    // consume against, but the user's window may still have a card. Clients
-    // are instructed (see the `stale` field's docstring) to re-render from
-    // `clarification.pending` when `stale` is true.
-    let stale = matches!(outcome, crate::clarification::ResolveOutcome::Stale);
-    let pending_questions = if stale {
-        0
-    } else {
-        match outcome {
-            crate::clarification::ResolveOutcome::More { remaining, .. } => remaining,
-            // `Done`: the parked tool was unblocked and the card IS done — 0
-            // is the truthful answer. `stale` is `false` in this arm.
-            crate::clarification::ResolveOutcome::Done => 0,
-            // Unreachable: `stale` is true only when `outcome == Stale`, and
-            // we already handled that arm above.
-            crate::clarification::ResolveOutcome::Stale => 0,
+    let typed = params.get("action").is_some();
+    let outcome = if typed {
+        let Ok(params) = serde_json::from_value::<ClarificationActionParams>(params) else {
+            return invalid("Invalid clarification action");
+        };
+        if params.expected_request_id.trim().is_empty()
+            || params.expected_question_id.trim().is_empty()
+        {
+            return invalid("Both clarification identities are required");
         }
+        manager.resolve_action(params).await
+    } else {
+        let has_reply = params.get("reply").is_some();
+        let has_answers = params.get("answers").is_some();
+        if has_reply == has_answers {
+            return invalid("Supply exactly one of reply or answers");
+        }
+        let Ok(params) = serde_json::from_value::<ClarificationResolveParams>(params) else {
+            return invalid("Invalid legacy clarification params");
+        };
+        let (Some(request_id), Some(question_id)) = (
+            params
+                .expected_request_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty()),
+            params
+                .expected_question_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty()),
+        ) else {
+            return invalid("Both clarification identities are required");
+        };
+        let replies: Vec<&str> = if has_reply {
+            vec![params.reply.as_str()]
+        } else {
+            params.answers.iter().map(String::as_str).collect()
+        };
+        if replies.is_empty() || replies.iter().any(|reply| reply.trim().is_empty()) {
+            return invalid("Expected nonblank clarification replies");
+        }
+        manager
+            .resolve_many_expected(
+                &params.session_key,
+                &replies,
+                Some(request_id),
+                Some(question_id),
+            )
+            .await
     };
 
-    JsonRpcResponse::success(
-        request.id,
+    let (status, pending_questions) = match outcome {
+        ResolveOutcome::Invalid(message) => return invalid(message),
+        ResolveOutcome::More { remaining, .. } => (ClarificationActionStatus::Advanced, remaining),
+        ResolveOutcome::Done => (ClarificationActionStatus::Answered, 0),
+        ResolveOutcome::Cancelled => (ClarificationActionStatus::Cancelled, 0),
+        ResolveOutcome::Stale => (ClarificationActionStatus::Stale, 0),
+    };
+    let resolved = outcome.consumed();
+    let stale = status == ClarificationActionStatus::Stale;
+    let result = if typed {
+        json!(ClarificationActionResponse {
+            status,
+            resolved,
+            pending_questions,
+            stale
+        })
+    } else {
         json!(ClarificationResolveResponse {
             resolved,
             pending_questions,
-            stale,
-        }),
-    )
+            stale
+        })
+    };
+    JsonRpcResponse::success(request.id, result)
 }
 
 /// Handle clarification.pending
@@ -189,7 +204,8 @@ async fn handle_pending(
 mod tests {
     use super::*;
     use crate::clarification::{
-        ClarificationOption, ClarificationRequest, DEFAULT_CLARIFY_TIMEOUT,
+        ClarificationOption, ClarificationQuestion, ClarificationRequest, ClarificationResultType,
+        DEFAULT_CLARIFY_TIMEOUT,
     };
     use crate::gateway::caller_identity::CALLER_USER;
     use crate::gateway::protocol::RESOURCE_NOT_FOUND;
@@ -232,12 +248,259 @@ mod tests {
             .expect("get_or_create");
     }
 
-    fn resolve_request(session_key: &str, reply: &str) -> JsonRpcRequest {
+    fn resolve_request(session_key: &str, request_id: &str, reply: &str) -> JsonRpcRequest {
         JsonRpcRequest::new(
             "clarification.resolve",
-            Some(json!({ "session_key": session_key, "reply": reply })),
+            Some(json!({ "session_key": session_key, "reply": reply,
+                "expected_request_id": request_id, "expected_question_id": "answer" })),
             Some(json!(1)),
         )
+    }
+
+    #[tokio::test]
+    async fn typed_submit_rejects_invalid_suffix_and_preserves_input_intent() {
+        let mgr = manager();
+        let (_tmp, sess) = sessions();
+        let key = "agent:main:main";
+        create_session(&sess, key, None).await;
+        let menu = || {
+            vec![
+                ClarificationOption::new("red", "Red"),
+                ClarificationOption::new("green", "Green"),
+                ClarificationOption::new("blue", "Blue"),
+            ]
+        };
+        let (request_id, mut rx) = mgr
+            .register_with_identity(
+                key,
+                ClarificationRequest::new(vec![
+                    ClarificationQuestion::select("q1", "Colour?", menu()),
+                    ClarificationQuestion::select("q2", "Colours?", menu()).with_multi_select(true),
+                ])
+                .unwrap(),
+                DEFAULT_CLARIFY_TIMEOUT,
+                "",
+            )
+            .await;
+        let first = json!({"question_id":"q1", "answer":{"kind":"text","text":"1"}});
+        let second = json!({"question_id":"q2", "answer":{"kind":"choices","indices":[0,2]}});
+        let submit = |answers| {
+            JsonRpcRequest::with_id(
+                "clarification.resolve",
+                Some(json!({
+                    "session_key": key, "expected_request_id": request_id, "expected_question_id": "q1",
+                    "action": {"kind":"submit", "answers": answers}
+                })),
+                json!(1),
+            )
+        };
+        for invalid in [
+            json!([first]),
+            json!([first, second, second]),
+            json!([second, first]),
+            json!([first, first]),
+            json!([first, {"answer":{"kind":"choices","indices":[1]}}]),
+            json!([first, {"question_id":"q2", "answer":{"kind":"choices","indices":[1,1]}}]),
+            json!([first, {"question_id":"q2", "answer":{"kind":"choices","indices":[3]}}]),
+            json!([first, {"question_id":"q2", "answer":{"kind":"choices","indices":[]}}]),
+            json!([{"question_id":"q1", "answer":{"kind":"choices","indices":[0,1]}}, second]),
+            json!([first, {"question_id":"q2", "answer":{"kind":"text","text":" \t "}}]),
+            json!([first, {"question_id":"q2", "answer":{"kind":"text","text":"x".repeat(10_001)}}]),
+        ] {
+            let response =
+                handle_resolve(submit(invalid), Arc::clone(&mgr), Arc::clone(&sess)).await;
+            assert_eq!(
+                response
+                    .error
+                    .expect("invalid answer must not acknowledge")
+                    .code,
+                INVALID_PARAMS
+            );
+            assert_eq!(mgr.list_pending().await[0].answered, 0);
+            assert!(matches!(
+                rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ));
+        }
+
+        let response = handle_resolve(submit(json!([first, second])), mgr, sess).await;
+        assert_eq!(
+            response.result.unwrap(),
+            json!({
+                "status":"answered", "resolved":true, "pending_questions":0, "stale":false,
+            })
+        );
+        let answers = rx.await.unwrap().answers;
+        assert_eq!(answers[0].value, "1");
+        assert!(answers[0].selected_indices.is_empty());
+        assert_eq!(answers[1].selected_indices, vec![0, 2]);
+        assert_eq!(answers[1].value, "red, blue");
+    }
+
+    #[tokio::test]
+    async fn typed_advance_and_cancel_apply_only_to_the_displayed_question() {
+        let mgr = manager();
+        let (_tmp, sess) = sessions();
+        let key = "agent:main:main";
+        create_session(&sess, key, None).await;
+        let (request_id, rx) = mgr
+            .register_with_identity(
+                key,
+                ClarificationRequest::new(vec![
+                    ClarificationQuestion::text("q1", "First?"),
+                    ClarificationQuestion::text("q2", "Second?"),
+                ])
+                .unwrap(),
+                DEFAULT_CLARIFY_TIMEOUT,
+                "",
+            )
+            .await;
+        let call = |question_id, action| {
+            handle_resolve(
+                JsonRpcRequest::with_id(
+                    "clarification.resolve",
+                    Some(json!({
+                        "session_key": key, "expected_request_id": request_id,
+                        "expected_question_id": question_id, "action": action,
+                    })),
+                    json!(1),
+                ),
+                Arc::clone(&mgr),
+                Arc::clone(&sess),
+            )
+        };
+        let answer = json!({"kind":"answer", "answer":{
+            "question_id":"q1", "answer":{"kind":"text","text":"first"},
+        }});
+        let (first, second) = tokio::join!(call("q1", answer.clone()), call("q1", answer));
+        let mut statuses = [first.result.unwrap(), second.result.unwrap()];
+        statuses.sort_by(|a, b| a["status"].as_str().cmp(&b["status"].as_str()));
+        assert_eq!(
+            statuses[0],
+            json!({
+                "status":"advanced", "resolved":true, "pending_questions":1, "stale":false,
+            })
+        );
+        assert_eq!(statuses[1]["status"], "stale");
+        let stale = call("q1", json!({"kind":"cancel"})).await.result.unwrap();
+        assert_eq!(stale["status"], "stale");
+        assert_eq!(mgr.list_pending().await[0].answered, 1);
+        let cancelled = call("q2", json!({"kind":"cancel"})).await.result.unwrap();
+        assert_eq!(
+            cancelled,
+            json!({
+                "status":"cancelled", "resolved":false, "pending_questions":0, "stale":false,
+            })
+        );
+        let result = rx.await.unwrap();
+        assert_eq!(result.result_type, ClarificationResultType::Cancelled);
+        assert!(result.answers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resolve_rejects_unguarded_or_ambiguous_input_without_advancing() {
+        let mgr = manager();
+        let (_tmp, sess) = sessions();
+        let key = "agent:main:main";
+        create_session(&sess, key, None).await;
+        let (request_id, rx) = mgr
+            .register_with_identity(
+                key,
+                ClarificationRequest::new(vec![
+                    ClarificationQuestion::text("q1", "First?"),
+                    ClarificationQuestion::text("q2", "Second?"),
+                ])
+                .unwrap(),
+                DEFAULT_CLARIFY_TIMEOUT,
+                "",
+            )
+            .await;
+        let base = json!({"session_key":key, "expected_request_id":request_id, "expected_question_id":"q1"});
+        let mut cases = vec![];
+        for extra in [
+            json!({}),
+            json!({"reply":"","answers":[]}),
+            json!({"reply":"answer","answers":[]}),
+            json!({"reply":" \t "}),
+            json!({"answers":["first", ""]}),
+            json!({"answers":["first", "second", "extra"]}),
+            json!({"reply":"old", "action":null}),
+            json!({"reply":null, "action":{"kind":"cancel"}}),
+            json!({"answers":[], "action":{"kind":"cancel"}}),
+            json!({"reply":"first", "expected_request_id":""}),
+            json!({"reply":"first", "expected_question_id":" "}),
+        ] {
+            let mut params = base.clone();
+            params
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            cases.push(params);
+        }
+        for id in ["expected_request_id", "expected_question_id"] {
+            let mut missing = base.clone();
+            missing.as_object_mut().unwrap().remove(id);
+            missing["reply"] = json!("first");
+            cases.push(missing);
+        }
+        for invalid in cases {
+            let rpc =
+                JsonRpcRequest::with_id("clarification.resolve", Some(invalid.clone()), json!(1));
+            let response = handle_resolve(rpc, Arc::clone(&mgr), Arc::clone(&sess)).await;
+            assert_eq!(
+                response
+                    .error
+                    .unwrap_or_else(|| panic!("unsupported input acknowledged: {invalid}"))
+                    .code,
+                INVALID_PARAMS
+            );
+            assert_eq!(mgr.list_pending().await[0].answered, 0);
+        }
+        let mut malformed = base;
+        malformed["action"] = json!({"kind":"answer", "answer":"private-input-marker"});
+        let request = JsonRpcRequest::with_id("clarification.resolve", Some(malformed), json!(1));
+        let error = handle_resolve(request, Arc::clone(&mgr), Arc::clone(&sess))
+            .await
+            .error
+            .unwrap();
+        assert_eq!(error.code, INVALID_PARAMS);
+        assert!(!error.message.contains("private-input-marker"));
+        assert_eq!(mgr.list_pending().await[0].answered, 0);
+
+        let partial = JsonRpcRequest::with_id(
+            "clarification.resolve",
+            Some(json!({
+                "session_key":key, "expected_request_id":request_id, "expected_question_id":"q1",
+                "answers":["first"],
+            })),
+            json!(1),
+        );
+        let response = handle_resolve(partial, Arc::clone(&mgr), Arc::clone(&sess)).await;
+        assert_eq!(
+            response.result.unwrap(),
+            json!({"resolved":true, "pending_questions":1, "stale":false})
+        );
+        let last = JsonRpcRequest::with_id(
+            "clarification.resolve",
+            Some(json!({
+                "session_key":key, "expected_request_id":request_id, "expected_question_id":"q2", "reply":"second",
+            })),
+            json!(1),
+        );
+        let response = handle_resolve(last, mgr, sess).await;
+        assert_eq!(
+            response.result.unwrap(),
+            json!({"resolved":true, "pending_questions":0, "stale":false})
+        );
+        let result = rx.await.unwrap();
+        assert_eq!(
+            result
+                .answers
+                .iter()
+                .map(|a| a.value.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
     }
 
     /// The whole point of the RPC: it is the Panel's only path to the oneshot
@@ -247,8 +510,8 @@ mod tests {
         let mgr = manager();
         let (_tmp, sess) = sessions();
         create_session(&sess, "agent:main:main", None).await;
-        let rx = mgr
-            .register(
+        let (id, rx) = mgr
+            .register_with_identity(
                 "agent:main:main",
                 ClarificationRequest::select(
                     "Deploy where?",
@@ -262,9 +525,9 @@ mod tests {
             )
             .await;
 
-        // A button tap sends the 1-based index — the same string the Telegram
-        // `clarify:<idx>` callback resolves with.
-        let response = handle_resolve(resolve_request("agent:main:main", "2"), mgr, sess).await;
+        // A guarded legacy reply can still use a 1-based option number.
+        let response =
+            handle_resolve(resolve_request("agent:main:main", &id, "2"), mgr, sess).await;
         assert!(response.is_success(), "{:?}", response.error);
         assert_eq!(response.result.unwrap()["resolved"], true);
 
@@ -278,8 +541,8 @@ mod tests {
         let mgr = manager();
         let (_tmp, sess) = sessions();
         create_session(&sess, "agent:main:main", None).await;
-        let rx = mgr
-            .register(
+        let (id, rx) = mgr
+            .register_with_identity(
                 "agent:main:main",
                 ClarificationRequest::text("Which file?"),
                 DEFAULT_CLARIFY_TIMEOUT,
@@ -287,8 +550,12 @@ mod tests {
             )
             .await;
 
-        let response =
-            handle_resolve(resolve_request("agent:main:main", "src/main.rs"), mgr, sess).await;
+        let response = handle_resolve(
+            resolve_request("agent:main:main", &id, "src/main.rs"),
+            mgr,
+            sess,
+        )
+        .await;
         assert_eq!(response.result.unwrap()["resolved"], true);
         assert_eq!(rx.await.unwrap().value(), Some("src/main.rs"));
     }
@@ -305,7 +572,7 @@ mod tests {
 
         // No question was ever registered for this (real, visible) session.
         let response = handle_resolve(
-            resolve_request("agent:main:main", "yes"),
+            resolve_request("agent:main:main", "not-present", "yes"),
             mgr.clone(),
             sess.clone(),
         )
@@ -317,8 +584,8 @@ mod tests {
         assert_eq!(response.result.unwrap()["resolved"], false);
 
         // Same for a session whose question was already answered.
-        let rx = mgr
-            .register(
+        let (id, rx) = mgr
+            .register_with_identity(
                 "agent:main:main",
                 ClarificationRequest::text("Which file?"),
                 DEFAULT_CLARIFY_TIMEOUT,
@@ -326,7 +593,7 @@ mod tests {
             )
             .await;
         let first = handle_resolve(
-            resolve_request("agent:main:main", "a.rs"),
+            resolve_request("agent:main:main", &id, "a.rs"),
             mgr.clone(),
             sess.clone(),
         )
@@ -334,7 +601,8 @@ mod tests {
         assert_eq!(first.result.unwrap()["resolved"], true);
         let _ = rx.await;
 
-        let second = handle_resolve(resolve_request("agent:main:main", "b.rs"), mgr, sess).await;
+        let second =
+            handle_resolve(resolve_request("agent:main:main", &id, "b.rs"), mgr, sess).await;
         assert!(second.is_success());
         assert_eq!(second.result.unwrap()["resolved"], false);
     }
@@ -346,7 +614,12 @@ mod tests {
         let mgr = manager();
         let (_tmp, sess) = sessions();
 
-        let response = handle_resolve(resolve_request("not-a-session", "yes"), mgr, sess).await;
+        let response = handle_resolve(
+            resolve_request("not-a-session", "not-present", "yes"),
+            mgr,
+            sess,
+        )
+        .await;
         assert_eq!(response.error.expect("expected error").code, INVALID_PARAMS);
     }
 

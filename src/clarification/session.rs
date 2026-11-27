@@ -49,6 +49,9 @@ use super::{
 use crate::gateway::events::{ClarificationOutcome, GatewayEventFrame};
 use crate::sync_primitives::{Arc, AsyncRwLock};
 pub use aleph_protocol::PendingClarification;
+use aleph_protocol::{
+    ClarificationAction, ClarificationActionParams, ClarificationAnswerInput, ClarificationInput,
+};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
@@ -88,6 +91,10 @@ pub enum ResolveOutcome {
     },
     /// The last question was answered and the parked waiter was unblocked.
     Done,
+    /// The live waiter received a cancellation with no partial answers.
+    Cancelled,
+    /// The current request was addressed correctly but the input was not valid.
+    Invalid(&'static str),
 }
 
 impl ResolveOutcome {
@@ -95,8 +102,13 @@ impl ResolveOutcome {
     /// treated as a new user message).
     #[must_use]
     pub const fn consumed(&self) -> bool {
-        !matches!(self, Self::Stale)
+        matches!(self, Self::More { .. } | Self::Done)
     }
+}
+
+enum Resolution {
+    Answers(Vec<ClarificationAnswer>),
+    Cancel,
 }
 
 /// A clarification awaiting the user's reply.
@@ -378,12 +390,7 @@ impl ClarificationManager {
     }
 
     /// Resolve consecutive questions from `replies`, one per question, starting
-    /// at the cursor.
-    ///
-    /// This is the rich-client path: a Panel that rendered all N questions
-    /// posts all N answers at once. Extra replies beyond the last question are
-    /// ignored rather than rejected — a client that raced an advance would
-    /// otherwise lose the answers it did get right.
+    /// at the cursor. Reject an invalid batch without recording any answers.
     pub async fn resolve_many(&self, session_key: &str, replies: &[&str]) -> ResolveOutcome {
         self.resolve_many_expected(session_key, replies, None, None)
             .await
@@ -408,14 +415,84 @@ impl ClarificationManager {
         .await
     }
 
-    // Production supplies a no-op. Tests can close the real receiver after
-    // the liveness check without racing timers or exposing a public hook.
+    pub(crate) async fn resolve_action(&self, params: ClarificationActionParams) -> ResolveOutcome {
+        self.resolve_action_before_send(params, || {}).await
+    }
+
+    async fn resolve_action_before_send(
+        &self,
+        params: ClarificationActionParams,
+        before_send: impl FnOnce(),
+    ) -> ResolveOutcome {
+        self.transition(
+            &params.session_key,
+            Some(&params.expected_request_id),
+            Some(&params.expected_question_id),
+            |entry| {
+                let outstanding = &entry.request.questions[entry.answers.len()..];
+                let answers = match params.action {
+                    ClarificationAction::Cancel {} => return Ok(Resolution::Cancel),
+                    ClarificationAction::Answer { answer } => {
+                        vec![validate_answer(&outstanding[0], answer)?]
+                    }
+                    ClarificationAction::Submit { answers } => {
+                        if answers.len() != outstanding.len() {
+                            return Err("Submit must answer every outstanding question");
+                        }
+                        outstanding
+                            .iter()
+                            .zip(answers)
+                            .map(|(question, answer)| validate_answer(question, answer))
+                            .collect::<Result<Vec<_>, _>>()?
+                    }
+                };
+                Ok(Resolution::Answers(answers))
+            },
+            before_send,
+        )
+        .await
+    }
+
     async fn resolve_many_expected_before_send(
         &self,
         session_key: &str,
         replies: &[&str],
         expected_request_id: Option<&str>,
         expected_question_id: Option<&str>,
+        before_send: impl FnOnce(),
+    ) -> ResolveOutcome {
+        self.transition(
+            session_key,
+            expected_request_id,
+            expected_question_id,
+            |entry| {
+                let outstanding = &entry.request.questions[entry.answers.len()..];
+                if replies.is_empty()
+                    || replies.len() > outstanding.len()
+                    || replies.iter().any(|reply| reply.trim().is_empty())
+                {
+                    return Err("Expected nonblank replies for outstanding questions");
+                }
+                Ok(Resolution::Answers(
+                    outstanding
+                        .iter()
+                        .zip(replies)
+                        .map(|(question, reply)| interpret_reply(question, reply))
+                        .collect(),
+                ))
+            },
+            before_send,
+        )
+        .await
+    }
+
+    // Tests can close the real receiver after the liveness check, without racing timers.
+    async fn transition(
+        &self,
+        session_key: &str,
+        expected_request_id: Option<&str>,
+        expected_question_id: Option<&str>,
+        resolve: impl FnOnce(&PendingEntry) -> Result<Resolution, &'static str>,
         before_send: impl FnOnce(),
     ) -> ResolveOutcome {
         /// What the write-locked inspection decided, so the acting half runs
@@ -431,6 +508,7 @@ impl ClarificationManager {
             More(Box<RenderedQuestion>, usize, Option<Box<GatewayEventFrame>>),
             /// Answers recorded, none remain.
             Complete,
+            Cancel,
         }
 
         let mut pending = self.pending.write().await;
@@ -448,33 +526,31 @@ impl ClarificationManager {
             {
                 Step::Absent
             }
-            Some(entry) => {
-                for reply in replies {
-                    let Some(question) = entry.current() else {
-                        break;
-                    };
-                    let answer = interpret_reply(question, reply);
-                    entry.answers.push(answer);
-                }
-                let cursor = entry.answers.len();
-                let total = entry.request.len();
-                match entry.current() {
-                    Some(question) => {
-                        let rendered = render::render(question, cursor, total);
-                        let frame = (!entry.run_id.is_empty()).then(|| {
-                            ask_user_frame(
-                                &entry.run_id,
-                                session_key,
-                                &entry.request_id,
-                                &entry.request,
-                                entry.answers.len(),
-                            )
-                        });
-                        Step::More(Box::new(rendered), total - cursor, frame.map(Box::new))
+            Some(entry) => match resolve(entry) {
+                Ok(Resolution::Cancel) => Step::Cancel,
+                Err(error) => return ResolveOutcome::Invalid(error),
+                Ok(Resolution::Answers(answers)) => {
+                    entry.answers.extend(answers);
+                    let cursor = entry.answers.len();
+                    let total = entry.request.len();
+                    match entry.current() {
+                        Some(question) => {
+                            let rendered = render::render(question, cursor, total);
+                            let frame = (!entry.run_id.is_empty()).then(|| {
+                                ask_user_frame(
+                                    &entry.run_id,
+                                    session_key,
+                                    &entry.request_id,
+                                    &entry.request,
+                                    entry.answers.len(),
+                                )
+                            });
+                            Step::More(Box::new(rendered), total - cursor, frame.map(Box::new))
+                        }
+                        None => Step::Complete,
                     }
-                    None => Step::Complete,
                 }
-            }
+            },
         };
 
         match step {
@@ -517,34 +593,30 @@ impl ClarificationManager {
                 }
                 ResolveOutcome::More { next, remaining }
             }
-            Step::Complete => {
-                let mut entry = pending
+            Step::Complete | Step::Cancel => {
+                let entry = pending
                     .remove(session_key)
                     .expect("invariant: observed under this same write lock");
-                let request_id = entry.request_id.clone();
-                let answers = std::mem::take(&mut entry.answers);
-                before_send();
-                let delivered = match entry.sender.take() {
-                    Some(sender) => sender.send(ClarificationResult::answered(answers)).is_ok(),
-                    None => false,
-                };
-                drop(pending);
-                if delivered {
-                    publish_ended(session_key, &request_id, ClarificationOutcome::Resolved);
-                    ResolveOutcome::Done
+                let cancel = matches!(step, Step::Cancel);
+                let result = if cancel {
+                    ClarificationResult::cancelled()
                 } else {
-                    // The waiter vanished between the liveness check and the
-                    // send. The answer reached nobody, so the message was not
-                    // consumed and the reply is not ours to keep.
-                    //
-                    // The question is over either way, so the terminal frame
-                    // goes out: without it the card of the face that asked
-                    // survives until the request deadline, waiting for a reply
-                    // that can no longer arrive. `Cancelled`, not `Resolved`:
-                    // nobody received the answer.
-                    publish_ended(session_key, &request_id, ClarificationOutcome::Cancelled);
-                    ResolveOutcome::Stale
-                }
+                    ClarificationResult::answered(entry.answers)
+                };
+                before_send();
+                let delivered = entry
+                    .sender
+                    .is_some_and(|sender| sender.send(result).is_ok());
+                drop(pending);
+                // A vanished waiter still needs a terminal frame, but cannot
+                // acknowledge the answer or cancellation it never received.
+                let (event, outcome) = match (delivered, cancel) {
+                    (true, false) => (ClarificationOutcome::Resolved, ResolveOutcome::Done),
+                    (true, true) => (ClarificationOutcome::Cancelled, ResolveOutcome::Cancelled),
+                    (false, _) => (ClarificationOutcome::Cancelled, ResolveOutcome::Stale),
+                };
+                publish_ended(session_key, &entry.request_id, event);
+                outcome
             }
         }
     }
@@ -727,6 +799,48 @@ fn normalize(reply: &str) -> &str {
         end -= 1;
     }
     &trimmed[..end]
+}
+
+fn validate_answer(
+    question: &ClarificationQuestion,
+    input: ClarificationAnswerInput,
+) -> Result<ClarificationAnswer, &'static str> {
+    if input.question_id != question.id {
+        return Err("Answer question id does not match the outstanding question");
+    }
+    let (value, selected_indices) = match input.answer {
+        ClarificationInput::Text { text } => {
+            if text.trim().is_empty() || text.len() > MAX_REPLY_LENGTH {
+                return Err("Expected nonblank text within the answer length limit");
+            }
+            (text, Vec::new())
+        }
+        ClarificationInput::Choices { indices } => {
+            if indices.is_empty()
+                || indices.len() > question.options.len()
+                || (!question.multi_select && indices.len() != 1)
+            {
+                return Err("Invalid number of selected options");
+            }
+            let mut values = Vec::with_capacity(indices.len());
+            for (position, index) in indices.iter().enumerate() {
+                if indices[..position].contains(index) {
+                    return Err("Duplicate selected option");
+                }
+                let option = question
+                    .options
+                    .get(*index as usize)
+                    .ok_or("Selected option is out of range")?;
+                values.push(option.value.as_str());
+            }
+            (values.join(", "), indices)
+        }
+    };
+    Ok(ClarificationAnswer {
+        question_id: input.question_id,
+        selected_indices,
+        value,
+    })
 }
 
 /// Index of the option `token` names — by 1-based number, or by
@@ -1020,22 +1134,23 @@ mod tests {
         }
     }
 
-    /// Extra replies past the last question are ignored, not rejected: a client
-    /// that raced an advance would otherwise lose the answers it got right.
     #[tokio::test]
-    async fn an_overlong_batch_ignores_the_surplus() {
+    async fn an_overlong_batch_leaves_the_waiter_and_cursor_intact() {
         let mgr = ClarificationManager::new();
-        let rx = mgr
+        let mut rx = mgr
             .register("sess-long", text_request(), DEFAULT_CLARIFY_TIMEOUT, "")
             .await;
-        assert_eq!(
-            mgr.resolve_many("sess-long", &["Spanish", "ignored", "also ignored"])
-                .await,
-            ResolveOutcome::Done
-        );
-        let result = rx.await.unwrap();
-        assert_eq!(result.answers.len(), 1);
-        assert_eq!(result.value(), Some("Spanish"));
+        assert!(!mgr
+            .resolve_many("sess-long", &["Spanish", "extra"])
+            .await
+            .consumed());
+        assert_eq!(mgr.list_pending().await[0].answered, 0);
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(mgr.resolve("sess-long", "Spanish").await.consumed());
+        assert_eq!(rx.await.unwrap().value(), Some("Spanish"));
     }
 
     /// `list_pending` must describe what the NEXT reply answers, not the first
@@ -1454,6 +1569,33 @@ mod tests {
     ///
     /// Close the real receiver at the final send boundary, after the entry
     /// has passed the liveness check, rather than betting on worker timing.
+    #[tokio::test]
+    async fn cancelling_a_waiter_that_closes_at_delivery_is_stale() {
+        let mgr = ClarificationManager::new();
+        let session_key = "sess-cancel-at-delivery";
+        let (request_id, rx) = mgr
+            .register_with_identity(
+                session_key,
+                ClarificationRequest::text("Continue?"),
+                DEFAULT_CLARIFY_TIMEOUT,
+                "",
+            )
+            .await;
+        let outcome = mgr
+            .resolve_action_before_send(
+                ClarificationActionParams {
+                    session_key: session_key.to_owned(),
+                    expected_request_id: request_id,
+                    expected_question_id: "answer".to_owned(),
+                    action: ClarificationAction::Cancel {},
+                },
+                || drop(rx),
+            )
+            .await;
+        assert_eq!(outcome, ResolveOutcome::Stale);
+        assert!(mgr.list_pending().await.is_empty());
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial_test::serial(gateway_event_bus)]
     async fn a_vanished_waiter_still_ends_the_request_with_a_cancelled_frame() {
