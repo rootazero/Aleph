@@ -17,6 +17,8 @@ use crate::memory::notes::wikilink::{rewrite_relation_targets, rewrite_wikilinks
 use crate::memory::notes::{sanitize_title, KnowledgeNote, Severity};
 use crate::utils::atomic_write::atomic_write_file;
 
+mod checked;
+pub(crate) use checked::{note_revision, CheckedNoteAction, CheckedNoteError};
 mod distill_effect;
 pub(crate) use distill_effect::PreparedDistillEffect;
 

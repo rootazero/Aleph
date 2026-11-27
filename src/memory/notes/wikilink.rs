@@ -270,3 +270,62 @@ mod tests {
         assert!(out.contains("  - to: general/bob2\r\n"), "got: {out:?}");
     }
 }
+
+/// Rewrite body wikilinks and typed relations approved by Core resolution.
+/// Other frontmatter fields are not references, even if they contain link syntax.
+pub(crate) fn rewrite_resolved_targets(
+    text: &str,
+    mut replacement: impl FnMut(&str) -> Option<String>,
+) -> Result<String, crate::error::AlephError> {
+    let mut offset = 0;
+    let mut opening_end = None;
+    let mut fences = None;
+    for (index, line) in text.split_inclusive('\n').enumerate() {
+        if index == 0 {
+            if line.trim() != "---" {
+                break;
+            }
+            opening_end = Some(line.len());
+        } else if line.trim() == "---" {
+            fences = opening_end.map(|start| (start, offset, offset + line.len()));
+            break;
+        }
+        offset += line.len();
+    }
+    let body_start = fences.map_or(0, |(_, _, end)| end);
+    let mut prefix = text[..body_start].to_string();
+    if let Some((start, end, _)) = fences {
+        let mut yaml: crate::yaml::Value = crate::yaml::from_str(&text[start..end])
+            .map_err(|error| crate::error::AlephError::other(error.to_string()))?;
+        let mut changed = false;
+        if let Some(relations) = yaml
+            .get_mut("relations")
+            .and_then(|value| value.as_sequence_mut())
+        {
+            for relation in relations {
+                if let Some(value) = relation.get_mut("to") {
+                    if let Some(target) = value.as_str().and_then(&mut replacement) {
+                        *value = crate::yaml::Value::String(target);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if changed {
+            let serialized = crate::yaml::to_string(&yaml)
+                .map_err(|error| crate::error::AlephError::other(error.to_string()))?;
+            prefix = format!("---\n{serialized}---\n");
+        }
+    }
+    let body = WIKILINK_RE.replace_all(&text[body_start..], |caps: &regex::Captures| {
+        let Some(target) = replacement(&caps[1]) else {
+            return caps[0].to_string();
+        };
+        match caps.get(2) {
+            Some(alias) => format!("[[{target}|{}]]", alias.as_str()),
+            None => format!("[[{target}]]"),
+        }
+    });
+    prefix.push_str(&body);
+    Ok(prefix)
+}
