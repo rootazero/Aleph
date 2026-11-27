@@ -42,7 +42,7 @@
 
 ---
 
-### 任务 1 / Task 1 — Context projection and history
+### Task 1: Context projection and history / 上下文投影与历史恢复
 
 **接口 / Interfaces.** `shared_ui_logic::transcript::ContextOccupancy`, re-exported from `context.rs`, represents `Measured { used_tokens: u32, window_tokens: u32, total_tokens: Option<u64> }`, `CapacityOnly { window_tokens: u32 }`, or `Unknown`. Expose `pub fn project_occupancy(used_tokens: Option<u32>, window_tokens: Option<u32>, total_tokens: Option<u64>) -> ContextOccupancy`. The Leptos state keeps the existing independent run metrics and estimate classification. `ContextBreakdown` is consumed through the existing `panel_context_view` projection. Keep the context projection importable from both renderers without enabling the experimental tab renderer.
 
@@ -52,7 +52,7 @@
 - [ ] Run `cargo test -p shared-ui-logic --lib` and `cargo test -p aleph-panel --lib`. Confirm restore, older records, live ordering and compaction pass.
 - [ ] 提交上下文数据 / Commit the projection and ingress together.
 
-### 任务 2 / Task 2 — Optical surfaces and damped motion
+### Task 2: Optical surfaces and damped motion / 光学界面与阻尼动效
 
 **接口 / Interfaces.** `components::motion::Spring` supplies `pub fn retarget(&mut self, target: f64)` and `pub fn advance(&mut self, seconds: f64) -> f64`. A Leptos-owned frame controller consumes it, publishes position and releases the pending callback on settle, visibility loss, preference change or disposal. `Spring` remains pure Rust. CSS uses existing theme semantic tokens as fallbacks.
 
@@ -62,7 +62,7 @@
 - [ ] Run the motion tests and `cargo check -p aleph-panel --target wasm32-unknown-unknown`. Verify dark and light contrast, visible focus and reduced motion in the browser slice.
 - [ ] 提交主题和动效 / Commit the theme and motion together.
 
-### 任务 3 / Task 3 — Context vial and pixel companion
+### Task 3: Context vial and pixel companion / 上下文小瓶与像素伙伴
 
 **接口 / Interfaces.** Shared Leptos `<ContextVial />` reads the context projection and canonical selected session. `<PixelCompanion />` reads existing `ChatPhase` and local appearance preferences. Both use the shared motion lifecycle. Preserve `context_gauge.rs::CacheStat` and current cost UI.
 
@@ -72,7 +72,7 @@
 - [ ] Run both Rust and WASM checks and the context/browser cases. Exercise pointer and keyboard overlay open/close, 512K actual data, layout at mobile width, and visibility teardown.
 - [ ] 提交组件和替换点 / Commit the mounted widgets and removal of the superseded ring paths.
 
-### 任务 4 / Task 4 — Authorized thought-block identity
+### Task 4: Authorized thought-block identity / 授权思考块标识
 
 **接口 / Interfaces.** `aleph_protocol::thought::{ThoughtBlockId, ThoughtBlockRef, TranslationEngine, TranslationTarget}` is shared. `ThoughtBlockRef { session_key, run_id, block_id }` identifies a settled displayable block. `TranslationEngine` is `Machine | Ai`. `TranslationTarget` is `En | Zh` for current shipped locales. `trace.by_runs` retains its current projected content and may attach an optional block reference only to eligible rows. Core source resolution returns owned text after existing session and run access checks.
 
@@ -82,7 +82,7 @@
 - [ ] Run the new tests, existing scoped trace tests, and `cargo test -p aleph-protocol --lib`. Verify serialized references round-trip and older rows still deserialize.
 - [ ] 提交类型和授权源 / Commit the shared identity and source authorization.
 
-### 任务 5 / Task 5 — Capability-backed translation engines
+### Task 5: Capability-backed translation engines / 基于 Capability 的翻译引擎
 
 **接口 / Interfaces.** `ThoughtTranslationRequest { block: ThoughtBlockRef, engine: TranslationEngine, target: TranslationTarget, expected_destination: String, request_id: String }` carries caller intent; availability returns an optional destination per engine. Panel-facing `thought.translation.engines`, `thought.translation.start`, and `thought.translation.cancel` use the existing method scope registry. `start` acknowledges after registering the authorized job and returns immediately. AI progress and terminal results from both engines use the same request-correlated event, confined to the initiating authorized connection. `cancel` checks the same effective caller, connection, request ID and scope. Existing typed config patches provide operator-controlled binding to a machine capability and an AI provider/model. Initial bounds are 16 KiB of source, 32 KiB of translated UTF-8, 30 seconds of execution and one concurrent request per connection, with a service semaphore of eight.
 
@@ -92,7 +92,7 @@
 - [ ] Run targeted capability, translation, and gateway admission tests, then `cargo check -p alephcore --bin aleph-server`. Verify enabled, unavailable and unauthorized configurations through production handler registration and test engines.
 - [ ] 提交授权与引擎接线 / Commit the service, config and production mounts.
 
-### 任务 6 / Task 6 — Thought reader and current Panel locales
+### Task 6: Thought reader and current Panel locales / 思考阅读器与界面语言
 
 **接口 / Interfaces.** Extend the existing `<ReasoningPanel />` and history rendering to share an original/translated/bilingual view. `api::thought::ThoughtApi` provides typed availability, start and cancel, consuming the contracts from Tasks 4–5. Presentation preference and engine selection follow current Panel preference mechanisms. Locale is read from the active Panel locale on each start.
 
@@ -102,7 +102,7 @@
 - [ ] Run `cargo test -p aleph-panel --lib`, the WASM check and browser tests at wide and phone widths. Verify keyboard operation and bilingual strings in `en` and `zh`.
 - [ ] 提交阅读器 / Commit UI, API integration and localized copy.
 
-### 任务 7 / Task 7 — Integration, cleanup and reference docs
+### Task 7: Integration, cleanup and reference docs / 集成、清理与参考文档
 
 - [ ] Inspect changed mounts and call sites for orphaned selectors, timers, duplicate projections and legacy ring references. Check new externally callable names against the Capability policy and method-scope census. Review the whole branch with a fresh integration reviewer.
 - [ ] Run `git diff --check`, `cargo fmt --all --check`, the shared protocol/UI and full Panel unit suites, specified targeted Core tests, and shipping Panel WASM build/check. Use the current repository Panel build entry and local runtime API; record exact commands and results.
