@@ -247,6 +247,74 @@ test("Nebula opens exact search addresses without assuming graph membership", as
   expect(paramsSeen).toEqual([{ agent_id: "org-b", node_id: "concept/same" }]);
 });
 
+test("Nebula follows addressed relationships and focuses an off-window note", async () => {
+  const root = { id: "concept/root", path: "concept/root", tags: [], link_count: 1, agent_id: "org-a", name: "Root", category: "concept" };
+  const neighbor = { ...root, id: "concept/neighbor", path: "concept/neighbor", name: "Neighbor" };
+  const target = { agent_id: "org-a", node_id: neighbor.id };
+  const app = await open("./App.tsx", { host: { handlers: gateway({
+    "panel.capabilities.snapshot": () => nebulaSnapshot([NEBULA_TAB]),
+    "graph.query": (params) => (params as { focus?: unknown }).focus
+      ? { nodes: [neighbor, root], edges: [], focus: target }
+      : { nodes: [root], edges: [] },
+    "graph.node_detail": (params) => (params as { node_id: string }).node_id === root.id
+      ? { node: root, content: "Root body", backlinks: [], outgoing: [
+        { to: neighbor.id, status: "active", label: "Follow neighbor", target },
+        { to: "concept/deleted", status: "tombstone" },
+      ] }
+      : { node: neighbor, content: "Neighbor body", backlinks: [root.id], backlink_targets: [{ agent_id: root.agent_id, node_id: root.id }] },
+  }) } });
+  await app.waitFor("label:Open Memory Nebula");
+  await app.press("label:Open Memory Nebula");
+  await app.waitFor("Root");
+  await app.press("Root");
+  await app.waitFor("→ Follow neighbor");
+  expect(app.texts()).toContain("→ concept/deleted · tombstone");
+  await app.press("→ Follow neighbor");
+  await app.waitFor("Neighbor body");
+  await app.press("Show neighborhood");
+  await app.waitFor("2 notes in this neighborhood");
+  expect(rpcParams(app, "graph.query")).toEqual([{ limit: 100 }, { limit: 100, focus: target }]);
+  expect(rpcParams(app, "graph.node_detail").at(-1)).toEqual(target);
+  await app.press("← concept/root");
+  await app.waitFor("Root body");
+  await app.press("Back to overview");
+  await app.waitFor("1 of 1 graph notes");
+  expect(rpcParams(app, "graph.query").at(-1)).toEqual({ limit: 100 });
+});
+
+test("Nebula keeps its graph after refresh fails and discards a late detail", async () => {
+  const first = { id: "concept/first", path: "concept/first", tags: [], link_count: 0, agent_id: "org-a", name: "First note", category: "concept" };
+  const second = { ...first, id: "concept/second", path: "concept/second", name: "Second note" };
+  let queries = 0;
+  let finishFirst!: (response: unknown) => void;
+  const firstDetail = new Promise<unknown>((resolve) => { finishFirst = resolve; });
+  const app = await open("./App.tsx", { host: { handlers: gateway({
+    "panel.capabilities.snapshot": () => nebulaSnapshot([NEBULA_TAB]),
+    "graph.query": () => {
+      if (++queries === 2) throw new Error("Graph temporarily unavailable");
+      return { nodes: [first, second], edges: [] };
+    },
+    "graph.node_detail": (params) => (params as { node_id: string }).node_id === first.id
+      ? firstDetail
+      : { node: second, content: "Second body", backlinks: [] },
+  }) } });
+  await app.waitFor("label:Open Memory Nebula");
+  await app.press("label:Open Memory Nebula");
+  await app.waitFor("First note");
+  await app.press("First note");
+  await app.waitUntil(() => rpcCalls(app, "graph.node_detail") === 1);
+  await app.press("Second note");
+  await app.waitFor("Second body");
+  finishFirst({ node: first, content: "Late first body", backlinks: [] });
+  await app.press("Refresh graph");
+  await app.waitFor("Retry graph");
+  expect(app.texts()).toContain("2 of 2 graph notes");
+  expect(app.texts()).toContain("Second body");
+  expect(app.texts()).not.toContain("Late first body");
+  await app.press("Retry graph");
+  await app.waitFor("Retry graph", { state: "gone" });
+});
+
 test("Nebula discovery is not carried across connection identities", async () => {
   let declarations: unknown[] = [NEBULA_TAB];
   const note = { id: "concept/private", path: "concept/private", tags: [], link_count: 0, agent_id: "org-a", name: "Original note", category: "concept" };
