@@ -23,7 +23,7 @@ type ChatSendAcknowledgement = { run_id: string; session_key: string };
 /** A JSON-RPC error answer, or a host failure (`code` -32090). */
 export class RpcError extends Error {
   readonly code: number;
-  constructor(code: number, message: string) {
+  constructor(code: number, message: string, readonly data?: unknown) {
     super(message);
     this.code = code;
   }

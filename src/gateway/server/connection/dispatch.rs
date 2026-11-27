@@ -623,10 +623,8 @@ pub(super) async fn revalidate_peer(
     peer: &DispatchPeer,
     method: &str,
     start: &CallerSnapshot,
-) -> bool {
-    validate_live(&peer.view(), method, start, None)
-        .await
-        .is_ok()
+) -> Option<CallerSnapshot> {
+    validate_live(&peer.view(), method, start, None).await.ok()
 }
 
 async fn validate_live(
@@ -638,6 +636,9 @@ async fn validate_live(
     let Some(live) = peer.snapshot().await else {
         return Err(viewer_denied_response(id));
     };
+    if method == aleph_protocol::memory_graph::GRAPH_MUTATE_NOTE_METHOD && peer.bound.is_none() {
+        return Err(viewer_denied_response(id));
+    }
     let viewer_method = is_browser_viewer_method(method);
     let denial = crate::gateway::caller_identity::with_caller_identity(
         live.role.clone(),

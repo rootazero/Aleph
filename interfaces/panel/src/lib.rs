@@ -411,6 +411,7 @@ impl PanelModel {
                     "icon": descriptor.icon,
                     "status": status_name(&descriptor.status),
                     "statusDetail": descriptor.status_detail,
+                    "permissions": descriptor.permissions,
                     "renderer": renderer(&descriptor.key),
                 })
             })
@@ -598,18 +599,50 @@ impl NebulaModel {
         let communities: Vec<_> = graph.nodes.iter().map(|node| node.community_id).collect();
         let mut layout = ForceLayout::new(ids.len(), &index.springs, &communities);
         let mut positions = layout.seed(&ids);
-        // The NSH read window is 100 notes. Keep the work bounded per refresh;
-        // the classic renderer still animates the full 3D settling process.
+        // Keep work bounded for both the overview and the focused one-hop window.
         for _ in 0..8 {
             layout.step(&mut positions);
         }
         let points: Vec<_> = positions.iter().map(|point| [point.x, point.y]).collect();
-        let edges: Vec<_> = index
+        fn pair<'a>(a: &'a str, b: &'a str) -> (&'a str, &'a str) {
+            if a <= b {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        }
+        let bridges: std::collections::HashSet<_> = graph.bridge_nodes.iter().collect();
+        let surprising: std::collections::HashSet<_> = graph
+            .surprising_edges
+            .iter()
+            .map(|(from, to)| pair(from, to))
+            .collect();
+        let mut edges: Vec<_> = index
             .relations
             .iter()
-            .map(|edge| json!({ "from": edge.from, "to": edge.to, "kind": edge.row.kind }))
+            .map(|edge| {
+                let insight = !surprising.is_empty()
+                    && surprising.contains(&pair(&ids[edge.from as usize], &ids[edge.to as usize]));
+                let mut value = json!({ "from": edge.from, "to": edge.to, "kind": edge.row.kind });
+                if insight {
+                    value["surprising"] = json!(true);
+                }
+                (insight, value)
+            })
             .collect();
-        json!({"points": points, "edges": edges})
+        edges.sort_by_key(|(insight, _)| !insight);
+        let edges: Vec<_> = edges.into_iter().map(|(_, value)| value).collect();
+        let mut scene = json!({"points": points, "edges": edges});
+        if communities.iter().any(Option::is_some) {
+            scene["communities"] = json!(communities);
+        }
+        if !bridges.is_empty() {
+            scene["bridges"] = json!(ids
+                .iter()
+                .map(|id| bridges.contains(id))
+                .collect::<Vec<_>>());
+        }
+        scene
     }
 }
 
@@ -645,7 +678,9 @@ mod tests {
         let node =
             |id| json!({"id": id, "path": id, "name": id, "category": "concept", "link_count": 0});
         let scene = NebulaModel::scene(json!({
-            "nodes": [node("a"), node("b")],
+            "nodes": [{"id": "a", "path": "a", "name": "a", "category": "concept", "link_count": 0, "community_id": 12}, node("b")],
+            "bridge_nodes": ["a", "missing"],
+            "surprising_edges": [["b", "a"], ["missing", "a"]],
             "edges": [
                 {"from": "a", "to": "b", "kind": "refers"},
                 {"from": "b", "to": "a", "kind": "related_similarity"},
@@ -653,11 +688,13 @@ mod tests {
             ]
         }));
         assert_eq!(scene["points"].as_array().unwrap().len(), 2);
+        assert_eq!(scene["communities"], json!([12, null]));
+        assert_eq!(scene["bridges"], json!([true, false]));
         assert_eq!(
             scene["edges"],
             json!([
-                {"from": 0, "to": 1, "kind": "refers"},
-                {"from": 1, "to": 0, "kind": "related_similarity"}
+                {"from": 0, "to": 1, "kind": "refers", "surprising": true},
+                {"from": 1, "to": 0, "kind": "related_similarity", "surprising": true}
             ])
         );
     }

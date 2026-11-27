@@ -555,7 +555,17 @@ fn error_reply(code: i32, message: &str) -> Value {
 fn rpc_reply(result: CliResult<Value>) -> Value {
     match result {
         Ok(result) => json!({ "result": result }),
-        Err(CliError::Rpc { code, message }) => error_reply(code, &message),
+        Err(CliError::Rpc {
+            code,
+            message,
+            data,
+        }) => {
+            let mut reply = error_reply(code, &message);
+            if let Some(data) = data {
+                reply["error"]["data"] = data;
+            }
+            reply
+        }
         Err(other) => error_reply(PANEL_HOST_UNAVAILABLE, &other.to_string()),
     }
 }
@@ -576,6 +586,7 @@ mod tests {
         assert_eq!(rpc_reply(Ok(Value::Null)), json!({ "result": null }));
         assert_eq!(
             rpc_reply(Err(CliError::Rpc {
+                data: None,
                 code: -32601,
                 message: "method unavailable".into(),
             })),

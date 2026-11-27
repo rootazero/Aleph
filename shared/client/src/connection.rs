@@ -1044,6 +1044,7 @@ impl AlephClient {
             Err(error) => Err(CliError::Rpc {
                 code: error.code,
                 message: error.message,
+                data: error.data,
             }),
         }
     }
