@@ -1667,3 +1667,5 @@ mod tests {
 #[cfg(test)]
 #[path = "voice_turn/tests.rs"]
 pub(crate) mod voice_turn_tests;
+
+pub mod thought_translation;

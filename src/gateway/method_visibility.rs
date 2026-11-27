@@ -639,6 +639,9 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     // reaches a record for it.
     ("context.breakdown", Treatment::KeyChecked),
     ("trace.by_runs", Treatment::KeyChecked),
+    ("thought.translation.engines", Treatment::PartitionChecked),
+    ("thought.translation.start", Treatment::KeyChecked),
+    ("thought.translation.cancel", Treatment::KeyChecked),
     // Its sibling reads no trace table at all: it addresses one tool call in
     // the named session's own event log, and the log is keyed by session, so
     // the KeyCheck on that session is the whole predicate.

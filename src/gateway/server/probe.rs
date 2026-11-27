@@ -102,6 +102,7 @@ mod tests {
             origin_policy: Arc::new(crate::gateway::origin_policy::OriginPolicy::loopback_only()),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
+            thought_translation: None,
             session_store: None,
             team_store: None,
             event_visibility: Arc::new(

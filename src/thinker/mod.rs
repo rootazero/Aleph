@@ -253,6 +253,12 @@ impl MultiProviderRegistry {
         Ok(())
     }
 
+    /// Resolve one registered provider by its exact key, without model aliases.
+    pub fn get_exact_provider(&self, name: &str) -> Option<Arc<dyn AiProvider>> {
+        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        state.providers.get(name).cloned()
+    }
+
     /// List all registered provider names (inherent method for direct access)
     pub fn list_providers(&self) -> Vec<String> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());

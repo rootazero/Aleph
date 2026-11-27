@@ -9,7 +9,10 @@
 //! Moved verbatim out of the legacy `/ws` event arm; only control flow changed
 //! (`continue` → [`EventVerdict::Skip`], socket writes → returned verdicts).
 
-use aleph_protocol::{chat_transcript::CHAT_TOOL_TOPIC, system_hello::Feature};
+use aleph_protocol::{
+    chat_transcript::CHAT_TOOL_TOPIC, system_hello::Feature, thought::THOUGHT_TRANSLATION_TOPIC,
+};
+use serde_json::Value;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tracing::{debug, info, warn};
 
@@ -105,6 +108,14 @@ async fn admit_with_presentation(
         // this transport boundary before the generic subscriber
         // receives the payload. Panel surface-id filtering is only
         // a second line of defense.
+        if topic == THOUGHT_TRANSLATION_TOPIC
+            && event_data
+                .and_then(|data| data.get("connection_id"))
+                .and_then(Value::as_str)
+                != Some(conn_id)
+        {
+            return EventVerdict::Skip;
+        }
         if !ui_display_admits_connection(topic, event_data, conn_id)
             || (topic == "capabilities.ui.display"
                 && !crate::gateway::capability_ui::display_mount_admits(event_data, conn_id))
@@ -196,6 +207,7 @@ async fn admit_with_presentation(
             };
         if admits
             && (presenting_tool
+                || topic == THOUGHT_TRANSLATION_TOPIC
                 || matches!(
                     topic,
                     "capability.event" | "capability.event.status" | "capabilities.ui.display"
@@ -219,6 +231,10 @@ async fn admit_with_presentation(
                             event_data,
                             state.channel_kind,
                         )
+                        && (topic != THOUGHT_TRANSLATION_TOPIC
+                            || ctx.thought_translation.as_ref().is_some_and(|service| {
+                                service.event_admits(event_data, conn_id, state)
+                            }))
                 })
                 && (topic != "capabilities.ui.display"
                     || crate::gateway::capability_ui::display_mount_admits(event_data, conn_id));
@@ -471,6 +487,7 @@ mod tests {
             node_registry: gateway.node_registry.clone(),
             exec_approval_manager: None,
             audit_log: None,
+            thought_translation: None,
             session_store: Some(store.clone()),
             team_store: None,
             event_visibility: gateway.event_visibility.clone(),

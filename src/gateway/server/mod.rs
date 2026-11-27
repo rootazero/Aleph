@@ -281,6 +281,8 @@ pub struct GatewaySharedState {
     /// (zero-change guarantee), matching every other `Option<Arc<...>>`
     /// dependency in this struct.
     pub session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    pub(crate) thought_translation:
+        Option<Arc<crate::gateway::handlers::thought_translation::TranslationService>>,
     /// Team store handle for the same filter's `team.<id>.*` plane, whose
     /// frames resolve to a TEAM's owner rather than a session's. `None` in
     /// probe/legacy wiring and in any deployment with no team database — those
@@ -524,6 +526,8 @@ pub struct GatewayServer {
     /// See [`GatewaySharedState::session_store`]. Installed by
     /// [`GatewayServer::set_session_store`].
     session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    pub(crate) thought_translation:
+        Option<Arc<crate::gateway::handlers::thought_translation::TranslationService>>,
     /// Markdown session store for Phase A storage backend. Installed during
     /// boot if the store can be initialized; `None` means sessions are not
     /// saved as Markdown files.
@@ -592,6 +596,7 @@ impl GatewayServer {
             exec_approval_manager: None,
             audit_log: None,
             session_store: None,
+            thought_translation: None,
             markdown_session_store: None,
             team_store: None,
             event_visibility: Arc::new(
@@ -660,6 +665,7 @@ impl GatewayServer {
             exec_approval_manager: None,
             audit_log: None,
             session_store: None,
+            thought_translation: None,
             markdown_session_store: None,
             team_store: None,
             event_visibility: Arc::new(
@@ -1036,6 +1042,7 @@ impl GatewayServer {
             }),
             node_registry: self.node_registry.clone(),
             exec_approval_manager: self.exec_approval_manager.clone(),
+            thought_translation: self.thought_translation.clone(),
             session_store: self.session_store.clone(),
             team_store: self.team_store.clone(),
             event_visibility: self.event_visibility.clone(),

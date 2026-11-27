@@ -1196,6 +1196,21 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // trace.list / trace.get / trace.by_runs — replay durable traces when a
         // state DB exists, else SERVICE_UNAVAILABLE. See `common_handlers.rs`.
         register_trace_handlers(server, resilience_db.clone(), session_store.clone());
+        if let Some(db) = resilience_db.clone() {
+            alephcore::gateway::handlers::thought_translation::register(
+                server,
+                app_config_arc.clone(),
+                topic_provider_registry.clone(),
+                canonical_tools.clone(),
+                db,
+                session_store.clone(),
+            )
+            .map_err(|error| {
+                alephcore::AlephError::config(format!(
+                    "thought translation registration failed: {error}"
+                ))
+            })?;
+        }
 
         // Capture for inbound router
         exec_adapter = Some(engine_arc.clone());
