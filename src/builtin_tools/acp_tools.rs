@@ -521,3 +521,68 @@ mod tests {
         assert_eq!(args.target, "claude-code");
     }
 }
+
+#[cfg(test)]
+mod disabled_tests {
+    use super::*;
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn disabled_delegate_never_starts_harness() {
+        use crate::capability::facade::{CapabilityFacade, Scope};
+        use crate::capability::ownership::OwnershipTree;
+        use crate::capability::zahir_facade::ZahirFacade;
+        use crate::executor::builtin_registry::{BuiltinToolConfig, BuiltinToolRegistry};
+        use crate::executor::ToolRegistry;
+        use crate::tools::handlers::builtin::{register_builtin_routers, BuiltinRegistryRouter};
+        use crate::tools::traits::AlephToolDyn;
+        use crate::tools::ToolHandlerRegistry;
+
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("started");
+        let entry = crate::config::types::acp::AcpAdapterEntry {
+            executable: Some("/bin/sh".into()),
+            args: vec!["-c".into(), format!("touch '{}'; exit 1", marker.display())],
+            enabled: true,
+            trust_level: TrustLevel::Disabled,
+            ..Default::default()
+        };
+        let manager = Arc::new(AcpAdapterManager::from_entries(
+            std::collections::HashMap::from([("blocked".into(), entry)]),
+        ));
+        let builtin: Arc<dyn ToolRegistry> = Arc::new(
+            BuiltinToolRegistry::with_config(BuiltinToolConfig {
+                acp_manager: Some(manager),
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+        );
+        let registry = ToolHandlerRegistry::new();
+        let names = ["acp_delegate", "acp_switch", "acp_session_control"];
+        let _scope = register_builtin_routers(
+            &registry,
+            Arc::clone(&builtin),
+            names.iter().map(|name| (*name).to_owned()),
+        )
+        .await
+        .unwrap();
+        let facade = ZahirFacade::new(registry, Arc::new(OwnershipTree::default()));
+        let snapshot = facade.describe(Scope::default());
+        for name in names {
+            assert!(snapshot
+                .capabilities
+                .iter()
+                .any(|descriptor| descriptor.id.name == name));
+        }
+        let router = BuiltinRegistryRouter::new("acp_delegate".into(), builtin);
+        let error = router
+            .invoke(serde_json::json!({
+                "harness": "blocked", "prompt": "hello", "cwd": directory.path()
+            }))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("disabled"), "{error}");
+        assert!(!marker.exists());
+    }
+}

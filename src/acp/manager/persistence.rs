@@ -12,7 +12,7 @@ use tracing::warn;
 
 use crate::error::{AlephError, Result};
 
-use super::AcpAdapterManager;
+use super::{AcpAdapterManager, SessionKey};
 use crate::sync_primitives::Arc;
 
 /// Default persistence file path for ACP sessions.
@@ -59,9 +59,8 @@ fn write_sessions(sessions: &[crate::acp::session::PersistedAcpSession]) -> Resu
 /// Apply an event to the store owned exclusively by the serial writer.
 /// Events are applied and written in receive order to avoid stale snapshots.
 ///
-/// `Created` is re-emitted idempotently after every prompt, so the
-/// `created_at` of the existing record is preserved; only `last_used_at`
-/// moves. `Removed` drops the matching entry.
+/// `Created` establishes an association or records a changed peer ID. The
+/// existing key keeps its creation timestamp. `Removed` drops that key.
 fn apply_event_to_store(
     store: &mut Vec<crate::acp::session::PersistedAcpSession>,
     event: &crate::acp::AcpSessionEvent,
@@ -74,10 +73,9 @@ fn apply_event_to_store(
             cwd,
             session_name,
         } => {
+            let key = SessionKey::with_name(harness_id, cwd, session_name.as_deref());
             let now = chrono::Utc::now();
-            if let Some(existing) = store.iter_mut().find(|s| {
-                s.harness_id == *harness_id && s.cwd == *cwd && s.session_name == *session_name
-            }) {
+            if let Some(existing) = store.iter_mut().find(|record| stored_key(record) == key) {
                 existing.acp_session_id = acp_session_id.clone();
                 existing.last_used_at = now;
             } else {
@@ -96,11 +94,18 @@ fn apply_event_to_store(
             cwd,
             session_name,
         } => {
-            store.retain(|s| {
-                !(s.harness_id == *harness_id && s.cwd == *cwd && s.session_name == *session_name)
-            });
+            let key = SessionKey::with_name(harness_id, cwd, session_name.as_deref());
+            store.retain(|record| stored_key(record) != key);
         }
     }
+}
+
+fn stored_key(record: &crate::acp::session::PersistedAcpSession) -> SessionKey {
+    SessionKey::with_name(
+        &record.harness_id,
+        &record.cwd,
+        record.session_name.as_deref(),
+    )
 }
 
 /// Owns the persistence worker until every accepted event has reached disk.

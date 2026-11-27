@@ -1148,3 +1148,77 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod disabled_acp_tests {
+    use super::*;
+    use crate::gateway::execution_adapter::ExecutionAdapter;
+    struct UnusedExecution;
+    #[async_trait::async_trait]
+    impl ExecutionAdapter for UnusedExecution {
+        async fn execute(
+            &self,
+            _: crate::gateway::execution_engine::RunRequest,
+            _: Arc<crate::gateway::agent_instance::AgentInstance>,
+            _: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
+        ) -> Result<(), ExecutionError> {
+            panic!("ACP must route through manager")
+        }
+        async fn cancel(&self, _: &str) -> Result<(), ExecutionError> {
+            unreachable!()
+        }
+        async fn get_status(&self, _: &str) -> Option<crate::gateway::execution_engine::RunStatus> {
+            None
+        }
+        async fn active_run_count(&self) -> usize {
+            0
+        }
+    }
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn disabled_acp_team_member_never_starts_harness() {
+        use crate::gateway::session_store::sqlite_backend::{
+            SqliteSessionStore, SqliteSessionStoreConfig,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("started");
+        let entry = crate::config::types::acp::AcpAdapterEntry {
+            executable: Some("/bin/sh".into()),
+            args: vec!["-c".into(), format!("touch '{}'; exit 1", marker.display())],
+            enabled: true,
+            timeout_seconds: 1,
+            trust_level: crate::config::types::acp::TrustLevel::Disabled,
+            ..Default::default()
+        };
+        let manager = Arc::new(crate::acp::manager::AcpAdapterManager::from_entries(
+            std::collections::HashMap::from([("blocked".into(), entry)]),
+        ));
+        let store = SqliteSessionStore::new(SqliteSessionStoreConfig {
+            db_path: directory.path().join("sessions.db"),
+            ..Default::default()
+        })
+        .unwrap();
+        let context = GatewayContext::new(
+            Arc::new(store),
+            Arc::new(crate::gateway::AgentRegistry::new()),
+            Arc::new(UnusedExecution),
+            Arc::new(crate::gateway::inter_agent_policy::AgentToAgentPolicy::permissive()),
+        )
+        .with_acp_manager(manager);
+        let outcome = execute_acp_member_task(
+            &context,
+            "member",
+            "blocked",
+            directory.path().to_str().unwrap(),
+            None,
+            "team",
+            "task",
+            "hello".into(),
+            3,
+        )
+        .await;
+        assert_eq!(outcome.status, MemberRunStatus::Failed);
+        assert!(!marker.exists(), "disabled team harness launched");
+        assert!(outcome.error.unwrap().contains("harness_denied"));
+    }
+}

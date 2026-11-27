@@ -383,3 +383,62 @@ async fn test_gateway_change_hook_fires_on_emit() {
     }));
     assert_eq!(counter.load(Ordering::SeqCst), 2);
 }
+async fn disabled_harness_never_starts_native_or_oneshot() {
+    use crate::config::types::acp::TrustLevel;
+    let directory = tempfile::tempdir().unwrap();
+    let marker = directory.path().join("started");
+    let entry = AcpAdapterEntry {
+        executable: Some("/bin/sh".into()),
+        args: vec!["-c".into(), format!("touch '{}'; exit 1", marker.display())],
+        enabled: true,
+        trust_level: TrustLevel::Disabled,
+        timeout_seconds: 1,
+        ..Default::default()
+    };
+    let manager =
+        AcpAdapterManager::from_entries(HashMap::from([("blocked".into(), entry.clone())]));
+    let cwd = directory.path().to_str().unwrap();
+    for mode in [AdapterMode::NativeAcp, AdapterMode::Oneshot] {
+        let mut configured = entry.clone();
+        configured.default_mode = mode.to_serde();
+        manager.update_harness("blocked", configured).await.unwrap();
+        let error = manager
+            .prompt_named("blocked", "hello", cwd, None, Some(mode), true, None)
+            .await
+            .unwrap_err();
+        assert!(
+            !marker.exists(),
+            "disabled harness launched in {mode:?}: {error}"
+        );
+        assert!(error.to_string().contains("harness_denied"), "{error}");
+    }
+    let error = manager
+        .ensure_session_named("blocked", cwd, None)
+        .await
+        .unwrap_err();
+    assert!(!marker.exists());
+    assert!(error.to_string().contains("harness_denied"), "{error}");
+    let record = crate::acp::session::PersistedAcpSession {
+        harness_id: "blocked".into(),
+        acp_session_id: "old".into(),
+        cwd: cwd.into(),
+        created_at: chrono::Utc::now(),
+        last_used_at: chrono::Utc::now(),
+        session_name: None,
+    };
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = Arc::clone(&events);
+    manager
+        .set_persistence_hook(Arc::new(move |event| captured.lock().unwrap().push(event)))
+        .await;
+    assert!(manager
+        .restore_sessions(vec![record.clone()])
+        .await
+        .is_empty());
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "restore denial must retain the persisted record"
+    );
+    assert!(!marker.exists());
+    assert_eq!(record.acp_session_id, "old");
+}

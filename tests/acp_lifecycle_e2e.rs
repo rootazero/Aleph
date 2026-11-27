@@ -4,7 +4,13 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use alephcore::acp::manager::AcpAdapterManager;
+use alephcore::acp::manager::{load_persisted_sessions, wire_persistence, AcpAdapterManager};
+use alephcore::gateway::handlers::acp_config::{
+    handle_sessions_cancel, handle_sessions_list, handle_sessions_shutdown,
+};
+use alephcore::gateway::protocol::JsonRpcRequest;
+use serde_json::json;
+use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::time::{sleep, timeout};
 
@@ -21,6 +27,10 @@ import time
 
 cwd = Path.cwd()
 pid = os.getpid()
+held_prompt = None
+
+def respond(request, result):
+    print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
 
 def record(line):
     with (cwd / 'frames').open('a') as frames:
@@ -44,17 +54,29 @@ for line in sys.stdin:
                 pass
         result = {'sessionId': f'peer-{pid}'}
     elif method == 'session/load':
+        record('load:' + frame['params']['sessionId'])
+        if (cwd / 'reject-load').exists():
+            print(json.dumps({'jsonrpc': '2.0', 'id': frame['id'],
+                'error': {'code': -32000, 'message': 'test peer refused saved session'}}), flush=True)
+            continue
         result = {}
     elif method == 'session/prompt':
         text = frame['params']['prompt'][0]['text']
         if text == 'stop reading':
             threading.Event().wait()
+        if text == 'wait for cancel':
+            held_prompt = frame
+            continue
         result = {'content': text}
     elif method == 'session/cancel':
+        record('cancel:' + frame['params']['sessionId'])
+        if held_prompt is not None:
+            respond(held_prompt, {'content': 'canceled'})
+            held_prompt = None
         continue
     else:
         result = {}
-    print(json.dumps({'jsonrpc': '2.0', 'id': frame['id'], 'result': result}), flush=True)
+    respond(frame, result)
 "#;
 
 struct PeerFixture {
@@ -81,8 +103,20 @@ impl PeerFixture {
     }
 
     fn manager(&self) -> AcpAdapterManager {
-        let config = serde_json::from_value(self.registration()).unwrap();
-        AcpAdapterManager::from_entries([(HARNESS.into(), config)].into())
+        self.manager_with(&[HARNESS])
+    }
+
+    fn manager_with(&self, ids: &[&str]) -> AcpAdapterManager {
+        AcpAdapterManager::from_entries(
+            ids.iter()
+                .map(|id| {
+                    (
+                        (*id).to_owned(),
+                        serde_json::from_value(self.registration()).unwrap(),
+                    )
+                })
+                .collect(),
+        )
     }
 
     fn workspace(&self, name: &str) -> PathBuf {
@@ -250,4 +284,118 @@ async fn shutdown_reaps_unresponsive_child_and_rejects_stale_waiter() {
     let observed = frames(&dir);
     assert!(!observed.contains("session/set_mode"), "{observed}");
     assert!(manager.list_sessions().await.is_empty());
+}
+
+#[tokio::test]
+async fn cancel_reaches_busy_owner_without_waiting_for_prompt_lock() {
+    let fixture = PeerFixture::new();
+    let dir = fixture.workspace("cancel");
+    let cwd = dir.to_str().unwrap();
+    let manager = Arc::new(fixture.manager());
+    let changes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hook_counter = Arc::clone(&changes);
+    manager
+        .set_gateway_change_hook(Arc::new(move || {
+            hook_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }))
+        .await;
+    let active = manager.prompt(HARNESS, "wait for cancel", cwd, None, true, None);
+    tokio::pin!(active);
+    let pid = tokio::select! {
+        result = &mut active => panic!("prompt completed before cancel: {result:?}"),
+        pid = first_pid(&dir, "session/prompt") => pid,
+    };
+    let rpc = |method| {
+        JsonRpcRequest::with_id(
+            method,
+            Some(json!({"harness": HARNESS, "cwd": cwd})),
+            json!(1),
+        )
+    };
+    let live = handle_sessions_list(rpc("acp.sessions.list"), Arc::clone(&manager)).await;
+    assert_eq!(
+        live.result.unwrap()[0]["acp_session_id"],
+        format!("peer-{pid}")
+    );
+    let before_close = changes.load(std::sync::atomic::Ordering::Relaxed);
+    let cancel = handle_sessions_cancel(rpc("acp.sessions.cancel"), Arc::clone(&manager));
+    let (active, cancel) = timeout(DEADLINE, async { tokio::join!(active, cancel) })
+        .await
+        .expect("cancel was blocked by the prompt");
+    assert_eq!(active.unwrap(), "canceled");
+    assert_eq!(cancel.result.unwrap()["cancelled"], true);
+    assert!(frames(&dir).contains(&format!("{pid} cancel:peer-{pid}")));
+    let closed = handle_sessions_shutdown(rpc("acp.sessions.shutdown"), Arc::clone(&manager)).await;
+    assert_eq!(closed.result.unwrap()["success"], true);
+    assert_exited(pid);
+    assert!(changes.load(std::sync::atomic::Ordering::Relaxed) > before_close);
+    let empty = handle_sessions_list(rpc("acp.sessions.list"), manager).await;
+    assert_eq!(empty.result.unwrap(), json!([]));
+}
+
+#[tokio::test]
+async fn stop_preserves_saved_id_and_failed_load_does_not_create_a_replacement() {
+    const TEST_HOME: &str = "ALEPH_ACP_LIFECYCLE_TEST_HOME";
+    if std::env::var_os(TEST_HOME).is_none() {
+        let data = tempfile::tempdir().unwrap();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "stop_preserves_saved_id_and_failed_load_does_not_create_a_replacement",
+            ])
+            .env(TEST_HOME, data.path())
+            .env("ALEPH_HOME", data.path())
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
+    let fixture = PeerFixture::new();
+    let dir = fixture.workspace("recover");
+    let cwd = dir.to_str().unwrap();
+    let manager = fixture.manager();
+    let (writer, persisted) = wire_persistence(&manager).await;
+    assert!(persisted.is_empty());
+    manager
+        .prompt(HARNESS, "first", cwd, None, true, None)
+        .await
+        .unwrap();
+    let pid = first_pid(&dir, "session/new").await;
+    let peer_id = format!("peer-{pid}");
+    manager.shutdown_all().await;
+    writer.close_and_await().await.unwrap();
+    assert_exited(pid);
+    assert_eq!(load_persisted_sessions()[0].acp_session_id, peer_id);
+
+    let reject = dir.join("reject-load");
+    std::fs::write(&reject, "").unwrap();
+    let manager = fixture.manager();
+    let (writer, persisted) = wire_persistence(&manager).await;
+    assert!(manager.restore_sessions(persisted).await.is_empty());
+    let snapshot = manager.list_sessions().await.pop().unwrap();
+    assert!(!snapshot.alive);
+    assert_eq!(snapshot.acp_session_id.as_deref(), Some(peer_id.as_str()));
+    assert!(snapshot.load_error.is_some());
+    assert_eq!(frames(&dir).matches(" session/new").count(), 1);
+    assert!(frames(&dir).contains(&format!(" load:{peer_id}")));
+
+    std::fs::remove_file(reject).unwrap();
+    manager
+        .prompt(HARNESS, "retry", cwd, None, true, None)
+        .await
+        .unwrap();
+    let snapshot = manager.list_sessions().await.pop().unwrap();
+    assert!(snapshot.alive);
+    assert_eq!(snapshot.acp_session_id.as_deref(), Some(peer_id.as_str()));
+    assert!(snapshot.load_error.is_none());
+    assert_eq!(frames(&dir).matches(" session/new").count(), 1);
+    manager.shutdown_named(HARNESS, cwd, None).await.unwrap();
+    manager.shutdown_all().await;
+    writer.close_and_await().await.unwrap();
+    assert!(load_persisted_sessions().is_empty());
 }
