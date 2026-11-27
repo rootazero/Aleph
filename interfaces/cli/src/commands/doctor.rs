@@ -684,7 +684,7 @@ async fn check_daemon_diagnostics(server_url: &str, config: &CliConfig) -> Vec<D
 /// upgrade hint (method-not-found), everything else is a non-fatal failure.
 fn diagnostics_error_row(err: &CliError) -> DoctorCheck {
     match err {
-        CliError::Rpc { code, message }
+        CliError::Rpc { code, message, .. }
             if *code == METHOD_NOT_FOUND
                 && message
                     .strip_prefix("Method not found:")
@@ -1020,6 +1020,7 @@ mod tests {
     #[test]
     fn method_not_found_yields_upgrade_hint_row() {
         let err = CliError::Rpc {
+            data: None,
             code: METHOD_NOT_FOUND,
             message: "Method not found: diagnostics.run".to_string(),
         };
@@ -1028,6 +1029,7 @@ mod tests {
         assert!(check.message.contains("upgrade"));
 
         let unrelated = CliError::Rpc {
+            data: None,
             code: METHOD_NOT_FOUND,
             message: "Method not found: providers.healthcheck".to_string(),
         };

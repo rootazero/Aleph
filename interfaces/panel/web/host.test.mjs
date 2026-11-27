@@ -1144,3 +1144,22 @@ test("voice_rpc_cancellation_uses_one_independent_slot_while_media_is_held", asy
   socket().drop();
   assert.ok((await nextCancel).error, "socket loss also clears the control slot");
 });
+
+test("rpc_forwards_structured_error_data_and_preserves_generic_errors", async () => {
+  const { player, env, socket } = harness();
+  const host = await createHost(player, env);
+  socket().open();
+  socket().reply(hello());
+  const data = { reconciliation_required: true, address: "agent/default/notes/example", revision: 7 };
+  for (const error of [
+    { code: -32000, message: "reconcile", data },
+    { code: -32601, message: "method unavailable" },
+    { code: -32000, message: "explicit null", data: null },
+  ]) {
+    const call = host.call("aleph.rpc", { method: "memory.graph.update", params: {} });
+    await tick();
+    const { id } = JSON.parse(socket().sent.at(-1));
+    socket().reply({ jsonrpc: "2.0", id, error });
+    assert.deepEqual(await call, { error });
+  }
+});

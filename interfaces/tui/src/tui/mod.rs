@@ -1484,6 +1484,7 @@ mod tests {
     #[test]
     fn a_refusal_is_not_an_empty_install() {
         let refused = model_caption(Err(CliError::Rpc {
+            data: None,
             code: AUTH_REQUIRED,
             message: ADMIN_REQUIRED_MESSAGE.to_string(),
         }));

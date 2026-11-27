@@ -72,7 +72,7 @@ export function helloPayload(id) {
   });
 }
 
-const failure = (code, message) => ({ error: { code, message } });
+const failure = (code, message, data) => ({ error: { code, message, ...(data === undefined ? {} : { data }) } });
 const cancelledVoiceTurn = () => failure(HOST_UNAVAILABLE, "voice turn cancelled before dispatch");
 
 function voiceTurnKey(id) {
@@ -243,7 +243,7 @@ export async function createHost(player, env = globalThis) {
     if (!call) throw new Error(`answer to unknown request ${message.id}`);
     if (control) cancelling = null;
     else inflight.delete(message.id);
-    call.resolve(message.error ? failure(message.error.code, message.error.message) : { result: message.result });
+    call.resolve(message.error ? failure(message.error.code, message.error.message, message.error.data) : { result: message.result });
     pump();
   };
 
