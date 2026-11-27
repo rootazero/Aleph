@@ -982,21 +982,23 @@ impl ExtensionManager {
     /// What the load walk calls one discovered directory: its manifest's id,
     /// or — when the manifest does not parse — the id its error row gets.
     /// The one derivation `load_all` and `discovered_plugin_ids` share.
-    fn identify(&self, found: &super::DiscoveredExtensionDir) -> Identified {
-        Self::identify_with(&self.adapter_registry, found)
-    }
-
-    /// [`Self::identify`] without `&self`, for the blocking-pool scan.
+    /// Identify a candidate without creating an error row for an unrelated package.
     fn identify_with(
         adapters: &AdapterRegistry,
         found: &super::DiscoveredExtensionDir,
-    ) -> Identified {
+    ) -> Option<Identified> {
         match adapters.parse_declarations(&found.path) {
-            Ok(output) => Identified::Parsed(output),
-            Err(e) => Identified::Unparsed {
+            Ok(output) => Some(Identified::Parsed(output)),
+            Err(e)
+                if e.is::<super::manifest::adapter::NoManifestAdapter>()
+                    && found.path.join("package.json").is_file() =>
+            {
+                None
+            }
+            Err(e) => Some(Identified::Unparsed {
                 id: Self::unparsed_plugin_id(&found.path, found.origin),
                 error: e.to_string(),
-            },
+            }),
         }
     }
 
@@ -1016,15 +1018,15 @@ impl ExtensionManager {
         let dirs = collected
             .dirs
             .into_iter()
-            .map(|found| {
-                let identified = Self::identify_with(adapters, &found);
+            .filter_map(|found| {
+                let identified = Self::identify_with(adapters, &found)?;
                 let legacy_marker = found.origin != PluginOrigin::ClaudeCache
                     && found.path.join(".disabled").exists();
-                ScannedDir {
+                Some(ScannedDir {
                     found,
                     identified,
                     legacy_marker,
-                }
+                })
             })
             .collect();
         Ok(ScanPlan {
@@ -1052,7 +1054,10 @@ impl ExtensionManager {
             ids: collected
                 .dirs
                 .iter()
-                .map(|found| (self.identify(found).id().to_string(), found.origin))
+                .filter_map(|found| {
+                    let identified = Self::identify_with(&self.adapter_registry, found)?;
+                    Some((identified.id().to_string(), found.origin))
+                })
                 .collect(),
             unreadable: collected.unreadable,
         })

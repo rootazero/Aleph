@@ -240,6 +240,7 @@ mod tests {
 
     fn make_skill() -> CapabilityDeclaration {
         CapabilityDeclaration::Skill(SkillRegistration {
+            template_dialect: Default::default(),
             name: "test-skill".to_string(),
             description: "A test skill".to_string(),
             content: "You are a test skill.".to_string(),

@@ -13,7 +13,7 @@
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::{Arc, Mutex};
 use notify::{RecommendedWatcher, RecursiveMode};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -380,8 +380,14 @@ impl ExtensionWatcher {
         runtime_dirs.iter().any(|d| path.starts_with(d))
     }
 
-    /// Check if a file should be watched based on extension
+    /// Watch extension sources, excluding skill activity written by Aleph.
     fn should_watch_file(path: &Path) -> bool {
+        if matches!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some(".usage.json" | ".cooccur.json")
+        ) {
+            return false;
+        }
         path.extension()
             .and_then(|ext| ext.to_str())
             .is_some_and(|ext| WATCHED_EXTENSIONS.contains(&ext))
@@ -618,6 +624,12 @@ mod tests {
 
     #[test]
     fn test_should_watch_file() {
+        assert!(!ExtensionWatcher::should_watch_file(Path::new(
+            "skills/.usage.json"
+        )));
+        assert!(!ExtensionWatcher::should_watch_file(Path::new(
+            "skills/.cooccur.json"
+        )));
         assert!(ExtensionWatcher::should_watch_file(&PathBuf::from(
             "test.md"
         )));

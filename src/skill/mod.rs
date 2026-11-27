@@ -320,9 +320,31 @@ impl SkillSystem {
         let base = self.inner.skill_dirs.read().await.clone();
         let published: Vec<PathBuf> = crate::utils::paths::plugin_skill_dirs()
             .into_iter()
+            .filter(|publication| !publication.exact_file || publication.selected_file_is_current())
             .map(|p| p.dir)
             .collect();
         merge_published_roots_off_loop(base, published, crate::utils::paths::equivalent).await
+    }
+
+    /// Resolve file-backed skill roots to the directories holding their usage sidecars.
+    async fn usage_roots(&self) -> Vec<PathBuf> {
+        let roots = self.scan_roots().await;
+        run_blocking_fs("SkillSystem::usage_roots", move || {
+            let mut seen = std::collections::HashSet::new();
+            roots
+                .into_iter()
+                .filter_map(|root| {
+                    if root.is_file() {
+                        usage::sidecar_dir_for_manifest(&root).map(Path::to_path_buf)
+                    } else {
+                        Some(root)
+                    }
+                })
+                .filter(|root| seen.insert(root.clone()))
+                .collect()
+        })
+        .await
+        .unwrap_or_default()
     }
 
     /// Get a clone of the current snapshot.
@@ -457,7 +479,7 @@ impl SkillSystem {
     /// rare same-id collision (the registry would normally have already
     /// deduped at load time).
     async fn collect_usage_snapshot(&self) -> std::collections::HashMap<String, UsageStats> {
-        let dirs = self.scan_roots().await;
+        let dirs = self.usage_roots().await;
         run_blocking_fs("SkillSystem::collect_usage_snapshot", move || {
             let mut merged: std::collections::HashMap<String, UsageStats> = Default::default();
             for dir in &dirs {
@@ -485,7 +507,7 @@ impl SkillSystem {
     /// registration time — so no defensive traversal check is needed here.
     async fn owning_dir(&self, id: &SkillId) -> Option<PathBuf> {
         let id_str = id.as_str();
-        let dirs = self.scan_roots().await;
+        let dirs = self.usage_roots().await;
         let owned_id = id_str.to_string();
         match tokio::task::spawn_blocking(move || {
             for dir in &dirs {
@@ -724,7 +746,7 @@ impl SkillSystem {
                     }
                 }
             }
-            let dirs = self.scan_roots().await;
+            let dirs = self.usage_roots().await;
             for dir in &dirs {
                 UsageStore::new(dir).forget(id.as_str());
                 // Paired with the .usage.json cleanup above: `.cooccur.json`
@@ -781,7 +803,11 @@ impl SkillSystem {
                 crate::utils::paths::assert_not_real_claude_home(dir, "SkillSystem::rescan_dirs");
                 if dir.exists() {
                     let source = guess_source(dir);
-                    let manifests = scan_directory(dir, source);
+                    let manifests = if dir.is_file() {
+                        parse_skill_file(dir, source).into_iter().collect()
+                    } else {
+                        scan_directory(dir, source)
+                    };
                     new_registry.register_all(manifests);
                 }
             }

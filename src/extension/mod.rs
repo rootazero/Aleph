@@ -83,8 +83,8 @@ pub use manifest::*;
 pub use registry::*;
 pub use service_manager::ServiceManager;
 pub use template::{
-    InlineArgs, InlineShell, InlineSite, SKILL_DIR_VARIABLE, SkillTemplate, TemplateCtx,
-    inline_shell_command, split_arguments,
+    InlineArgs, InlineShell, InlineSite, PromptDialect, SKILL_DIR_VARIABLE, SkillTemplate,
+    TemplateCtx, inline_shell_command, split_arguments,
 };
 pub(crate) use template::{SKILL_DIR_TOKEN, inline_commands, run_inline};
 pub use types::*;

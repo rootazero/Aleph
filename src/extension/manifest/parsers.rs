@@ -444,7 +444,7 @@ pub fn parse_skills_dir(
 /// this one store — there is no parallel `CommandRegistration` type.
 ///
 /// [`SkillType`]: crate::extension::types::SkillType
-fn parse_skill_registration(
+pub(super) fn parse_skill_registration(
     md_path: &Path,
     default_name: &str,
     plugin_id: &str,
@@ -462,6 +462,7 @@ fn parse_skill_registration(
     };
 
     Ok(CapabilityDeclaration::Skill(SkillRegistration {
+        template_dialect: Default::default(),
         name,
         description: fm.description.unwrap_or_default(),
         content: body,
@@ -1032,6 +1033,7 @@ pub fn parse_v2_prompt(
     };
 
     Ok(CapabilityDeclaration::Skill(SkillRegistration {
+        template_dialect: Default::default(),
         name: format!("{plugin_id}-prompt"),
         description: format!("V2 prompt for plugin {plugin_id}"),
         content,
@@ -1071,6 +1073,7 @@ pub fn parse_v2_tool_prompts(
         match inputs::read_to_string(&file_path) {
             Ok(content) => {
                 caps.push(CapabilityDeclaration::Skill(SkillRegistration {
+                    template_dialect: Default::default(),
                     name: format!("{}-tool-prompt", tool.name),
                     description: tool
                         .description

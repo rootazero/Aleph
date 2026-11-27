@@ -159,7 +159,7 @@ impl Views {
     /// nothing — which is the whole point: an inactive plugin must be
     /// invisible to the model, not merely absent from the management list.
     async fn project_plugins(&self) -> PluginProjection {
-        let (records, subagents) = {
+        let (records, subagents, selected_skills) = {
             let registry = self.plugin_registry.read().await;
             let records: Vec<_> = registry.list_plugins().into_iter().cloned().collect();
             let subagents = registry
@@ -174,7 +174,24 @@ impl Views {
                     })
                 })
                 .collect();
-            (records, subagents)
+            let selected_skills = registry
+                .list_skills()
+                .into_iter()
+                .filter(|skill| skill.skill_type == super::types::SkillType::Skill)
+                .filter_map(|skill| {
+                    let owner = registry.active_plugin(&skill.plugin_id)?;
+                    owner.selected_skill_files.then(|| {
+                        crate::utils::paths::PublishedPluginSkillDir {
+                            dir: skill.source_path.clone(),
+                            exact_file: true,
+                            plugin_id: owner.id.clone(),
+                            scope_key: owner.scope_key.clone(),
+                            plugin_root: owner.root_dir.clone(),
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+            (records, subagents, selected_skills)
         };
         let trust_policy = self
             .owner_trust_policy
@@ -185,12 +202,16 @@ impl Views {
         // copied in the same loop as `record.scope_key`, so "whose dir" and
         // "which key" cannot come from two derivations (D-4: the directory
         // name is not the id).
-        let mut plugin_skill_dirs: Vec<crate::utils::paths::PublishedPluginSkillDir> = Vec::new();
-        for record in records.iter().filter(|record| record.status.is_active()) {
+        let mut plugin_skill_dirs = selected_skills;
+        for record in records
+            .iter()
+            .filter(|record| record.status.is_active() && !record.selected_skill_files)
+        {
             let dir = record.root_dir.join("skills");
             if dir.is_dir() && !plugin_skill_dirs.iter().any(|d| d.dir == dir) {
                 plugin_skill_dirs.push(crate::utils::paths::PublishedPluginSkillDir {
                     dir,
+                    exact_file: false,
                     plugin_id: record.id.clone(),
                     scope_key: record.scope_key.clone(),
                     plugin_root: record.root_dir.clone(),

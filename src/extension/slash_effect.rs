@@ -6,7 +6,7 @@
 //! enabled after boot had no slash commands and a disabled one kept its
 //! entries for the life of the process (scan-aleph-plugins.md §7 #5).
 
-use crate::extension::effects::{async_disposer, Disposer};
+use crate::extension::effects::{Disposer, async_disposer};
 use crate::extension::registry::SkillRegistration;
 use crate::extension::types::SkillType;
 use crate::skill::SkillInfo;
@@ -104,6 +104,7 @@ mod tests {
 
     fn cmd(plugin: &str, name: &str) -> SkillRegistration {
         SkillRegistration {
+            template_dialect: Default::default(),
             name: name.to_string(),
             plugin_id: plugin.to_string(),
             skill_type: SkillType::Command,

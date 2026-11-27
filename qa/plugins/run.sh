@@ -603,7 +603,7 @@ command)
   REQ_LOG="$QA_ROOT/requests.jsonl"
   say "plant a plugin with a command"
   python3 - "$INSTALLED" <<'PY' || exit 1
-import pathlib, sys
+import json, pathlib, sys
 root = pathlib.Path(sys.argv[1], "qa-cmd-plugin")
 (root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
 (root / "commands").mkdir(exist_ok=True)
@@ -614,6 +614,21 @@ root = pathlib.Path(sys.argv[1], "qa-cmd-plugin")
     "---\ndescription: Greet someone\nargument-hint: \"[name]\"\n---\n"
     "Say hello to $1 and mention the token QA_CMD_MARKER_$1 verbatim.\n"
     "Second: ${2:-nobody}. Inline: !`printf 'QA_%s_RAN' INLINE`\n")
+pi = root.parent / "qa-pi"
+(pi / "prompts").mkdir(parents=True, exist_ok=True)
+(pi / "package.json").write_text(json.dumps({
+    "name": "qa-pi",
+    "pi": {"prompts": ["prompts/*.md"], "skills": ["custom/qa-pi-chosen.md"]},
+}) + "\n")
+(pi / "custom").mkdir(exist_ok=True)
+(pi / "custom" / "qa-pi-chosen.md").write_text(
+    "---\nname: qa-pi-chosen\ndescription: Selected Pi skill\n---\nQA_PI_SELECTED_SKILL\n")
+(pi / "skills" / "qa-pi-excluded").mkdir(parents=True, exist_ok=True)
+(pi / "skills" / "qa-pi-excluded" / "SKILL.md").write_text(
+    "---\nname: qa-pi-excluded\ndescription: Excluded Pi skill\n---\nQA_PI_EXCLUDED_SKILL\n")
+(pi / "prompts/review.md").write_text(
+    "---\ndescription: Review two arguments\n---\n"
+    "QA_PI_FIRST=$1; ALL=$@; SLICE=${@:2}; DEFAULT=${3:-missing}\n")
 PY
   say "start mock provider (single-shot: every turn ends with no tool call)"
   start_mock /etc/hostname single-shot "" "$REQ_LOG" || exit 1
@@ -621,7 +636,7 @@ PY
   start_server || exit 1
   assert_real_mode
   say "drive"
-  python3 "$HERE/drive_command.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$REQ_LOG" || RC=$?
+  python3 "$HERE/drive_command.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$REQ_LOG" "$INSTALLED/qa-pi/prompts/review.md" || RC=$?
   say "the withheld inline command is pending on the operator's review surface"
   HOOKS_OUT="$("$BIN" hooks list 2>&1)"
   printf '%s\n' "$HOOKS_OUT" | head -12

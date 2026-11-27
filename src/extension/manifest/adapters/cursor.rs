@@ -185,6 +185,7 @@ impl ManifestAdapter for CursorAdapter {
                 );
             } else if let Ok(content) = inputs::read_to_string(&cursorrules_path) {
                 caps.push(CapabilityDeclaration::Skill(SkillRegistration {
+                    template_dialect: Default::default(),
                     name: "cursorrules".to_string(),
                     description: "Cursor rules imported as skill".to_string(),
                     content,
@@ -227,6 +228,7 @@ impl ManifestAdapter for CursorAdapter {
                                 .unwrap_or("rule")
                                 .to_string();
                             caps.push(CapabilityDeclaration::Skill(SkillRegistration {
+                                template_dialect: Default::default(),
                                 name: rule_name,
                                 description: "Cursor rule imported as skill".to_string(),
                                 content,

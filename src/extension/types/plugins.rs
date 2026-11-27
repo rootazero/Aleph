@@ -456,6 +456,9 @@ pub struct PluginRecord {
     pub hook_count: usize,
     /// Service IDs registered by this plugin
     pub service_ids: Vec<String>,
+    /// An importer selected the exact Markdown files to expose as skills.
+    #[serde(default)]
+    pub(crate) selected_skill_files: bool,
     /// Number of skills declared by this plugin
     #[serde(default)]
     pub skill_count: usize,
@@ -496,6 +499,7 @@ impl PluginRecord {
             tool_names: Vec::new(),
             hook_count: 0,
             service_ids: Vec::new(),
+            selected_skill_files: false,
             skill_count: 0,
             command_count: 0,
             agent_count: 0,
@@ -560,6 +564,7 @@ impl PluginRecord {
             tool_names,
             hook_count,
             service_ids,
+            selected_skill_files: output.source.format == crate::extension::SourceFormat::Pi,
             skill_count,
             command_count,
             agent_count,

@@ -335,6 +335,7 @@ pub(super) async fn render_registration(
     shell: Option<&dyn InlineShell>,
 ) -> Result<String, ExtensionError> {
     SkillTemplate::with_base_dir(&reg.content, reg.base_dir())
+        .with_dialect(reg.template_dialect)
         .render(args, &TemplateCtx { shell })
         .await
 }

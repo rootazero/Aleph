@@ -309,6 +309,10 @@ pub struct SkillRegistration {
     #[serde(default)]
     pub skill_type: crate::extension::types::SkillType,
 
+    /// Argument syntax for this command. Existing registrations use Aleph syntax.
+    #[serde(default)]
+    pub template_dialect: crate::extension::PromptDialect,
+
     /// Human-readable description of the skill
     pub description: String,
 
@@ -672,6 +676,7 @@ mod tests {
     #[test]
     fn test_skill_registration() {
         let skill = SkillRegistration {
+            template_dialect: Default::default(),
             name: "web-search".to_string(),
             description: "Search the web".to_string(),
             content: "You are a web search assistant.".to_string(),
@@ -702,6 +707,7 @@ mod tests {
     #[test]
     fn test_skill_registration_serialization() {
         let skill = SkillRegistration {
+            template_dialect: Default::default(),
             name: "test-skill".to_string(),
             description: "A test skill".to_string(),
             content: "prompt content".to_string(),

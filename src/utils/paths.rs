@@ -785,12 +785,24 @@ static PLUGIN_SKILL_DIRS: RwLock<Vec<PublishedPluginSkillDir>> = RwLock::new(Vec
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublishedPluginSkillDir {
     pub dir: PathBuf,
+    pub(crate) exact_file: bool,
     pub plugin_id: String,
     pub scope_key: crate::extension::visibility::ScopeKey,
     /// The owning plugin's install root (`record.root_dir`, the same record):
     /// what its path variables name to a skill's inline commands
     /// (`skill::preprocess::SkillShell`).
     pub plugin_root: PathBuf,
+}
+
+impl PublishedPluginSkillDir {
+    pub(crate) fn selected_file_is_current(&self) -> bool {
+        self.dir.is_file()
+            && std::fs::canonicalize(&self.dir).ok().is_some_and(|file| {
+                std::fs::canonicalize(&self.plugin_root)
+                    .ok()
+                    .is_some_and(|root| file == self.dir && file.starts_with(root))
+            })
+    }
 }
 
 /// Publish the installed plugins' skill base directories, each with the
@@ -1097,6 +1109,26 @@ fn push_if_new_skills_dir(dirs: &mut Vec<PathBuf>, dir: &std::path::Path, label:
     }
 }
 
+pub(crate) fn skill_manifest_files(root: &Path) -> Vec<PathBuf> {
+    if root.is_file() {
+        return vec![root.to_path_buf()];
+    }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with('.') || !entry.path().is_dir() {
+                return None;
+            }
+            let file = entry.path().join("SKILL.md");
+            file.is_file().then_some(file)
+        })
+        .collect()
+}
+
 pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<PathBuf>> {
     let mut dirs = Vec::new();
 
@@ -1157,14 +1189,18 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
             Some(manager) => {
                 let owner = crate::extension::visibility::PluginInstanceKey::new(
                     published.scope_key.clone(),
-                    published.plugin_id,
+                    published.plugin_id.clone(),
                 )
                 .runtime_key();
                 manager.plugin_visible(&owner, &visibility)
             }
             None => crate::extension::visibility::visible_to(&published.scope_key, &visibility),
         };
-        if visible {
+        if visible && published.exact_file {
+            if published.selected_file_is_current() && !contains_equivalent(&dirs, &published.dir) {
+                dirs.push(published.dir);
+            }
+        } else if visible {
             push_if_new_skills_dir(&mut dirs, &published.dir, "plugin skills dir");
         }
     }
@@ -2207,12 +2243,14 @@ mod tests {
         publish_plugin_skill_dirs(vec![
             PublishedPluginSkillDir {
                 dir: a_plugin_skills.clone(),
+                exact_file: false,
                 plugin_id: "plugin-a".into(),
                 scope_key: ScopeKey::project(proj_a.path()),
                 plugin_root: proj_a.path().join("plugin-a"),
             },
             PublishedPluginSkillDir {
                 dir: global_plugin_skills.clone(),
+                exact_file: false,
                 plugin_id: "plugin-g".into(),
                 scope_key: ScopeKey::Global,
                 plugin_root: proj_a.path().join("plugin-g"),
@@ -2516,6 +2554,7 @@ mod tests {
         std::fs::create_dir_all(&plugin_skills).unwrap();
         publish_plugin_skill_dirs(vec![PublishedPluginSkillDir {
             dir: plugin_skills.clone(),
+            exact_file: false,
             plugin_id: "alpha".into(),
             scope_key: ScopeKey::Global,
             plugin_root: plugin_skills.parent().unwrap().to_path_buf(),

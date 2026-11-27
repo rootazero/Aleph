@@ -14,7 +14,7 @@
 
 use super::error::{ExtensionError, ExtensionResult};
 use super::hooks::{
-    bounded_env_value, plugin_shell_line, PLUGIN_DATA_VARIABLES, PLUGIN_ROOT_VARIABLES,
+    PLUGIN_DATA_VARIABLES, PLUGIN_ROOT_VARIABLES, bounded_env_value, plugin_shell_line,
 };
 use super::plugin_vars::PluginVars;
 use once_cell::sync::OnceCell;
@@ -400,6 +400,17 @@ pub(crate) async fn run_inline(cmd: &str, args: &InlineArgs<'_>, ctx: &TemplateC
     }
 }
 
+mod pi_arguments;
+pub(crate) use pi_arguments::unsupported_pi_argument;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptDialect {
+    #[default]
+    Aleph,
+    Pi,
+}
+
 /// Skill template processor
 #[derive(Debug, Clone)]
 pub struct SkillTemplate {
@@ -407,6 +418,7 @@ pub struct SkillTemplate {
     content: String,
     /// Base directory for relative paths
     base_dir: PathBuf,
+    dialect: PromptDialect,
 }
 
 impl SkillTemplate {
@@ -424,6 +436,7 @@ impl SkillTemplate {
         Self {
             content: content.to_string(),
             base_dir,
+            dialect: PromptDialect::default(),
         }
     }
 
@@ -433,7 +446,14 @@ impl SkillTemplate {
         Self {
             content: content.to_string(),
             base_dir,
+            dialect: PromptDialect::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_dialect(mut self, dialect: PromptDialect) -> Self {
+        self.dialect = dialect;
+        self
     }
 
     /// Get the base directory
@@ -442,7 +462,7 @@ impl SkillTemplate {
         &self.base_dir
     }
 
-    /// Render with the Claude Code / pi prompt-template grammar:
+    /// Render the declared prompt dialect. The Aleph dialect handles these steps:
     ///
     /// 1. Every `` !`cmd` `` is found in the TEMPLATE, before any argument is
     ///    inserted, and runs through `ctx.shell` — sequentially, in document
@@ -466,6 +486,12 @@ impl SkillTemplate {
     /// backtick or `;`, which reach the command as literal characters), text
     /// rather than code for one holding `$(…)`, `;` or a backtick.
     pub async fn render(&self, arguments: &str, ctx: &TemplateCtx<'_>) -> ExtensionResult<String> {
+        if self.dialect == PromptDialect::Pi {
+            return Ok(pi_arguments::substitute_pi_arguments(
+                &self.content,
+                arguments,
+            ));
+        }
         let positional = split_arguments(arguments);
         let args = InlineArgs {
             raw: arguments,

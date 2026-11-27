@@ -395,6 +395,8 @@ pub enum SourceFormat {
     Codex,
     /// .cursor-plugin/plugin.json or .cursorrules (Cursor IDE compat)
     Cursor,
+    /// Pi package resources and prompt templates
+    Pi,
     /// Auto-discovered from well-known directory structure
     AutoDiscovered,
     /// Dynamic registration via MCP/WASM runtime
@@ -421,6 +423,7 @@ mod tests {
 
     fn make_skill() -> SkillDeclaration {
         SkillRegistration {
+            template_dialect: Default::default(),
             name: "test-skill".to_string(),
             description: "A test skill".to_string(),
             content: "You are a test skill.".to_string(),

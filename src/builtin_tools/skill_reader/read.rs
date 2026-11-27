@@ -176,18 +176,29 @@ impl ReadSkillTool {
     /// Split in two (`skill_dirs` + `scan_skill_dirs`) so the scan can run
     /// on a blocking thread: the roots depend on the agent-id task-local,
     /// which does not cross into `spawn_blocking`.
-    pub(crate) fn scan_skill_dirs(skills_dirs: Vec<PathBuf>, skill_id: &str) -> Vec<PathBuf> {
+    pub(crate) fn scan_skill_files(skills_dirs: Vec<PathBuf>, skill_id: &str) -> Vec<PathBuf> {
         let mut hits = Vec::new();
         let mut seen_canonical = std::collections::HashSet::new();
         for skills_dir in &skills_dirs {
             #[cfg(test)]
             crate::utils::paths::assert_not_real_claude_home(skills_dir, "skill_read");
+            if skills_dir.is_file() {
+                let source = crate::skill::guess_source(skills_dir);
+                if crate::skill::parse_skill_file(skills_dir, source)
+                    .is_ok_and(|manifest| manifest.id().as_str() == skill_id)
+                    && seen_canonical.insert(skills_dir.clone())
+                {
+                    hits.push(skills_dir.clone());
+                }
+                continue;
+            }
             // First: the obvious match — directory whose name equals the id.
             let skill_dir = skills_dir.join(skill_id);
-            if skill_dir.is_dir() && skill_dir.join("SKILL.md").exists() {
-                let key = fs::canonicalize(&skill_dir).unwrap_or_else(|_| skill_dir.clone());
+            let skill_file = skill_dir.join("SKILL.md");
+            if skill_dir.is_dir() && skill_file.exists() {
+                let key = fs::canonicalize(&skill_file).unwrap_or_else(|_| skill_file.clone());
                 if seen_canonical.insert(key) {
-                    hits.push(skill_dir);
+                    hits.push(skill_file);
                 }
             }
             // Fallback: scan sibling dirs whose SKILL.md frontmatter slugs to
@@ -200,13 +211,12 @@ impl ReadSkillTool {
                     if !path.is_dir() || !path.join("SKILL.md").exists() {
                         continue;
                     }
-                    if let Some(slug) = slug_from_skill_md(&path) {
-                        if slug == skill_id
-                            && seen_canonical
-                                .insert(fs::canonicalize(&path).unwrap_or_else(|_| path.clone()))
-                        {
-                            hits.push(path);
-                        }
+                    let file = path.join("SKILL.md");
+                    if slug_from_skill_md(&path).as_deref() == Some(skill_id)
+                        && seen_canonical
+                            .insert(fs::canonicalize(&file).unwrap_or_else(|_| file.clone()))
+                    {
+                        hits.push(file);
                     }
                 }
             }
@@ -227,8 +237,8 @@ impl ReadSkillTool {
     /// an id) are preserved for the caller to resolve by precedence — mirroring
     /// codex's `seen_canonical_keys` dedup and `skill_list`'s first-occurrence
     /// win rather than hermes-agent's hard refusal.
-    fn find_skill_dirs(&self, skill_id: &str) -> Vec<PathBuf> {
-        Self::scan_skill_dirs(self.skills_dirs.clone(), skill_id)
+    fn find_skill_files(&self, skill_id: &str) -> Vec<PathBuf> {
+        Self::scan_skill_files(self.skills_dirs.clone(), skill_id)
     }
 
     /// Validate `skill_id` to prevent path traversal attacks
@@ -329,8 +339,8 @@ impl ReadSkillTool {
         // surfaces exactly one entry per id, so refusing to read what it was
         // shown is an internal contradiction (it fell back to a raw `cat` loop).
         // Shadowed dirs are logged so genuine collisions stay observable.
-        let mut candidates = self.find_skill_dirs(&args.skill_id).into_iter();
-        let Some(skill_dir) = candidates.next() else {
+        let mut candidates = self.find_skill_files(&args.skill_id).into_iter();
+        let Some(skill_manifest) = candidates.next() else {
             let error_msg = format!("Skill '{}' not found", args.skill_id);
             notify_tool_result(Self::NAME, &error_msg, false);
             return Err(ToolError::NotFound(error_msg));
@@ -339,13 +349,32 @@ impl ReadSkillTool {
         if !shadowed.is_empty() {
             warn!(
                 skill_id = %args.skill_id,
-                winner = %skill_dir.display(),
+                winner = %skill_manifest.display(),
                 shadowed = ?shadowed,
                 "skill id resolves to multiple distinct locations; using highest-precedence match"
             );
         }
 
-        let file_path = skill_dir.join(file_name);
+        let skill_dir = skill_manifest
+            .parent()
+            .ok_or_else(|| ToolError::InvalidArgs("Skill manifest has no parent directory".into()))?
+            .to_path_buf();
+        let file_path = if file_name == "SKILL.md"
+            || skill_manifest
+                .file_name()
+                .is_some_and(|name| name == file_name)
+        {
+            skill_manifest.clone()
+        } else if skill_manifest
+            .file_name()
+            .is_some_and(|name| name == "SKILL.md")
+        {
+            skill_dir.join(file_name)
+        } else {
+            return Err(ToolError::NotFound(format!(
+                "File '{file_name}' is not part of this skill"
+            )));
+        };
 
         // Defense in depth: ensure the resolved path stays inside skill_dir.
         if !crate::utils::path_within::is_path_within(&skill_dir, &file_path) {
@@ -458,9 +487,9 @@ impl ReadSkillTool {
             "Skill file read successfully"
         );
 
-        // Best-effort usage tracking — never affects the tool result.
-        if let Some(parent) = skill_dir.parent() {
-            if file_name == "SKILL.md" {
+        // Standalone skill manifests share a sidecar in their containing directory.
+        if let Some(parent) = crate::skill::usage::sidecar_dir_for_manifest(&skill_manifest) {
+            if file_path == skill_manifest {
                 // Both writes (counter + co-occurrence ring) live in one
                 // function so this face and the `/<skill>` slash face cannot
                 // disagree about what a use is — see `skill::usage::record_use_in_dir`.

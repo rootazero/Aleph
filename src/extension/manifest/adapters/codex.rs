@@ -72,6 +72,7 @@ impl ManifestAdapter for CodexAdapter {
         // Codex-specific: instructions field → skill
         if let Some(instructions) = json.get("instructions").and_then(|v| v.as_str()) {
             caps.push(CapabilityDeclaration::Skill(SkillRegistration {
+                template_dialect: Default::default(),
                 name: "codex-instructions".to_string(),
                 description: "Codex plugin instructions".to_string(),
                 content: instructions.to_string(),

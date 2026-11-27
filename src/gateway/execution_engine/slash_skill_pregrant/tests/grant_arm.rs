@@ -175,6 +175,7 @@ async fn a_plugin_skill_pregrants_only_from_a_global_plugin() {
                 .runtime_key();
         publish_plugin_skill_dirs(vec![PublishedPluginSkillDir {
             dir: plugin_skills.clone(),
+            exact_file: false,
             plugin_id: PLUGIN.into(),
             scope_key,
             plugin_root: plugin_skills.parent().unwrap().to_path_buf(),

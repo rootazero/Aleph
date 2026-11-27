@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """`/cmd args` → the rendered body reaches the model; the raw text stays persisted.
 
-  python3 drive_command.py <ws-url> <request_log>
+  python3 drive_command.py <ws-url> <request_log> <pi-prompt>
 
 Oracle for "reached the model": the mock provider's request log — each line is
 one request the server sent, `body.messages` verbatim. The rendered `<command>`
@@ -29,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "browser_managed"))
 from qa_rpc import Ledger, ws_connect  # noqa: E402
 
-WS, REQ_LOG = sys.argv[1], Path(sys.argv[2])
+WS, REQ_LOG, PI_PROMPT = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
 L = Ledger()
 PLUGIN = "qa-cmd-plugin"
 SLASH = f"{PLUGIN}:greet"
@@ -116,6 +116,45 @@ def user_texts():
     return out
 
 
+async def check_pi(conn):
+    command = "qa-pi:review"
+    async def invoke(name, arguments):
+        return await conn.call("tools.invoke", {"tool_name": name, "arguments": arguments})
+
+    listed = json.dumps((await invoke("skill_list", {})).get("result"))
+    L.check("Pi skill list shows only the selected file",
+            "qa-pi-chosen" in listed and "qa-pi-excluded" not in listed)
+    selected = json.dumps((await invoke("skill_read", {"skill_id": "qa-pi-chosen"})).get("result"))
+    L.check("Pi skill read returns the selected flat file", "QA_PI_SELECTED_SKILL" in selected)
+    excluded = json.dumps((await invoke("skill_read", {"skill_id": "qa-pi-excluded"})).get("result"))
+    L.check("Pi skill reader cannot read the excluded skill", "QA_PI_EXCLUDED_SKILL" not in excluded)
+
+    async def send(label, expected):
+        sent = await conn.call("chat.send", {
+            "message": f'/{command} "a b" c',
+            "session_key": f"agent:main:qa-pi-{label}",
+        })
+        if "result" not in sent:
+            L.check(f"Pi {label} chat.send accepted", False, json.dumps(sent.get("error"))[:200])
+            return
+        outcome, params = await conn.terminal(sent["result"].get("run_id"))
+        L.check(f"Pi {label} run completed", outcome == "stream.run_complete", str(params)[:200])
+        L.check(f"Pi {label} body reached the model", any(expected in text for text in user_texts()))
+
+    L.check("Pi prompt is listed", command in json.dumps(await conn.call("commands.list", {})))
+    await send("original", "QA_PI_FIRST=a b; ALL=a b c; SLICE=c; DEFAULT=missing")
+    PI_PROMPT.write_text("---\ndescription: Updated review\n---\nQA_PI_UPDATED=$1\n")
+    reloaded = await conn.call("plugin.reload", {"selector": "g:qa-pi"})
+    L.check("edited Pi package reloaded", "result" in reloaded, str(reloaded.get("error")))
+    await send("updated", "QA_PI_UPDATED=a b")
+    PI_PROMPT.rename(PI_PROMPT.with_name("remaining.md"))
+    reloaded = await conn.call("plugin.reload", {"selector": "g:qa-pi"})
+    L.check("renamed Pi prompt package reloaded", "result" in reloaded, str(reloaded.get("error")))
+    listing = json.dumps(await conn.call("commands.list", {}))
+    L.check("removed Pi prompt is withdrawn and remaining prompt is exposed",
+            command not in listing and "qa-pi:remaining" in listing)
+
+
 async def main():
     async with ws_connect(WS) as ws:
         conn = Conn(ws)
@@ -178,6 +217,9 @@ async def main():
         L.check("chat.history answered", "result" in hist, json.dumps(hist.get("error", ""))[:200])
         L.check("the persisted user turn is the raw /cmd text", SENT in text, text[:200])
         L.check("the rendered body is NOT persisted", MARKER not in text)
+
+        L.log("\n--- Pi arguments and reload ---")
+        await check_pi(conn)
 
     return L.verdict()
 

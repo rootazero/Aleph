@@ -3,7 +3,7 @@
 //! Provides a trait-based system for parsing plugin directories from
 //! multiple platform formats (Claude Code, Codex, Cursor, auto-discover).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 
@@ -52,6 +52,14 @@ pub trait ManifestAdapter: Send + Sync {
     /// Parse the plugin directory and return all declared capabilities.
     fn parse(&self, plugin_dir: &Path) -> Result<AdapterOutput>;
 
+    fn parse_if_detected(&self, plugin_dir: &Path) -> Result<Option<AdapterOutput>> {
+        if self.detect(plugin_dir) {
+            self.parse(plugin_dir).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Human-readable name of this adapter's format (e.g., "`claude_code`", "codex").
     fn format_name(&self) -> &str;
 
@@ -60,6 +68,10 @@ pub trait ManifestAdapter: Send + Sync {
         0
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("No manifest adapter matched directory: {0}")]
+pub(crate) struct NoManifestAdapter(PathBuf);
 
 /// Registry of manifest adapters, tried in priority order.
 pub struct AdapterRegistry {
@@ -100,6 +112,7 @@ impl AdapterRegistry {
         registry.register(Box::new(super::adapters::aleph_toml::AlephTomlAdapter));
         registry.register(Box::new(super::adapters::codex::CodexAdapter));
         registry.register(Box::new(super::adapters::cursor::CursorAdapter));
+        registry.register(Box::new(super::adapters::pi::PiAdapter));
         registry.register(Box::new(
             super::adapters::auto_discover::AutoDiscoverAdapter,
         ));
@@ -158,13 +171,12 @@ impl AdapterRegistry {
 
     fn read_package(&self, dir: &Path) -> Result<AdapterOutput> {
         for adapter in &self.adapters {
-            if adapter.detect(dir) {
+            if let Some(mut output) = adapter.parse_if_detected(dir)? {
                 tracing::debug!(
                     adapter = adapter.format_name(),
                     dir = %dir.display(),
                     "Adapter matched"
                 );
-                let mut output = adapter.parse(dir)?;
                 // Context declarations remain discovery metadata, never registrations.
                 let extensions = output
                     .runtime_manifest
@@ -186,10 +198,7 @@ impl AdapterRegistry {
                 return Ok(output);
             }
         }
-        Err(anyhow!(
-            "No manifest adapter matched directory: {}",
-            dir.display()
-        ))
+        Err(NoManifestAdapter(dir.to_path_buf()).into())
     }
 
     /// Expand `${*_PLUGIN_ROOT}` / `${*_PLUGIN_DATA}` in the prose a plugin
