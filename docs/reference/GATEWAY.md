@@ -334,7 +334,7 @@ English: Registration identity is shared across event, pending snapshot and comp
 
 `acp.sessions.changed` 是**重读信号**，不是数据通道：它由已提交的内存状态变更发出，客户端据此重新 `acp.sessions.list`；落盘的 `acp_sessions.json` 才是重启后恢复的来源。
 
-English: these three methods are Admin-class and control only the ACP client sessions Aleph owns. `list` returns snapshots that carry the optional `load_error` field when a restore failed, keeping the remote ID for a retry of the same `session/load` path; `cancel` bypasses the prompt lock and distinguishes a sent notification from no session to cancel; `shutdown` clears the association, including disk-only records, and is idempotent, while a server stop instead retains recoverable IDs and drains the persistence writer through the shared startup resources. `acp.sessions.changed` is a refetch signal: clients re-read `acp.sessions.list` and the persisted `acp_sessions.json` file remains the source after a restart.
+English: these three methods are Admin-class and control only the ACP client sessions Aleph owns. `list` returns snapshots that carry the optional `load_error` field when a restore failed, keeping the remote ID for a retry of the same `session/load` path; `cancel` bypasses the prompt lock and returns `cancelled: true` when it sends a cooperative notification or `cancelled: false` when the child has no remote ID. It returns an error when there is no active owner. `shutdown` clears the association, including disk-only records, and is idempotent, while a server stop instead retains recoverable IDs and drains the persistence writer through the shared startup resources. `acp.sessions.changed` is a refetch signal: clients re-read `acp.sessions.list` and the persisted `acp_sessions.json` file remains the source after a restart.
 
 ---
 

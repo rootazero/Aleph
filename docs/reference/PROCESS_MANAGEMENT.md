@@ -59,7 +59,7 @@ Aleph spawns the peer harness child as the far side of an **ACP client** session
 
 - **Single owner**: one slot per `SessionKey`. Starting and retiring the same key serialize while different keys progress, and a live owner is published only against a still-valid harness registration, so an updated or unregistered harness leaves no orphan child.
 - **Stop semantics**: explicit close, explicit replacement, and a successful harness update / disable / unregistration reap the child and clear the association (including disk-only records); a rejected configuration change keeps it. A **server stop** retains recoverable IDs and drains the persistence writer through the shared startup resources before exit, and a restart restores them through `session/load` only, never by creating a blank context.
-- **Cancel**: the independent `CancelHandle` in `src/acp/session.rs` does not wait for the prompt lock; it interrupts the running turn and distinguishes a sent notification from having no session to cancel.
+- **Cancel**: the independent `CancelHandle` in `src/acp/session.rs` sends a cooperative cancellation notification without waiting for the prompt lock. It skips sending when the child has no remote session ID.
 - **Admission**: `trust_level=disabled` is refused at the manager admission point, before any child starts.
 
 ## 浏览器引擎子进程 (Browser engine children)
