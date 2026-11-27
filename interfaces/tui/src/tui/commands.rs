@@ -2343,6 +2343,7 @@ mod tests {
         let generation = state.transcript_generation;
         let mut textarea = TextArea::from(["unfinished", "draft"]);
         let error = CliError::Rpc {
+            data: None,
             code: -32602,
             message: "Original gateway refusal".into(),
         };
@@ -3987,7 +3988,7 @@ mod tests {
             .map_err(|_| "failure probe revoke: timed out".to_string())?;
             let already_revoked_denied = matches!(
                 &probe,
-                Err(CliError::Rpc { code, message })
+                Err(CliError::Rpc { code, message, .. })
                     if *code == aleph_protocol::jsonrpc::PERMISSION_DENIED
                         && message == "denied"
             );
@@ -4483,6 +4484,7 @@ mod side_run_verdict_tests {
     #[test]
     fn a_gateway_with_no_record_of_the_run_stops_the_spinner() {
         let refused: Result<AgentRunStatusReport, CliError> = Err(CliError::Rpc {
+            data: None,
             code: -32602,
             message: "Run not found".into(),
         });

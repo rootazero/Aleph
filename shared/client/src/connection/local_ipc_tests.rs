@@ -70,6 +70,26 @@ async fn local_client_uses_hello_and_correlates_out_of_order() {
                 .await
                 .unwrap();
         }
+        for data in [
+            Some(
+                json!({"reconciliation_required": true, "address": "agent/default/notes/example", "revision": 7}),
+            ),
+            None,
+        ] {
+            let request: JsonRpcRequest =
+                serde_json::from_str(&read_frame(&mut stream).await.unwrap().unwrap()).unwrap();
+            let response = JsonRpcResponse::error(
+                request.id.unwrap(),
+                aleph_protocol::JsonRpcError {
+                    code: -32000,
+                    message: "reconcile".into(),
+                    data,
+                },
+            );
+            write_frame(&mut stream, &serde_json::to_string(&response).unwrap())
+                .await
+                .unwrap();
+        }
         let expired_one: JsonRpcRequest =
             serde_json::from_str(&read_frame(&mut stream).await.unwrap().unwrap()).unwrap();
         let expired_two: JsonRpcRequest =
@@ -104,6 +124,30 @@ async fn local_client_uses_hello_and_correlates_out_of_order() {
         );
         assert_eq!(first.unwrap(), "first");
         assert_eq!(second.unwrap(), "second");
+        for expected in [
+            Some(
+                json!({"reconciliation_required": true, "address": "agent/default/notes/example", "revision": 7}),
+            ),
+            None,
+        ] {
+            let error = client
+                .call::<(), Value>("memory.graph.update", None)
+                .await
+                .unwrap_err();
+            assert_eq!(error.to_string(), "RPC error (-32000): reconcile");
+            match error {
+                CliError::Rpc {
+                    code,
+                    message,
+                    data,
+                } => {
+                    assert_eq!(code, -32000);
+                    assert_eq!(message, "reconcile");
+                    assert_eq!(data, expected);
+                }
+                other => panic!("expected RPC error, got {other:?}"),
+            }
+        }
         assert!(client.reconnect(&CliConfig::default()).await.is_err());
         for method in ["expire-one", "expire-two"] {
             assert!(matches!(
