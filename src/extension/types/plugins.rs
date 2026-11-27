@@ -443,6 +443,13 @@ pub struct PluginRecord {
 }
 
 impl PluginRecord {
+    pub(crate) fn instance_key(&self) -> crate::extension::visibility::PluginInstanceKey {
+        crate::extension::visibility::PluginInstanceKey::new(
+            self.scope_key.clone(),
+            self.id.clone(),
+        )
+    }
+
     /// Create a new plugin record with default values
     #[must_use]
     pub const fn new(id: String, name: String, kind: PluginKind, origin: PluginOrigin) -> Self {

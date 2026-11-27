@@ -93,8 +93,11 @@ pub(super) struct Views {
     pub(super) active_plugin_tools: Arc<StdRwLock<HashMap<String, ToolRegistration>>>,
     pub(super) plugin_scope_keys: Arc<StdRwLock<HashMap<String, ScopeKey>>>,
     pub(super) plugin_tool_revision: Arc<AtomicU64>,
-    pub(super) runtime_owners:
-        Arc<StdMutex<HashMap<String, Arc<super::runtime_owner::RuntimeOwner>>>>,
+    pub(super) runtime_owners: Arc<
+        StdMutex<
+            HashMap<super::visibility::PluginInstanceKey, Arc<super::runtime_owner::RuntimeOwner>>,
+        >,
+    >,
     pub(super) owner_trust_policy:
         Arc<crate::sync_primitives::RwLock<crate::extension::plugin_trust::OwnerTrustPolicy>>,
     pub(super) panel_publication:
@@ -166,10 +169,7 @@ impl Views {
                 .list_agents()
                 .into_iter()
                 .filter_map(|agent| {
-                    let plugin = registry.get_plugin(&agent.plugin_id)?;
-                    if !plugin.status.is_active() {
-                        return None;
-                    }
+                    let plugin = registry.active_plugin(&agent.plugin_id)?;
                     super::plugin_agent_to_def(agent).map(|def| crate::agents::PluginSubagent {
                         scope_key: plugin.scope_key.clone(),
                         def,

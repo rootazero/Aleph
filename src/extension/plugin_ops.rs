@@ -611,8 +611,11 @@ impl ExtensionManager {
     /// changed name, and a same-id reinstall is never an orphan.
     pub async fn forget_plugin_preference(&self, plugin_id: &str) {
         let _guard = self.load_guard.lock().await;
+        let Some(instance) = self.legacy_preference_instance(plugin_id).await else {
+            return;
+        };
         let mut candidate = self.plugins_config.read().await.clone();
-        if candidate.forget(plugin_id) {
+        if candidate.forget_instance(&instance) {
             if let Err(e) = self.commit_plugins_config_locked(candidate).await {
                 tracing::warn!(
                     plugin_id, error = %e,
@@ -620,6 +623,20 @@ impl ExtensionManager {
                 );
             }
         }
+    }
+
+    // Legacy preferences may be saved before discovery. A discovered project
+    // uses its exact key, and an ambiguous name cannot change any preference.
+    async fn legacy_preference_instance(
+        &self,
+        plugin_id: &str,
+    ) -> Option<super::visibility::PluginInstanceKey> {
+        let registry = self.plugin_registry.read().await;
+        let mut records = registry.plugin_instances(plugin_id);
+        let Some(record) = records.next() else {
+            return Some(super::visibility::PluginInstanceKey::global(plugin_id));
+        };
+        records.next().is_none().then(|| record.instance_key())
     }
 
     /// This plugin's **stored** configuration, as JSON.
@@ -633,7 +650,13 @@ impl ExtensionManager {
     /// decrypted credential. Code handing configuration to plugin code wants
     /// [`Self::plugin_settings_for_runtime`] instead.
     pub async fn plugin_settings(&self, plugin_id: &str) -> serde_json::Value {
-        self.plugins_config.read().await.settings_json(plugin_id)
+        let Some(instance) = self.legacy_preference_instance(plugin_id).await else {
+            return serde_json::json!({});
+        };
+        self.plugins_config
+            .read()
+            .await
+            .settings_json_for(&instance)
     }
 
     /// This plugin's configuration with `{{secret:NAME}}` references resolved
@@ -644,7 +667,17 @@ impl ExtensionManager {
     /// have been one line and would have piped every configured secret into
     /// the transcript and the settings UI.
     pub async fn plugin_settings_for_runtime(&self, plugin_id: &str) -> serde_json::Value {
-        let stored = self.plugin_settings(plugin_id).await;
+        let Some(instance) = self.legacy_preference_instance(plugin_id).await else {
+            return serde_json::json!({});
+        };
+        self.plugin_settings_for_instance(&instance).await
+    }
+
+    pub(super) async fn plugin_settings_for_instance(
+        &self,
+        instance: &super::visibility::PluginInstanceKey,
+    ) -> serde_json::Value {
+        let stored = self.plugins_config.read().await.settings_json_for(instance);
         let resolver = crate::gateway::security::shared_token::SharedTokenManager::global()
             .map(crate::secrets::VaultSecretResolver::new);
         crate::extension::plugin_secrets::resolve_settings(
@@ -652,7 +685,7 @@ impl ExtensionManager {
             resolver
                 .as_ref()
                 .map(|r| r as &dyn crate::secrets::AsyncSecretResolver),
-            plugin_id,
+            &instance.plugin_id,
         )
         .await
     }
@@ -667,7 +700,7 @@ impl ExtensionManager {
         plugin_id: &str,
         form: crate::extension::plugin_secrets::SettingsForm,
     ) -> Vec<(String, String)> {
-        use crate::extension::plugin_secrets::{without_secret_references, SettingsForm};
+        use crate::extension::plugin_secrets::{SettingsForm, without_secret_references};
         if crate::extension::manifest::validate_plugin_id(plugin_id).is_err() {
             return Vec::new();
         }
@@ -709,11 +742,16 @@ impl ExtensionManager {
             ]);
         };
 
+        let _guard = self.load_guard.lock().await;
+        let instance = self
+            .legacy_preference_instance(plugin_id)
+            .await
+            .ok_or_else(|| vec!["Plugin name matches multiple instances".to_owned()])?;
         // Validate against the manifest's schema when there is one.
         let schema = {
             let registry = self.plugin_registry.read().await;
             registry
-                .get_plugin(plugin_id)
+                .get_plugin_instance(&instance)
                 .map(|record| record.root_dir.clone())
         };
         if let Some(root_dir) = schema {
@@ -723,9 +761,9 @@ impl ExtensionManager {
                 move || adapters.parse_dir_fresh(&root_dir),
             )
             .await
-            .ok_or_else(
-                || vec!["Cannot validate configuration: plugin parse cancelled".to_owned()],
-            )?
+            .ok_or_else(|| {
+                vec!["Cannot validate configuration: plugin parse cancelled".to_owned()]
+            })?
             .map_err(|e| {
                 vec![format!(
                     "Cannot validate configuration: plugin manifest parse failed: {e}"
@@ -764,51 +802,19 @@ impl ExtensionManager {
                     return Err(vec![format!(
                         "Field '{key}' cannot be stored in plugins.toml: {e}. \
                          (TOML has no null; omit the field instead.)"
-                    )])
+                    )]);
                 }
             }
         }
 
-        let _guard = self.load_guard.lock().await;
         let mut candidate = self.plugins_config.read().await.clone();
-        let changed = candidate.set_settings(plugin_id, converted);
+        let changed = candidate.set_settings_for(&instance, converted);
         if changed {
             self.commit_plugins_config_locked(candidate)
                 .await
                 .map_err(|e| vec![format!("Failed to persist configuration: {e}")])?;
         }
-        if changed {
-            self.publish_plugin_settings().await;
-        }
         Ok(changed)
-    }
-
-    /// Mirror every plugin's stored configuration into the loader.
-    ///
-    /// Without this the store would be a place values go and never come back:
-    /// `plugins.toml` would hold them, the RPC face would read them back, and
-    /// the plugin runtime would never see one. Called at boot and after each
-    /// config write — the two moments the stored set can differ from the
-    /// loader's copy.
-    pub async fn publish_plugin_settings(&self) {
-        // Ids first, under a short-lived read lock; resolution below awaits the
-        // vault and must not hold the config lock while it does.
-        let ids: Vec<String> = {
-            let cfg = self.plugins_config.read().await;
-            cfg.entries.keys().cloned().collect()
-        };
-        let mut snapshot: std::collections::HashMap<String, serde_json::Value> =
-            std::collections::HashMap::with_capacity(ids.len());
-        for id in ids {
-            // Runtime form: this snapshot is what the WASM guest and the MCP
-            // child actually receive, so `{{secret:NAME}}` resolves here.
-            let settings = self.plugin_settings_for_runtime(&id).await;
-            snapshot.insert(id, settings);
-        }
-        self.plugin_loader
-            .write()
-            .await
-            .set_all_plugin_settings(snapshot);
     }
 
     /// Vouch for (or withdraw vouching for) a plugin under the owner trust
@@ -828,8 +834,11 @@ impl ExtensionManager {
     /// verb that stops a running plugin now.
     pub async fn set_plugin_trusted(&self, plugin_id: &str, trusted: bool) -> bool {
         let _guard = self.load_guard.lock().await;
+        let Some(instance) = self.legacy_preference_instance(plugin_id).await else {
+            return false;
+        };
         let mut candidate = self.plugins_config.read().await.clone();
-        let changed = candidate.set_trusted(plugin_id, trusted);
+        let changed = candidate.set_trusted_for(&instance, trusted);
         if changed {
             if let Err(e) = self.commit_plugins_config_locked(candidate).await {
                 tracing::warn!(plugin_id, error = %e, "failed to persist plugin trust preference");
@@ -919,7 +928,10 @@ impl ExtensionManager {
 
         let guard = self.load_guard.lock().await;
         let mut candidate = self.plugins_config.read().await.clone();
-        let preference_changed = candidate.set_enabled(plugin_id, enabled);
+        let instance = self.legacy_preference_instance(plugin_id).await;
+        let preference_changed = instance
+            .as_ref()
+            .is_some_and(|instance| candidate.set_enabled_for(instance, enabled));
         let mut outcome = PluginControlOutcome {
             plugin_id: plugin_id.to_owned(),
             desired_enabled: enabled,
@@ -933,6 +945,13 @@ impl ExtensionManager {
             error: None,
             cleanup_report: Vec::new(),
         };
+        if instance.is_none() {
+            outcome.error_phase = Some(PluginControlPhase::Reconcile);
+            outcome.error = Some("Plugin name matches multiple instances".to_owned());
+            return Err(PluginControlError {
+                outcome: Box::new(outcome),
+            });
+        }
         // Save even an unchanged candidate: durable success is a fact, not an
         // inference from the in-memory value (the file could have been removed).
         if let Err(error) = self.commit_plugins_config_locked(candidate).await {
@@ -1042,12 +1061,16 @@ impl ExtensionManager {
         plugin_id: &str,
         owner: &Arc<crate::extension::runtime_owner::RuntimeOwner>,
     ) -> bool {
-        let current = self.runtime_owner(plugin_id);
+        let instance = owner.record.instance_key();
+        if instance.plugin_id != plugin_id {
+            return false;
+        }
+        let current = self.runtime_owner_for(&instance);
         let row_loaded = self
             .plugin_registry
             .read()
             .await
-            .get_plugin(plugin_id)
+            .get_plugin_instance(&instance)
             .is_some_and(|row| row.status == super::PluginStatus::Loaded);
         current
             .as_ref()
@@ -1068,7 +1091,7 @@ impl ExtensionManager {
                 .scopes
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .contains_key(plugin_id)
+                .contains_key(&instance)
     }
 
     async fn control_actual_state(&self, plugin_id: &str) -> String {

@@ -4,10 +4,10 @@
 //! `CapabilityDeclaration` variants to the appropriate `register_*` method,
 //! with tiered permission checking.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use crate::extension::capability::{CapabilityDeclaration, Tier};
-use crate::extension::effects::{async_disposer, Disposer};
+use crate::extension::effects::{Disposer, async_disposer};
 use crate::extension::manifest::PluginPermission;
 use crate::extension::registry::{DiagnosticLevel, PluginDiagnostic, PluginRegistry};
 use crate::extension::types::PluginRecord;
@@ -153,6 +153,7 @@ pub(crate) async fn register_plugin_row(
     permissions: Vec<PluginPermission>,
     capabilities: Vec<CapabilityDeclaration>,
 ) -> Disposer {
+    let instance = record.instance_key();
     let plugin_id = record.id.clone();
     {
         let mut reg = registry.write().await;
@@ -178,7 +179,7 @@ pub(crate) async fn register_plugin_row(
         }
     }
     async_disposer(move || async move {
-        registry.write().await.unregister_plugin(&plugin_id);
+        registry.write().await.unregister_plugin_instance(&instance);
         Ok(())
     })
 }

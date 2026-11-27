@@ -6,12 +6,12 @@ use super::{ExtensionManager, PluginStatus};
 use crate::sync_primitives::Arc;
 use futures::FutureExt;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use super::manifest::{adapter::AdapterOutput, PluginManifest};
+use super::manifest::{PluginManifest, adapter::AdapterOutput};
 use super::runtime::wasm::WasmMountIdentity;
 use crate::tools::descriptor::ToolCapabilityDescriptor;
 use crate::tools::registry::{
@@ -195,11 +195,21 @@ impl RuntimeOwner {
 
 impl ExtensionManager {
     pub(super) fn runtime_owner(&self, id: &str) -> Option<Arc<RuntimeOwner>> {
-        self.runtime_owners.lock().unwrap().get(id).cloned()
+        let owners = self.runtime_owners.lock().unwrap();
+        let mut matching = owners.iter().filter(|(key, _)| key.plugin_id == id);
+        let (_, owner) = matching.next()?;
+        matching.next().is_none().then(|| Arc::clone(owner))
+    }
+
+    pub(super) fn runtime_owner_for(
+        &self,
+        instance: &super::visibility::PluginInstanceKey,
+    ) -> Option<Arc<RuntimeOwner>> {
+        self.runtime_owners.lock().unwrap().get(instance).cloned()
     }
 
     pub(super) fn owner_is_current(&self, owner: &Arc<RuntimeOwner>) -> bool {
-        self.runtime_owner(&owner.record.id)
+        self.runtime_owner_for(&owner.record.instance_key())
             .is_some_and(|current| Arc::ptr_eq(&current, owner))
     }
 
@@ -210,13 +220,16 @@ impl ExtensionManager {
         mut record: PluginRecord,
         manifest: PluginManifest,
     ) -> PluginStatus {
-        let id = record.id.clone();
+        if let Err(error) = self.check_mount_namespace(&record).await {
+            return PluginStatus::Error(error.to_string());
+        }
+        let instance = record.instance_key();
         record.status = PluginStatus::Cold;
         let owner = Arc::new(RuntimeOwner::new(output, manifest, record.clone()));
         self.runtime_owners
             .lock()
             .unwrap()
-            .insert(id, Arc::clone(&owner));
+            .insert(instance, Arc::clone(&owner));
         self.plugin_registry.write().await.register_plugin(record);
         let registry = self
             .tool_handler_registry
@@ -324,7 +337,7 @@ impl ExtensionManager {
                 state => {
                     return Err(ExtensionError::Runtime(format!(
                         "plugin owner rejects activation: {state:?}"
-                    )))
+                    )));
                 }
             }
         }
@@ -369,7 +382,7 @@ impl ExtensionManager {
         {
             return Err("activation incarnation is stale".into());
         }
-        self.admit(id, owner.record.origin)
+        self.admit(&owner.record.instance_key(), owner.record.origin)
             .await
             .map_err(|e| e.to_string())?;
         // Never accept the loader's duplicate-load no-op as our own mount.
@@ -406,7 +419,7 @@ impl ExtensionManager {
         {
             return Err("mount completion is stale; retained effects require cleanup".into());
         }
-        self.admit(id, owner.record.origin)
+        self.admit(&owner.record.instance_key(), owner.record.origin)
             .await
             .map_err(|e| e.to_string())?;
         *owner.identity.lock().unwrap() = Some(identity.clone());
@@ -451,7 +464,11 @@ impl ExtensionManager {
                 }
                 // Dispose only this fenced mount. A failed disposer report
                 // remains on the owner, without retry.
-                let scope = self.scopes.lock().unwrap().remove(id);
+                let scope = self
+                    .scopes
+                    .lock()
+                    .unwrap()
+                    .remove(&owner.record.instance_key());
                 if let Some(scope) = scope {
                     let report = scope.dispose().await;
                     if !report.all_ok() {
@@ -478,7 +495,12 @@ impl ExtensionManager {
                 return Err(reason);
             }
         }
-        if let Some(row) = self.plugin_registry.write().await.get_plugin_mut(id) {
+        if let Some(row) = self
+            .plugin_registry
+            .write()
+            .await
+            .get_plugin_instance_mut(&owner.record.instance_key())
+        {
             row.status = PluginStatus::Loaded;
         }
         // This is still under load_guard; stop cannot overtake the unique

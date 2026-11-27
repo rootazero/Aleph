@@ -69,7 +69,7 @@ mod types;
 pub mod watcher;
 
 pub use effects::{
-    async_disposer, sync_disposer, DisposeOutcome, DisposeReport, Disposer, EffectScope, PluginId,
+    DisposeOutcome, DisposeReport, Disposer, EffectScope, PluginId, async_disposer, sync_disposer,
 };
 pub use error::*;
 pub use lifecycle::{DiscoveredPluginIds, MountError, ReloadReport, UnmountError};
@@ -81,11 +81,11 @@ pub use manager_global::{
 pub use manifest::*;
 pub use registry::*;
 pub use service_manager::ServiceManager;
-pub(crate) use template::{inline_commands, run_inline, SKILL_DIR_TOKEN};
 pub use template::{
-    inline_shell_command, split_arguments, InlineArgs, InlineShell, InlineSite, SkillTemplate,
-    TemplateCtx, SKILL_DIR_VARIABLE,
+    InlineArgs, InlineShell, InlineSite, SKILL_DIR_VARIABLE, SkillTemplate, TemplateCtx,
+    inline_shell_command, split_arguments,
 };
+pub(crate) use template::{SKILL_DIR_TOKEN, inline_commands, run_inline};
 pub use types::*;
 
 // Re-export marketplace types
@@ -337,10 +337,11 @@ pub struct ExtensionManager {
     /// the runtime, owned here so `unmount` can take it all back out. A std
     /// mutex, never held across an `await`: `lifecycle.rs` removes the scope
     /// under the lock and disposes it after.
-    scopes: Arc<StdMutex<HashMap<String, effects::EffectScope>>>,
+    scopes: Arc<StdMutex<HashMap<visibility::PluginInstanceKey, effects::EffectScope>>>,
 
     /// Instance ownership, not a callable registry or a desired-state store.
-    runtime_owners: Arc<StdMutex<HashMap<String, Arc<runtime_owner::RuntimeOwner>>>>,
+    runtime_owners:
+        Arc<StdMutex<HashMap<visibility::PluginInstanceKey, Arc<runtime_owner::RuntimeOwner>>>>,
 
     /// Weak self-reference installed at the single Arc ownership boundary.
     /// Retained activation work may borrow the live manager's authorities
@@ -791,9 +792,7 @@ impl ExtensionManager {
                 self.load_all_locked_inner(false).await?;
             } else {
                 // A prior cold read retained its exact tool-only WASM owners.
-                // Reconcile non-tool providers and refresh runtime settings
-                // without replacing those owners.
-                self.publish_plugin_settings().await;
+                // Reconcile non-tool providers while preserving those owners.
                 self.discover_with_mode(crate::extension::lifecycle::DiscoveryMode::Activation)
                     .await?;
                 self.views().publish_transition_views().await;
@@ -810,7 +809,11 @@ impl ExtensionManager {
                             &owner.output,
                             Some(&owner.manifest),
                         )
-                        && desired_enabled.is_enabled_for(&owner.record.id, owner.record.origin)
+                        && matches!(
+                            desired_enabled
+                                .activation_for(&owner.record.instance_key(), owner.record.origin),
+                            crate::extension::plugin_state::Activation::Enabled
+                        )
                 })
                 .cloned()
                 .collect();
@@ -1222,15 +1225,12 @@ impl projection::Views {
             .list_hooks()
             .into_iter()
             .filter_map(|hook| {
-                registry
-                    .get_plugin(&hook.plugin_id)
-                    .filter(|plugin| plugin.status.is_active())
-                    .map(|plugin| {
-                        HookInput::plugin(
-                            hook_config_from_registration(hook.clone(), plugin.scope_key.clone()),
-                            plugin,
-                        )
-                    })
+                registry.active_plugin(&hook.plugin_id).map(|plugin| {
+                    HookInput::plugin(
+                        hook_config_from_registration(hook.clone(), plugin.scope_key.clone()),
+                        plugin,
+                    )
+                })
             })
             .collect()
     }
@@ -1280,6 +1280,7 @@ impl projection::Views {
         let scope_keys = registry
             .list_plugins()
             .into_iter()
+            .filter(|plugin| plugin.status.is_active() || plugin.status == PluginStatus::Cold)
             .map(|p| (p.id.clone(), p.scope_key.clone()))
             .collect();
 
@@ -1414,7 +1415,7 @@ impl ExtensionManager {
             .lock()
             .unwrap()
             .iter()
-            .map(|(id, owner)| (id.clone(), owner.provider.state()))
+            .map(|(instance, owner)| (instance.plugin_id.clone(), owner.provider.state()))
             .collect::<std::collections::HashMap<_, _>>();
         let tools = self
             .active_plugin_tools
@@ -1758,8 +1759,8 @@ mod tests {
 
     #[test]
     fn plugin_agent_to_def_maps_subagent_and_keeps_body() {
-        use crate::extension::types::AgentMode as ExtMode;
         use crate::extension::AgentRegistration;
+        use crate::extension::types::AgentMode as ExtMode;
 
         let mut reg = AgentRegistration {
             name: "deployer".into(),
@@ -2082,11 +2083,13 @@ mod tests {
         );
 
         // Record the operator's preference the way every toggle face does.
-        assert!(manager
-            .set_plugin_enabled("quiet-plugin", false)
-            .await
-            .unwrap()
-            .changed());
+        assert!(
+            manager
+                .set_plugin_enabled("quiet-plugin", false)
+                .await
+                .unwrap()
+                .changed()
+        );
         assert!(
             !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
                 .unwrap()
@@ -2189,12 +2192,14 @@ mod tests {
         let (manager2, _) = isolated_manager(tmp.path()).await;
         drop(manager);
         manager2.load_all().await.unwrap();
-        assert!(!manager2
-            .get_plugin_record("wakeable")
-            .await
-            .unwrap()
-            .status
-            .is_active());
+        assert!(
+            !manager2
+                .get_plugin_record("wakeable")
+                .await
+                .unwrap()
+                .status
+                .is_active()
+        );
 
         let _ = manager2.set_plugin_enabled("wakeable", true).await.unwrap();
         assert!(
@@ -2498,7 +2503,7 @@ mod tests {
     /// the request-time filter is what changes.
     #[tokio::test]
     async fn plugin_tool_index_is_filtered_by_the_owning_plugins_visibility() {
-        use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
+        use crate::extension::visibility::{ScopeKey, VisibilityCtx, canonical_root};
         let _home = hermetic_home();
         let proj = tempfile::tempdir().unwrap();
         let manager = ExtensionManager::with_defaults().await.unwrap();
@@ -2559,7 +2564,7 @@ mod tests {
     /// was deleted before the session in that project ever asked for it.
     #[tokio::test]
     async fn a_project_tool_survives_another_plugin_claiming_the_same_short_name() {
-        use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
+        use crate::extension::visibility::{ScopeKey, VisibilityCtx, canonical_root};
         let _home = hermetic_home();
         let proj = tempfile::tempdir().unwrap();
         let manager = ExtensionManager::with_defaults().await.unwrap();
@@ -2638,7 +2643,7 @@ mod tests {
     /// its project and nowhere else.
     #[tokio::test]
     async fn plugin_visible_decides_the_mcp_join_for_owned_servers() {
-        use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
+        use crate::extension::visibility::{ScopeKey, VisibilityCtx, canonical_root};
         let _home = hermetic_home();
         let proj = tempfile::tempdir().unwrap();
         let manager = ExtensionManager::with_defaults().await.unwrap();
@@ -2913,11 +2918,13 @@ mod tests {
 
         manager.ensure_loaded().await.unwrap();
         assert!(manager.is_loaded().await);
-        assert!(manager
-            .get_plugin_registry()
-            .await
-            .list_plugins()
-            .is_empty());
+        assert!(
+            manager
+                .get_plugin_registry()
+                .await
+                .list_plugins()
+                .is_empty()
+        );
 
         let err = manager
             .set_tool_handler_registry(fresh_tool_handler_registry())
@@ -3032,7 +3039,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(
-                "mounted".to_string(),
+                visibility::PluginInstanceKey::new(visibility::ScopeKey::Global, "mounted".into()),
                 effects::EffectScope::new("mounted".to_string()),
             );
         assert!(!manager.is_loaded().await);
@@ -3068,11 +3075,13 @@ mod tests {
             .load_plugin(&manifest)
             .expect("the real empty WASM module links");
         assert!(!manager.is_loaded().await);
-        assert!(manager
-            .get_plugin_registry()
-            .await
-            .list_plugins()
-            .is_empty());
+        assert!(
+            manager
+                .get_plugin_registry()
+                .await
+                .list_plugins()
+                .is_empty()
+        );
         assert!(manager.scopes.lock().unwrap().is_empty());
         assert_eq!(manager.plugin_loader.read().await.loaded_count(), 1);
 

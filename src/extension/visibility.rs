@@ -80,6 +80,56 @@ impl ScopeKey {
     }
 }
 
+/// Exact identity of a discovered plugin across control and runtime state.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct PluginInstanceKey {
+    pub(crate) scope: ScopeKey,
+    pub(crate) plugin_id: String,
+}
+
+impl PluginInstanceKey {
+    pub(crate) fn new(scope: ScopeKey, plugin_id: String) -> Self {
+        Self { scope, plugin_id }
+    }
+
+    pub(crate) fn global(plugin_id: &str) -> Self {
+        Self::new(ScopeKey::Global, plugin_id.to_owned())
+    }
+
+    pub(crate) fn selector(&self) -> String {
+        use sha2::{Digest, Sha256};
+
+        let ScopeKey::Project(root) = &self.scope else {
+            return format!("g:{}", self.plugin_id);
+        };
+        #[cfg(windows)]
+        let path: Vec<u8> = {
+            use std::os::windows::ffi::OsStrExt;
+            root.as_os_str()
+                .encode_wide()
+                .flat_map(u16::to_le_bytes)
+                .collect()
+        };
+        #[cfg(not(windows))]
+        let path = root.as_os_str().as_encoded_bytes();
+
+        let mut hash = Sha256::new();
+        hash.update(b"aleph/plugin-instance/v1\0");
+        hash.update((path.len() as u64).to_le_bytes());
+        hash.update(path);
+        hash.update((self.plugin_id.len() as u64).to_le_bytes());
+        hash.update(self.plugin_id.as_bytes());
+        format!("p:{}", hex::encode(hash.finalize()))
+    }
+
+    pub(crate) fn preference_key(&self) -> String {
+        match self.scope {
+            ScopeKey::Global => self.plugin_id.clone(),
+            ScopeKey::Project(_) => self.selector(),
+        }
+    }
+}
+
 /// What the requesting session is bound to. `None` = no project (a Panel
 /// session that never entered a project, or a run whose `workspace_override`
 /// is unset AND whose daemon has no readable CWD).

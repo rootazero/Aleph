@@ -107,7 +107,7 @@ impl WasmInstanceReceipt {
     }
 }
 
-use crate::extension::effects::{async_disposer, Disposer};
+use crate::extension::effects::{Disposer, async_disposer};
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::manifest::PluginManifest;
 use crate::extension::runtime::WasmRuntime;
@@ -116,15 +116,6 @@ use crate::memory::extensions::{McpMemoryExtension, MemoryExtensionRegistry};
 
 /// Manages loading plugins into appropriate runtimes.
 pub struct PluginLoader {
-    /// The operator's stored configuration per plugin, mirrored from
-    /// `plugins.toml`.
-    ///
-    /// A field rather than a parameter on the four `load_*` signatures: a new
-    /// load path then inherits configuration instead of having to be told
-    /// about it, which is the shape that let `${CLAUDE_PLUGIN_ROOT}` go
-    /// unexpanded across five manifest adapters. Empty means "nothing
-    /// configured", which is what a plugin with no `config_schema` should see.
-    plugin_settings: std::collections::HashMap<String, serde_json::Value>,
     /// WASM runtime (lazy initialized)
     wasm_runtime: Option<WasmRuntime>,
 
@@ -143,7 +134,6 @@ impl PluginLoader {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            plugin_settings: std::collections::HashMap::new(),
             wasm_runtime: None,
             #[cfg(test)]
             wasm_load_probe: WasmLoadProbe::default(),
@@ -179,31 +169,24 @@ impl PluginLoader {
 
     // ===== Loading =====
 
-    /// Mirror the operator's stored plugin configuration into the loader.
-    ///
-    /// Called once when the manager reads `plugins.toml` and again on every
-    /// config write, so a plugin loaded (or reloaded) afterwards sees the
-    /// current values. A plugin already running keeps the configuration it was
-    /// started with until it is reloaded — reloading tears down MCP servers
-    /// and background services, which is not a side effect a config write may
-    /// smuggle in.
-    pub fn set_all_plugin_settings(
-        &mut self,
-        settings: std::collections::HashMap<String, serde_json::Value>,
-    ) {
-        self.plugin_settings = settings;
-    }
-
     /// Load a plugin's in-process runtime. Only `Wasm` has one; `Mcp`
     /// plugins are MCP *servers* and are mounted by `lifecycle.rs` through
     /// `McpManager` (`mcp_server` step), `Static` plugins have none.
     pub(super) fn load_plugin(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
+        self.load_plugin_with_settings(manifest, &serde_json::Value::Null)
+    }
+
+    fn load_plugin_with_settings(
+        &mut self,
+        manifest: &PluginManifest,
+        settings: &serde_json::Value,
+    ) -> ExtensionResult<()> {
         if self.is_loaded(&manifest.id) {
             warn!("Plugin {} is already loaded, skipping", manifest.id);
             return Ok(());
         }
         match manifest.kind {
-            PluginKind::Wasm => self.load_wasm_plugin(manifest),
+            PluginKind::Wasm => self.load_wasm_plugin(manifest, settings),
             PluginKind::Mcp | PluginKind::Static => {
                 info!(
                     "Plugin {} has no in-process runtime, skipping loader",
@@ -215,7 +198,11 @@ impl PluginLoader {
     }
 
     /// Load a WASM plugin.
-    fn load_wasm_plugin(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
+    fn load_wasm_plugin(
+        &mut self,
+        manifest: &PluginManifest,
+        settings: &serde_json::Value,
+    ) -> ExtensionResult<()> {
         if self.wasm_runtime.is_none() {
             info!("Initializing WASM runtime");
             #[cfg(test)]
@@ -233,11 +220,6 @@ impl PluginLoader {
             .as_mut()
             .ok_or_else(|| ExtensionError::Runtime("WASM runtime not initialized".to_string()))?;
 
-        let settings = self
-            .plugin_settings
-            .get(&manifest.id)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
         // The wire that made host-side credential injection reachable. This
         // argument was `None` from the day the injector was written, so every
         // `[capabilities.http.credentials]` binding resolved to `secret not
@@ -247,7 +229,7 @@ impl PluginLoader {
         // `PluginLoader::new`: see `VaultBackedSecretResolver::for_current_process`
         // for why a constructor parameter is the wrong shape for this.
         let resolver = super::runtime::wasm::VaultBackedSecretResolver::for_current_process();
-        runtime.load_plugin_with(manifest, Some(resolver), &settings)?;
+        runtime.load_plugin_with(manifest, Some(resolver), settings)?;
 
         self.loaded_plugins
             .insert(manifest.id.clone(), PluginKind::Wasm);
@@ -619,9 +601,18 @@ impl Default for PluginLoader {
 /// successful no-op that can never evict the incumbent; a stale identity
 /// (already unloaded, replaced under the same id, or dropped by shutdown)
 /// disposes as a no-op that preserves whatever is mounted now.
+#[cfg(test)]
 pub(crate) async fn load_wasm_effect(
     loader: Arc<tokio::sync::RwLock<PluginLoader>>,
     manifest: &PluginManifest,
+) -> ExtensionResult<Disposer> {
+    load_wasm_effect_with_settings(loader, manifest, &serde_json::Value::Null).await
+}
+
+pub(crate) async fn load_wasm_effect_with_settings(
+    loader: Arc<tokio::sync::RwLock<PluginLoader>>,
+    manifest: &PluginManifest,
+    settings: &serde_json::Value,
 ) -> ExtensionResult<Disposer> {
     debug_assert_eq!(
         manifest.kind,
@@ -634,7 +625,7 @@ pub(crate) async fn load_wasm_effect(
         // The same predicate `load_plugin` uses to skip a duplicate, checked
         // under the same guard so the two can never disagree.
         let skipped_duplicate = guard.is_loaded(&plugin_id);
-        guard.load_plugin(manifest)?;
+        guard.load_plugin_with_settings(manifest, settings)?;
         if skipped_duplicate {
             None
         } else {
@@ -721,7 +712,7 @@ impl Drop for PluginLoader {
 mod tests {
     use super::*;
     use crate::extension::runtime::wasm::tests::guest_fixture::{
-        manifest_with_guest, HANDLER, PAYLOAD_A, PAYLOAD_B,
+        HANDLER, PAYLOAD_A, PAYLOAD_B, manifest_with_guest,
     };
     use crate::memory::extensions::manifest::{MemoryHook, MemoryManifestSection};
     use crate::memory::extensions::traits::MemoryExtension;
@@ -899,11 +890,9 @@ mod tests {
         let manifest_a = manifest_with_guest(directory_a.path(), "loader-shutdown", PAYLOAD_A);
         let manifest_b = manifest_with_guest(directory_b.path(), "loader-shutdown", PAYLOAD_B);
         let mut loader = PluginLoader::new();
-        loader.set_all_plugin_settings(std::collections::HashMap::from([(
-            "loader-shutdown".to_string(),
-            serde_json::json!({"key": "value"}),
-        )]));
-        loader.load_plugin(&manifest_a).unwrap();
+        loader
+            .load_plugin_with_settings(&manifest_a, &serde_json::json!({"key": "value"}))
+            .unwrap();
         let old = loader.bind_wasm("loader-shutdown", HANDLER).unwrap();
         assert_eq!(
             loader
@@ -941,10 +930,6 @@ mod tests {
             Err(ExtensionError::PluginNotFound(id)) if id == "loader-shutdown"
         ));
         loader.shutdown();
-        assert_eq!(
-            loader.plugin_settings["loader-shutdown"],
-            serde_json::json!({"key": "value"})
-        );
         loader.load_plugin(&manifest_b).unwrap();
         assert!(matches!(
             loader.call_bound(&old, serde_json::json!({})),
