@@ -6,7 +6,9 @@ use std::time::Duration;
 use tokio::process::{Child, Command};
 use tracing::{debug, error, info, warn};
 
-use crate::acp::protocol::{AcpRequest, AcpResponse, AcpSessionState};
+use crate::acp::protocol::{
+    AcpErrorCode, AcpOperationError, AcpRequest, AcpResponse, AcpSessionState,
+};
 use crate::acp::transport::{write_request, SharedStdin, StdioTransport};
 use crate::acp::AcpChunkCallback;
 use crate::error::Result;
@@ -119,6 +121,13 @@ pub struct CancelHandle {
 }
 
 impl CancelHandle {
+    pub(super) fn has_session_id(&self) -> bool {
+        self.acp_session_id
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some()
+    }
+
     /// Fire-and-forget `session/cancel` notification.
     ///
     /// Returns [`CancelDispatch::NoSession`] (without sending anything) when
@@ -337,7 +346,7 @@ impl AcpSession {
 
     /// Try to restore an existing ACP session via `session/load`.
     ///
-    /// Returns `Ok(session_id)` on success, Err on failure (caller should fall back to session/new).
+    /// Return the recovered session ID or the peer's load error.
     pub async fn load_acp_session(
         &mut self,
         session_id: &str,
@@ -359,7 +368,7 @@ impl AcpSession {
                 Ok(sid)
             }
             Err(e) => {
-                debug!(harness_id = %self.harness_id, error = %e, "session/load failed, will fall back to session/new");
+                debug!(harness_id = %self.harness_id, error = %e, "ACP session/load failed");
                 Err(e)
             }
         }
@@ -613,18 +622,26 @@ impl AcpSession {
         }
     }
 
-    /// Kill the child process and set state to Error.
-    pub async fn kill(&mut self) {
-        if let Err(e) = self.child.kill().await {
-            warn!(
-                harness_id = %self.harness_id,
-                error = %e,
-                "Failed to kill ACP child process"
-            );
-        } else {
-            info!(harness_id = %self.harness_id, "ACP child process killed");
-        }
+    pub(super) fn is_errored(&self) -> bool {
+        self.state == AcpSessionState::Error
+    }
+
+    pub(super) async fn reap(&mut self) -> Result<()> {
         self.state = AcpSessionState::Error;
+        self.child.kill().await.map_err(|error| {
+            AcpOperationError::new(
+                AcpErrorCode::SessionDead,
+                format!("Failed to reap ACP harness '{}': {error}", self.harness_id),
+            )
+            .into()
+        })
+    }
+
+    /// Kill and reap the child process and set state to Error.
+    pub async fn kill(&mut self) {
+        if let Err(error) = self.reap().await {
+            warn!(harness_id = %self.harness_id, %error, "ACP child cleanup failed");
+        }
     }
 
     /// Get the harness ID.

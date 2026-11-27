@@ -74,8 +74,7 @@ async fn test_manager_executable_override() {
     entries.get_mut("claude-code").unwrap().executable = Some("/custom/claude".to_string());
     let manager = AcpAdapterManager::from_entries(entries);
     assert!(manager.has_harness("claude-code").await);
-    let adapters = manager.adapters.read().await;
-    let harness = adapters.get("claude-code").unwrap();
+    let harness = manager.adapter("claude-code").unwrap();
     let cfg = harness.build_config(None);
     assert_eq!(cfg.executable, "/custom/claude");
 }
@@ -361,8 +360,7 @@ fn test_persisted_session_legacy_compat() {
     assert_eq!(parsed.session_name, None);
 }
 
-/// `set_gateway_change_hook` fires every time `emit_persistence_event`
-/// fans out — confirms the broadcast wiring used by `acp.sessions.changed`.
+/// Gateway receives invalidations for persisted and live-only changes.
 #[tokio::test]
 async fn test_gateway_change_hook_fires_on_emit() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -376,22 +374,12 @@ async fn test_gateway_change_hook_fires_on_emit() {
         }))
         .await;
 
-    // Two direct emits — fan-out should fire the hook each time even
-    // without a persistence_hook installed.
-    manager
-        .emit_persistence_event(crate::acp::AcpSessionEvent::Created {
-            harness_id: "claude-code".to_string(),
-            acp_session_id: "s1".to_string(),
-            cwd: "/tmp/a".to_string(),
-            session_name: None,
-        })
-        .await;
-    manager
-        .emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-            harness_id: "claude-code".to_string(),
-            cwd: "/tmp/a".to_string(),
-            session_name: Some("backend".to_string()),
-        })
-        .await;
+    let state = manager.state();
+    state.publish(None);
+    state.publish(Some(crate::acp::AcpSessionEvent::Removed {
+        harness_id: "claude-code".to_owned(),
+        cwd: "/tmp/a".to_owned(),
+        session_name: Some("backend".to_owned()),
+    }));
     assert_eq!(counter.load(Ordering::SeqCst), 2);
 }

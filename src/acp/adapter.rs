@@ -120,15 +120,22 @@ pub trait AcpAdapter: Send + Sync {
         }
     }
 
+    /// Build the subprocess configuration for the native protocol.
+    fn build_native_config(&self, cwd: Option<&str>) -> AdapterConfig {
+        self.build_config(cwd)
+    }
+
     /// Spawn and initialize an ACP session for this harness.
     ///
     /// Only meaningful for `NativeAcp` mode. For `Oneshot` mode, the manager
     /// calls `execute_oneshot` directly instead.
     async fn spawn_session(&self, cwd: Option<&str>) -> Result<AcpSession> {
-        let config = self.build_config(cwd);
-        let timeout = config.timeout;
+        let config = self.build_native_config(cwd);
         let mut session = AcpSession::spawn(self.id(), &config).await?;
-        session.initialize(timeout).await?;
+        if let Err(error) = session.initialize(config.timeout).await {
+            session.kill().await;
+            return Err(error);
+        }
         Ok(session)
     }
 
