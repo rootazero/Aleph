@@ -395,7 +395,7 @@ function ModuleSlot(props: {
     case "aleph:capabilities":
       return <Capabilities tabs={props.tabs} />;
     case "aleph:memory-nebula":
-      return <MemoryNebula sdk={sdk} />;
+      return <MemoryNebula sdk={sdk} canMutate={() => props.tab?.permissions.includes("graph.mutate_note") === true} />;
     default:
       return <Unavailable title={slot.key} detail="This renderer has no module for this tab." />;
   }

@@ -6,7 +6,6 @@ import {
   clipEdge,
   drawSegment,
   drawSlots,
-  endDrag,
   fitViewport,
   isVisible,
   moveDrag,
@@ -21,9 +20,11 @@ import {
 } from "./nebulaViewport";
 
 const EDGE_DENSITY = [160, 320, 640] as const;
+const COMMUNITY_COLORS = ["#93c5fd", "#86efac", "#c4b5fd", "#fda4af", "#67e8f9", "#fdba74"];
 
 export function NebulaCanvas(props: {
   scene: Scene;
+  windowKey?: string;
   selected: () => number;
   onSelect: (index: number) => void;
   labels?: () => readonly string[];
@@ -31,29 +32,33 @@ export function NebulaCanvas(props: {
 }) {
   const viewport = signal<Viewport>({ scale: 1, x: 0, y: 0 });
   const density = signal(1);
-  const frame = signal({ width: 0, height: 190 });
-  const refresh = signal(0);
+  let frame = { width: 0, height: 0 };
+  let fittedScene: Scene | undefined;
+  let fittedWindow: string | undefined;
   let drag: DragState | null = null;
   let drawn: Point[] = [];
-  let initialized = false;
   let lastFocusRevision: number | null = null;
 
   function focus(index: number) {
-    const { width, height } = frame();
+    const { width, height } = frame;
     const point = props.scene.points[index];
     if (!point || width <= 0 || height <= 0) return;
     const scale = Math.max(viewport().scale, 1);
     viewport.set({ scale, x: width / 2 - point[0] * scale, y: height / 2 - point[1] * scale });
-    refresh.update((value) => value + 1);
   }
 
   function setFrame(width: number, height: number) {
     if (width <= 0 || height <= 0) return;
-    frame.set({ width, height });
-    if (!initialized) {
+    const windowChanged = props.windowKey === undefined ? fittedScene !== props.scene : fittedWindow !== props.windowKey;
+    if (windowChanged) {
       viewport.set(fitViewport(props.scene.points, width, height));
-      initialized = true;
+    } else if (width !== frame.width || height !== frame.height) {
+      viewport.set(panBy(viewport(), (width - frame.width) / 2, (height - frame.height) / 2));
     }
+    if (fittedScene !== props.scene) drag = null;
+    fittedScene = props.scene;
+    fittedWindow = props.windowKey;
+    frame = { width, height };
   }
 
   function grant(event: GestureResponderEvent) {
@@ -70,7 +75,7 @@ export function NebulaCanvas(props: {
 
   function release(event: GestureResponderEvent) {
     if (!drag) return true;
-    const { width, height } = frame();
+    const { width, height } = frame;
     const index = pickOnRelease(drag, drawn, event.locationX, event.locationY, width, height);
     drag = null;
     if (index >= 0) props.onSelect(index);
@@ -78,16 +83,15 @@ export function NebulaCanvas(props: {
   }
 
   function zoom(factor: number, anchor?: Point) {
-    const { width, height } = frame();
+    const { width, height } = frame;
     viewport.set(zoomAt(viewport(), anchor ?? [width / 2, height / 2], factor));
   }
 
   return (
-    <View class="gap-1">
+    <View class="flex-1 min-h-0 gap-1">
       <Canvas
-        style={{ height: 190 }}
+        class="flex-1 min-h-0"
         accessibilityLabel="Memory graph"
-        onLayout={({ bounds }) => setFrame(bounds.size.width, bounds.size.height)}
         onStartShouldSetResponder={() => true}
         onResponderGrant={grant}
         onResponderMove={move}
@@ -109,7 +113,6 @@ export function NebulaCanvas(props: {
             lastFocusRevision = request.revision;
             focus(request.index);
           }
-          refresh();
           const points = project(props.scene.points, width, height, viewport());
           drawn = points;
           cx.fillStyle = "#10182a";
@@ -117,16 +120,24 @@ export function NebulaCanvas(props: {
           for (const edge of drawSlots(props.scene.edges, selected, EDGE_DENSITY[density()])) {
             const clipped = clipEdge(points, edge, width, height);
             if (!clipped) continue;
-            drawSegment(cx, clipped[0], clipped[1], edge.kind, selected === edge.from || selected === edge.to);
+            drawSegment(cx, clipped[0], clipped[1], edge.kind, selected === edge.from || selected === edge.to, edge.surprising);
           }
           const labels = props.labels?.() ?? [];
           for (const [index, [x, y]] of points.entries()) {
             if (!isVisible([x, y], width, height, 12)) continue;
             const emphasized = index === selected;
-            cx.fillStyle = emphasized ? "#fbbf24" : "#93c5fd";
+            const community = props.scene.communities?.[index] ?? 0;
+            cx.fillStyle = emphasized ? "#fbbf24" : COMMUNITY_COLORS[community % COMMUNITY_COLORS.length];
+            const radius = emphasized ? 6 : 3;
             cx.beginPath();
-            cx.arc(x, y, emphasized ? 6 : 3, 0, Math.PI * 2);
+            cx.arc(x, y, radius, 0, Math.PI * 2);
             cx.fill();
+            if (props.scene.bridges?.[index]) {
+              cx.strokeStyle = "#f9a8d4";
+              cx.beginPath();
+              cx.arc(x, y, radius + 2, 0, Math.PI * 2);
+              cx.stroke();
+            }
             const label = labels[index];
             if (label && (emphasized || viewport().scale > 1.4)) {
               cx.fillStyle = "#dbeafe";
@@ -139,7 +150,7 @@ export function NebulaCanvas(props: {
       <View class="flex-row gap-1">
         <Button accessibilityLabel="Zoom out" onPress={() => zoom(1 / 1.25)}><Text>−</Text></Button>
         <Button accessibilityLabel="Zoom in" onPress={() => zoom(1.25)}><Text>+</Text></Button>
-        <Button accessibilityLabel="Fit graph" onPress={() => viewport.set(fitViewport(props.scene.points, frame().width, frame().height))}><Text>Fit graph</Text></Button>
+        <Button accessibilityLabel="Fit graph" onPress={() => viewport.set(fitViewport(props.scene.points, frame.width, frame.height))}><Text>Fit graph</Text></Button>
         <Button accessibilityLabel="Show fewer relations" onPress={() => density.set(Math.max(0, density() - 1))} disabled={density() === 0}><Text>Fewer links</Text></Button>
         <Button accessibilityLabel="Show more relations" onPress={() => density.set(Math.min(EDGE_DENSITY.length - 1, density() + 1))} disabled={density() === EDGE_DENSITY.length - 1}><Text>More links</Text></Button>
       </View>

@@ -1,8 +1,8 @@
 import type { CanvasRenderingContext2D } from "nsh";
 
 export type Point = [number, number];
-export type Edge = { from: number; to: number; kind: string | null };
-export type Scene = { points: Point[]; edges: Edge[]; communities?: number[]; insights?: string[] };
+export type Edge = { from: number; to: number; kind: string | null; surprising?: boolean };
+export type Scene = { points: Point[]; edges: Edge[]; communities?: (number | null)[]; bridges?: boolean[] };
 export type Viewport = { scale: number; x: number; y: number };
 export type DragState = { x: number; y: number; startX: number; startY: number; moved: boolean };
 
@@ -115,11 +115,11 @@ export function clipEdge(points: Point[], edge: Edge, width: number, height: num
   return [[start[0] + low * dx, start[1] + low * dy], [start[0] + high * dx, start[1] + high * dy]];
 }
 
-export function drawSegment(pen: EdgePen, start: Point, end: Point, kind: string | null, emphasized: boolean): void {
+export function drawSegment(pen: EdgePen, start: Point, end: Point, kind: string | null, emphasized: boolean, surprising = false): void {
   const [x, y] = start;
   const [endX, endY] = end;
   if (kind === "related_similarity") {
-    pen.strokeStyle = emphasized ? "#d8b4fe" : "#745c90";
+    pen.strokeStyle = surprising ? "#f9a8d4" : emphasized ? "#d8b4fe" : "#745c90";
     pen.beginPath();
     pen.moveTo(x, y);
     pen.lineTo(endX, endY);
@@ -132,7 +132,7 @@ export function drawSegment(pen: EdgePen, start: Point, end: Point, kind: string
   const uy = (endY - y) / length;
   const tipX = endX - ux * 6 - uy * 2;
   const tipY = endY - uy * 6 + ux * 2;
-  pen.strokeStyle = emphasized ? "#7dd3fc" : "#3e506d";
+  pen.strokeStyle = surprising && !emphasized ? "#f9a8d4" : emphasized ? "#7dd3fc" : "#3e506d";
   pen.beginPath();
   pen.moveTo(x - uy * 2, y + ux * 2);
   pen.lineTo(tipX, tipY);

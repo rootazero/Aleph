@@ -245,6 +245,98 @@ test("Nebula opens exact search addresses without assuming graph membership", as
   await app.waitFor("Body from org-b");
   expect(app.texts()).toContain("Not in the current graph");
   expect(paramsSeen).toEqual([{ agent_id: "org-b", node_id: "concept/same" }]);
+  expect(app.texts()).not.toContain("Edit Markdown");
+});
+
+test("Nebula keeps a conflicting Markdown draft and retries with an explicit revision", async () => {
+  const node = { id: "concept/note", path: "concept/note", tags: [], link_count: 0, agent_id: "org-a", name: "Draft target", category: "concept" };
+  const tab = { ...NEBULA_TAB, descriptor: { ...NEBULA_TAB.descriptor, permissions: ["graph.mutate_note"] } };
+  const attempts: Record<string, unknown>[] = [];
+  let content = "Original Markdown";
+  let revision = "old";
+  const handlers = gateway({
+    "panel.capabilities.snapshot": () => nebulaSnapshot([tab]),
+    "graph.query": () => ({ nodes: [node], edges: [] }),
+    "graph.node_detail": () => ({ node, content, revision, backlinks: [] }),
+  });
+  const read = handlers["aleph.rpc"];
+  const app = await openPanel({ host: { handlers: { ...handlers,
+    "aleph.rpc": (call: { method: string; params: Record<string, unknown> }) => {
+      if (call.method !== "graph.mutate_note") return read(call);
+      attempts.push(call.params);
+      if (attempts.length === 1) {
+        content = "Concurrent Markdown";
+        revision = "current";
+        return { error: { code: -32031, message: "Note changed. Reload it before retrying." } };
+      }
+      content = String((call.params.action as { content: string }).content);
+      revision = "saved";
+      return { result: { address: { agent_id: node.agent_id, node_id: node.id }, status: "updated" } };
+    },
+  } } });
+  await app.waitFor("label:Open Memory Nebula");
+  await app.press("label:Open Memory Nebula");
+  await app.waitFor("Draft target");
+  await app.press("Draft target");
+  await app.press("Edit Markdown");
+  await app.type("label:Note Markdown", " Draft");
+  await app.press("Save");
+  await app.waitFor("Note changed. Reload it before retrying.");
+  await app.press("Reload note");
+  await app.waitFor("Concurrent Markdown");
+  await app.press("Use latest revision");
+  await app.press("Save");
+  await app.waitFor("Edit Markdown");
+  expect(attempts).toHaveLength(2);
+  expect(attempts[0]).toMatchObject({ address: { agent_id: "org-a", node_id: "concept/note" }, action: { type: "update" }, revision: "old" });
+  expect(String((attempts[0].action as { content: string }).content)).toContain(" Draft");
+  expect(attempts[1]).toMatchObject({ revision: "current", action: attempts[0].action });
+  expect(attempts[1].idempotency_key).not.toEqual(attempts[0].idempotency_key);
+});
+
+test("Nebula resumes a partial rename using the original request after opening its destination", async () => {
+  const agent_id = "org-a";
+  const original = { agent_id, node_id: "concept/original" };
+  const destination = { agent_id, node_id: "concept/renamed" };
+  const failedSource = { agent_id, node_id: "concept/linking" };
+  const noteRow = (target: typeof original, name: string) => ({
+    agent_id, id: target.node_id, path: target.node_id, name, category: "concept", tags: [], link_count: 0,
+  });
+  const tab = { ...NEBULA_TAB, descriptor: { ...NEBULA_TAB.descriptor, permissions: ["graph.mutate_note"] } };
+  const attempts: unknown[] = [];
+  const handlers = gateway({
+    "panel.capabilities.snapshot": () => nebulaSnapshot([tab]),
+    "graph.query": () => ({ nodes: [noteRow(original, "Original note")], edges: [] }),
+    "graph.node_detail": (params) => ({
+      node: (params as typeof original).node_id === destination.node_id ? noteRow(destination, "Renamed note") : noteRow(original, "Original note"),
+      content: "Markdown body", revision: "original revision", backlinks: [],
+    }),
+  });
+  const read = handlers["aleph.rpc"];
+  const app = await openPanel({ host: { handlers: { ...handlers,
+    "aleph.rpc": (call: { method: string; params: Record<string, unknown> }) => {
+      if (call.method !== "graph.mutate_note") return read(call);
+      attempts.push(call.params);
+      if (attempts.length === 1) return { error: { code: -32603, message: "Index reconciliation is required", data: {
+        reconciliation_required: true, address: destination, failed_source: failedSource,
+      } } };
+      return { result: { address: destination, status: "renamed" } };
+    },
+  } } });
+  await app.waitFor("label:Open Memory Nebula");
+  await app.press("label:Open Memory Nebula");
+  await app.press("Original note");
+  await app.press("Rename");
+  await app.type("label:New note title", " revised");
+  await app.press("Save");
+  await app.waitFor("Index reconciliation is required");
+  await app.waitFor("Inspect backlink source");
+  await app.press("Reload affected note");
+  await app.waitFor("Renamed note");
+  await app.press("Resume rename");
+  await app.waitFor("Edit Markdown");
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]).toEqual(attempts[0]);
 });
 
 test("Nebula follows addressed relationships and focuses an off-window note", async () => {
@@ -273,7 +365,7 @@ test("Nebula follows addressed relationships and focuses an off-window note", as
   await app.waitFor("Neighbor body");
   await app.press("Show neighborhood");
   await app.waitFor("2 notes in this neighborhood");
-  expect(rpcParams(app, "graph.query")).toEqual([{ limit: 100 }, { limit: 100, focus: target }]);
+  expect(rpcParams(app, "graph.query")).toEqual([{ limit: 100 }, { limit: 500, focus: target }]);
   expect(rpcParams(app, "graph.node_detail").at(-1)).toEqual(target);
   await app.press("← concept/root");
   await app.waitFor("Root body");
@@ -301,11 +393,13 @@ test("Nebula keeps its graph after refresh fails and discards a late detail", as
   await app.waitFor("label:Open Memory Nebula");
   await app.press("label:Open Memory Nebula");
   await app.waitFor("First note");
-  await app.press("First note");
+  const openFirst = app.press("First note");
   await app.waitUntil(() => rpcCalls(app, "graph.node_detail") === 1);
-  await app.press("Second note");
+  const openSecond = app.press("Second note");
   await app.waitFor("Second body");
   finishFirst({ node: first, content: "Late first body", backlinks: [] });
+  await openFirst;
+  await openSecond;
   await app.press("Refresh graph");
   await app.waitFor("Retry graph");
   expect(app.texts()).toContain("2 of 2 graph notes");
