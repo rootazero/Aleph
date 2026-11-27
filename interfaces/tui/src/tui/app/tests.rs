@@ -1259,6 +1259,7 @@ fn handle_ask_user_renders_the_structured_question() {
                 options: vec![AskUserOption {
                     label: "staging".into(),
                     description: Some("shared QA".into()),
+                    preview: None,
                 }],
                 multi_select: false,
                 secret: false,
@@ -1307,6 +1308,7 @@ fn handle_ask_user_shows_option_descriptions() {
             options: vec![AskUserOption {
                 label: "staging".into(),
                 description: Some("shared QA".into()),
+                preview: None,
             }],
             multi_select: false,
             secret: false,

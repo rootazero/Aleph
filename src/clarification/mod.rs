@@ -50,6 +50,9 @@ pub struct ClarificationOption {
     pub value: String,
     /// Optional description for additional context
     pub description: Option<String>,
+    /// Optional Markdown preview, separate from the short description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
 
 impl ClarificationOption {
@@ -60,6 +63,7 @@ impl ClarificationOption {
             label: label.to_string(),
             value: value.to_string(),
             description: None,
+            preview: None,
         }
     }
 
@@ -288,6 +292,7 @@ pub(crate) fn question_view(q: &ClarificationQuestion) -> ClarificationQuestionV
             .map(|o| ClarificationOptionView {
                 label: o.label.clone(),
                 description: o.description.clone(),
+                preview: o.preview.clone(),
             })
             .collect(),
         multi_select: q.multi_select,
