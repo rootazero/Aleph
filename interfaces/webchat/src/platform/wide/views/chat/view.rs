@@ -86,11 +86,10 @@ pub fn ChatView() -> impl IntoView {
         // see it — and the parked tool would sit blocked until it timed out.
         // Seed from the authoritative registry, exactly as the approval card
         // seeds from `exec.approvals.pending`.
-        match crate::api::ClarificationApi::list_pending(&dash_for_sub).await {
-            Ok(list) => dash_for_sub.pending_clarifications.set(list),
-            Err(e) => web_sys::console::error_1(
+        if let Err(e) = crate::api::ClarificationApi::refresh_pending(&dash_for_sub).await {
+            web_sys::console::error_1(
                 &format!("Failed to load pending clarifications: {e}").into(),
-            ),
+            );
         }
     });
 

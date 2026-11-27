@@ -1,6 +1,9 @@
+use aleph_protocol::clarification::{
+    ClarificationActionParams, ClarificationActionResponse, PendingListResponse,
+};
+use leptos::prelude::Update;
+
 use crate::context::DashboardState;
-use crate::state::notifications::{AskOptionView, AskQuestionView, PendingAskView};
-use serde::Deserialize;
 
 // ============================================================================
 // Clarification API (`ask_user` question card)
@@ -8,219 +11,48 @@ use serde::Deserialize;
 
 pub struct ClarificationApi;
 
-#[derive(Deserialize)]
-struct PendingListResp {
-    pending: Vec<PendingItem>,
-}
-
-#[derive(Deserialize)]
-struct PendingItem {
-    /// Clarification registry key — what `clarification.resolve` is called with.
-    session_key: String,
-    /// The identity of the request this card belongs to.
-    ///
-    /// Core mints one per request and refuses an answer that carries a
-    /// different identity; a panel that drops it lets a late answer from a
-    /// SUPERSEDED request land on the new one. (2026-11-20 severed-wire
-    /// audit SD-CLAR-01.)
-    #[serde(default)]
-    request_id: String,
-    question: String,
-    #[serde(default)]
-    options: Vec<String>,
-    #[serde(default)]
-    questions: Vec<QuestionItem>,
-    #[serde(default)]
-    answered: usize,
-}
-
-/// Wire mirror of core's `ClarificationQuestionView`. Every field past `prompt`
-/// defaults, so a core that predates the structured view parses as an empty
-/// list and the card falls back to `question` / `options`.
-#[derive(Deserialize)]
-struct QuestionItem {
-    #[serde(default)]
-    id: String,
-    #[serde(default)]
-    header: Option<String>,
-    prompt: String,
-    #[serde(default)]
-    options: Vec<OptionItem>,
-    #[serde(default)]
-    multi_select: bool,
-    #[serde(default)]
-    secret: bool,
-}
-
-#[derive(Deserialize)]
-struct OptionItem {
-    label: String,
-    #[serde(default)]
-    description: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ResolveResp {
-    resolved: bool,
-    /// The answer did not reach the request it was meant for: the request was
-    /// superseded or already gone. Core reports it, so the panel can say so
-    /// instead of pretending the answer was taken.
-    /// (2026-11-20 severed-wire audit SD-CLAR-01.)
-    #[serde(default)]
-    stale: bool,
-    /// Absent on a core that predates multi-question requests — and `0` is the
-    /// right reading there, because every request it can produce has exactly
-    /// one question.
-    #[serde(default)]
-    pending_questions: usize,
-}
-
-/// The expectation to send for a card, or none when the core did not name the
-/// request.
-///
-/// An EMPTY expectation is not the same as no expectation: core compares the
-/// string it is given against the request it holds, so `Some("")` would
-/// reject every answer. (2026-11-20 severed-wire audit SD-CLAR-01.)
-#[must_use]
-pub fn expected_request_id(request_id: &str) -> Option<&str> {
-    if request_id.is_empty() {
-        None
-    } else {
-        Some(request_id)
-    }
-}
-
-/// What `clarification.resolve` reported.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ResolveOutcome {
-    /// The answer was taken. `false` = the question was already gone (expired /
-    /// superseded / run cancelled), so the reply answered nobody and the caller
-    /// must NOT treat its text as consumed.
-    pub accepted: bool,
-    /// Questions still outstanding on this request.
-    ///
-    /// ⚠️ `accepted && still_asking > 0` is the case that did not exist before
-    /// multi-question requests: the answer landed, and the card must STAY.
-    /// Dropping it on `accepted` alone strands the rest of the walk behind a
-    /// card the user can no longer see.
-    pub still_asking: usize,
-    /// The answer was rejected as stale: it belonged to a request that has
-    /// been superseded or has already ended.
-    ///
-    /// `accepted == false` already covers "nobody was waiting"; `stale` says
-    /// WHY — the panel shows it instead of a bare "discarded".
-    /// (2026-11-20 severed-wire audit SD-CLAR-01.)
-    pub stale: bool,
-}
-
-impl ResolveOutcome {
-    /// Whether the request is over — nothing more to ask, so the card goes.
-    #[must_use]
-    pub const fn is_finished(self) -> bool {
-        self.still_asking == 0
-    }
-}
-
-fn to_view(p: PendingItem) -> PendingAskView {
-    PendingAskView {
-        session_key: p.session_key,
-        request_id: p.request_id,
-        question: p.question,
-        options: p.options,
-        questions: p
-            .questions
-            .into_iter()
-            .map(|q| AskQuestionView {
-                id: q.id,
-                header: q.header,
-                prompt: q.prompt,
-                options: q
-                    .options
-                    .into_iter()
-                    .map(|o| AskOptionView {
-                        label: o.label,
-                        description: o.description,
-                    })
-                    .collect(),
-                multi_select: q.multi_select,
-                secret: q.secret,
-            })
-            .collect(),
-        answered: p.answered,
-    }
-}
-
 impl ClarificationApi {
-    /// List the questions core is currently parked on.
+    /// Refresh the parked questions from core.
     ///
-    /// The `stream.ask_user` frame is a one-shot push, so a panel that connects
-    /// (or reloads) mid-question would otherwise never learn a tool is blocked
-    /// on its answer. Same role as `exec.approvals.pending` for approvals.
-    pub async fn list_pending(state: &DashboardState) -> Result<Vec<PendingAskView>, String> {
+    /// `clarification.pending` is the authoritative snapshot; a push frame is
+    /// only a notification. The snapshot is guarded by the generation it was
+    /// fetched at: a push that arrives while the request is in flight is
+    /// newer and survives the answer of this call.
+    ///
+    /// The same call is the reconciliation path after a terminal frame that
+    /// named no request — reading is always safe, so it is also the recovery
+    /// path after a failed mutation.
+    pub async fn refresh_pending(state: &DashboardState) -> Result<(), String> {
+        let start = state
+            .clarifications
+            .try_update(|board| board.begin_snapshot())
+            .ok_or_else(|| "Clarification board is no longer available".to_string())?;
         let result = state
             .rpc_call("clarification.pending", serde_json::Value::Null)
             .await?;
-        let resp: PendingListResp = serde_json::from_value(result)
+        let snapshot: PendingListResponse = serde_json::from_value(result)
             .map_err(|e| format!("Failed to parse pending clarifications: {e}"))?;
-        Ok(resp.pending.into_iter().map(to_view).collect())
+        state.clarifications.update(|board| {
+            board.apply_snapshot(&snapshot, start);
+        });
+        Ok(())
     }
 
-    /// Answer the question at the cursor.
+    /// Send one guarded action to the live request.
     ///
-    /// `reply` is interpreted by core exactly as a channel reply is: a bare
-    /// 1-based number picks that option, anything else is free text. The panel
-    /// sends the index string for a choice click — the same payload Telegram's
-    /// `clarify:<idx>` button produces — and never interprets it itself (R4).
-    pub async fn resolve(
+    /// The action carries the identity of the request and of the question it
+    /// addresses (`expected_request_id` / `expected_question_id`), so core can
+    /// refuse an action that was meant for a superseded request instead of
+    /// answering the wrong one.
+    pub async fn resolve_action(
         state: &DashboardState,
-        session_key: &str,
-        reply: &str,
-        expected_request_id: Option<&str>,
-    ) -> Result<ResolveOutcome, String> {
-        Self::post(
-            state,
-            serde_json::json!({
-                "session_key": session_key,
-                "reply": reply,
-                "expected_request_id": expected_request_id,
-            }),
-        )
-        .await
-    }
-
-    /// Answer several consecutive questions in one call — the form path, where
-    /// the user filled in every remaining question before submitting.
-    ///
-    /// Same interpreter, same per-question rules; core walks `answers` across
-    /// consecutive questions starting at the cursor.
-    pub async fn resolve_all(
-        state: &DashboardState,
-        session_key: &str,
-        answers: &[String],
-        expected_request_id: Option<&str>,
-    ) -> Result<ResolveOutcome, String> {
-        Self::post(
-            state,
-            serde_json::json!({
-                "session_key": session_key,
-                "answers": answers,
-                "expected_request_id": expected_request_id,
-            }),
-        )
-        .await
-    }
-
-    async fn post(
-        state: &DashboardState,
-        params: serde_json::Value,
-    ) -> Result<ResolveOutcome, String> {
-        let result = state.rpc_call("clarification.resolve", params).await?;
-        let resp: ResolveResp = serde_json::from_value(result)
+        params: ClarificationActionParams,
+    ) -> Result<ClarificationActionResponse, String> {
+        let payload = serde_json::to_value(params)
+            .map_err(|e| format!("Failed to encode clarification action: {e}"))?;
+        let result = state.rpc_call("clarification.resolve", payload).await?;
+        let response: ClarificationActionResponse = serde_json::from_value(result)
             .map_err(|e| format!("Failed to parse clarification.resolve: {e}"))?;
-        Ok(ResolveOutcome {
-            accepted: resp.resolved,
-            still_asking: resp.pending_questions,
-            stale: resp.stale,
-        })
+        Ok(response)
     }
 }

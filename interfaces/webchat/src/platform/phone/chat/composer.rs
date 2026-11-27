@@ -29,6 +29,7 @@ use leptos::task::spawn_local;
 
 use crate::api::chat::ChatApi;
 use crate::context::DashboardState;
+use crate::i18n::{t_string, use_i18n};
 use crate::state::sessions::SessionMap;
 
 use crate::views::chat::composer::appearance_command::{
@@ -49,6 +50,7 @@ use shared_ui_logic::state::{
 pub fn PhoneComposer() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    let i18n = use_i18n();
     // Same registry the wide composer binds runs into. `PhoneChat` registered
     // this surface's conversation at mount, so `active_conv()` answers here.
     let sessions = expect_context::<SessionMap>();
@@ -217,15 +219,20 @@ pub fn PhoneComposer() -> impl IntoView {
     };
 
     // The question this conversation is parked on, if any. The card itself is
-    // rendered by the shared `MessageList`; the composer only has to make sure
-    // Enter reaches it instead of the queue.
+    // rendered by the shared `MessageList`; the composer only has to know
+    // whether the CARD is waiting for an answer.
     let pending_ask = Memo::new(move |_| {
-        crate::state::notifications::pending_ask_for_session(
-            &dashboard.pending_clarifications.get(),
-            chat.session_key.get().as_deref(),
-        )
-        .cloned()
+        dashboard
+            .clarifications
+            .get()
+            .request_of(chat.session_key.get().as_deref()?)
+            .cloned()
     });
+
+    // Set when Enter was pressed while the card owned the send key: the
+    // composer never answers a parked question on the user's behalf, it points
+    // at the card instead.
+    let ask_hint = RwSignal::new(false);
 
     // Queue a follow-up while a run is active → it becomes a ghost bubble.
     // No client-side prompt-injection guard (server is the authority).
@@ -272,73 +279,15 @@ pub fn PhoneComposer() -> impl IntoView {
 
     // Answer a pending `ask_user` with the current draft. Returns `true` when a
     // question was pending — the caller must then NOT fall through to send/queue.
-    // Same rule every channel enforces in `inbound_router::try_intercept_hitl`:
-    // while a clarification is pending, whatever the user sends IS the answer.
-    // Queueing it instead would strand the parked tool until its timeout — the
-    // turn cannot reach another boundary to drain the queue at.
+    // NOTE: the phone composer deliberately does NOT answer a parked
+    // `ask_user`. The question card is the only addressed answer surface: it
+    // stages the answers, sends one typed `submit` (or `cancel`), and shows
+    // what it sent. The old implicit path guessed (a chat reply typed while
+    // the agent waits is not necessarily the answer to THAT question) and
+    // echoed it into the transcript as if the user had answered deliberately.
     //
-    // `resolved: false` = nobody was unblocked (expired / superseded / run
-    // cancelled). The reply is then an ordinary chat message, not an answer:
-    // restore the draft and send it rather than swallowing the keystroke.
-    let answer_pending_ask = move || -> bool {
-        if intercept_theme() {
-            return true;
-        }
-        let Some(ask) = pending_ask.get_untracked() else {
-            return false;
-        };
-        let reply = input_text.get_untracked().trim().to_string();
-        if reply.is_empty() {
-            return true;
-        }
-        input_text.set(String::new());
-        let dash = dashboard;
-        spawn_local(async move {
-            match crate::api::ClarificationApi::resolve(
-                &dash,
-                &ask.session_key,
-                &reply,
-                crate::api::expected_request_id(&ask.request_id),
-            )
-                .await
-                .map(|o| (o.accepted, o.is_finished()))
-            {
-                Ok((true, finished)) => {
-                    chat.push_user_message(&reply);
-                    // Keep the card while questions remain — see the wide
-                    // composer's twin arm for why dropping it here strands the
-                    // rest of the walk.
-                    if finished {
-                        dash.pending_clarifications
-                            .update(|l| l.retain(|p| p.session_key != ask.session_key));
-                    }
-                }
-                Ok((false, _)) => {
-                    dash.pending_clarifications
-                        .update(|l| l.retain(|p| p.session_key != ask.session_key));
-                    input_text.set(reply);
-                    // Probe a *component-owned* signal, not `chat`: `send()` and
-                    // `enqueue()` below both read several of these, and `chat`
-                    // is root-owned, so it would answer "alive" long after this
-                    // composer was disposed (see `crate::disposed_reads`).
-                    if is_sending.try_get_untracked().is_none() {
-                        return;
-                    }
-                    if chat.active_run_id.try_get_untracked().flatten().is_some() {
-                        enqueue();
-                    } else {
-                        send();
-                    }
-                }
-                Err(e) => {
-                    // The answer never left the client — keep the draft.
-                    input_text.set(reply);
-                    chat.set_send_error(ChatSendError::classify(e));
-                }
-            }
-        });
-        true
-    };
+    // So Enter while a card is up keeps the draft, sends nothing, and raises
+    // a hint pointing at the card.
 
     // Flush the entire queue. While a run is active each send Steer-injects into
     // the live session (picked up at the next turn boundary); when idle the first
@@ -533,7 +482,14 @@ pub fn PhoneComposer() -> impl IntoView {
         }
         if ev.key() == "Enter" && !ev.shift_key() {
             ev.prevent_default();
-            if answer_pending_ask() {
+            // A local slash command is not an answer to the parked question.
+            if intercept_theme() {
+                return;
+            }
+            // A pending question owns the send key: the card is the only
+            // addressed answer surface, so the draft stays and nothing is sent.
+            if pending_ask.get_untracked().is_some() {
+                ask_hint.set(true);
                 return;
             }
             if running() {
@@ -552,6 +508,15 @@ pub fn PhoneComposer() -> impl IntoView {
                 <ThemeCommandPicker open=theme_open invalid=theme_invalid selected=theme_selected />
             </div>
             <AttachmentPreviewBar attachments=attachments />
+
+            // Hint raised when Enter was pressed while the question card owned
+            // the send key. The draft is still there — the card is the only
+            // place that can answer the parked question.
+            <Show when=move || ask_hint.get() && pending_ask.get().is_some()>
+                <div role="status" style="font-size:11px; color:var(--color-text-subtle);">
+                    {t_string!(i18n, chat.ask_user_guide)}
+                </div>
+            </Show>
 
             // Toolbar row: attach + the two session pills. The pickers are the
             // desktop components verbatim, and their popovers are sized for a
@@ -808,6 +773,34 @@ mod tests {
             !src.contains("class=\"phone-composer-tools\" style="),
             "the composer toolbar row grew an inline style again — whatever it \
              sets can no longer be overridden by the landscape media query"
+        );
+    }
+
+    /// The phone composer must not answer a parked question for the user.
+    ///
+    /// The question card is the only addressed answer surface: it stages the
+    /// answers, sends one typed `submit` (or `cancel`), and shows what it
+    /// sent. An implicit "whatever you typed is the answer" path guesses — and
+    /// it used to echo that guess into the transcript as if the user had
+    /// answered deliberately.
+    #[test]
+    fn the_phone_composer_never_answers_a_parked_question() {
+        let src = production_half(include_str!("composer.rs"));
+        for banned in [
+            "answer_pending_ask",
+            "ClarificationApi::resolve",
+            "ClarificationApi::resolve_all",
+        ] {
+            assert!(
+                !src.contains(banned),
+                "the phone composer must leave the parked question to the card, \
+                 but it still contains `{banned}`"
+            );
+        }
+        assert!(
+            src.contains("ask_user_guide"),
+            "the phone composer must point the user at the card when Enter is \
+             pressed while a question is parked"
         );
     }
 

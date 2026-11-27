@@ -1,14 +1,12 @@
+use crate::api::native_credentials::{
+    attempt_current, native_expected, native_handshake, new_device_id, ticket_from_search,
+    AttemptReceipt, ConnectSendError, HandshakeRequest, NativeAuthState, NativeIpc, NativeOutcome,
+};
 use crate::api::ExecApprovalApi;
 use crate::api::TelecomApprovalApi;
-use crate::api::native_credentials::{
-    AttemptReceipt, ConnectSendError, HandshakeRequest, NativeAuthState, NativeIpc,
-    NativeOutcome,
-    attempt_current, native_expected, native_handshake, new_device_id, ticket_from_search,
-};
 use crate::components::sidebar::SystemAlert;
-#[cfg(feature = "panel-modular")]
-use shared_ui_logic::panel::discovery::{PanelDiscoveryState, SnapshotUpdate};
-use crate::state::notifications::{PendingApprovalView, PendingAskView};
+use crate::state::clarification::ClarificationBoard;
+use crate::state::notifications::PendingApprovalView;
 use futures::channel::{mpsc, oneshot};
 use futures::{FutureExt, StreamExt};
 use gloo_timers::future::TimeoutFuture;
@@ -18,13 +16,15 @@ use serde_json::Value;
 use shared_ui_logic::connection::connector::AlephConnector;
 use shared_ui_logic::connection::wasm::WasmConnector;
 use shared_ui_logic::connection::{
-    ConnectionError, ConnectionFailure, FailureStage, OriginLiveness, classify,
-    stage_for_connect_error,
+    classify, stage_for_connect_error, ConnectionError, ConnectionFailure, FailureStage,
+    OriginLiveness,
 };
+#[cfg(feature = "panel-modular")]
+use shared_ui_logic::panel::discovery::{PanelDiscoveryState, SnapshotUpdate};
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// The socket loop and the optional QA ingress use the same receipt fence.
 fn dispatch_received_notification(
@@ -1043,7 +1043,12 @@ pub struct DashboardState {
     /// when the chat surface mounts, so a reload mid-question still finds the
     /// blocked tool. Lives here — not on `ChatState` — because a question can
     /// belong to a background conversation whose `ChatState` isn't mounted.
-    pub pending_clarifications: RwSignal<Vec<PendingAskView>>,
+    ///
+    /// The board owns the live questions, the answers staged for them and
+    /// the fences that keep a late frame from resurrecting a request that
+    /// already ended. A snapshot replaces what it knows; a push only
+    /// notifies.
+    pub clarifications: RwSignal<ClarificationBoard>,
 
     // The `connect` response's `role` is DELIBERATELY not kept (2026-08-07).
     // It had exactly one reader, `is_operator()`, which had exactly one
@@ -1171,7 +1176,7 @@ async fn probe_origin_liveness() -> OriginLiveness {
     );
     let fetch = JsFuture::from(window.fetch_with_str(&url));
 
-    use futures::future::{Either, select};
+    use futures::future::{select, Either};
     match select(Box::pin(fetch), TimeoutFuture::new(ORIGIN_PROBE_TIMEOUT_MS)).await {
         Either::Left((Ok(_), _)) => OriginLiveness::Serving,
         Either::Left((Err(_), _)) => OriginLiveness::Silent,
@@ -1331,7 +1336,7 @@ impl DashboardState {
             pending_telecom_approvals: RwSignal::new(Vec::new()),
             telecom_refresh_in_flight: StoredValue::new(Arc::new(AtomicBool::new(false))),
             approval_subscription_id: StoredValue::new(None),
-            pending_clarifications: RwSignal::new(Vec::new()),
+            clarifications: RwSignal::new(ClarificationBoard::default()),
             needs_token: RwSignal::new(false),
             token_was_rejected: RwSignal::new(false),
             connection_failure: RwSignal::new(None),
@@ -2097,7 +2102,7 @@ impl DashboardState {
         // closed"); this 30s ceiling additionally covers a server that accepts
         // the request and then never replies without closing the socket,
         // converting an infinite spinner into a surfaced, retryable error.
-        use futures::future::{Either, select};
+        use futures::future::{select, Either};
         match select(response_rx, TimeoutFuture::new(30_000)).await {
             Either::Left((res, _)) => {
                 res.map_err(|e| RpcFailure::local(format!("Response channel closed: {e}")))?
@@ -2360,7 +2365,7 @@ impl DashboardState {
         }
         let mut connector = WasmConnector::new();
 
-        use futures::future::{Either, select};
+        use futures::future::{select, Either};
         let open_result = {
             let connect_fut = Box::pin(connector.connect(&url));
             let open = select(connect_fut, TimeoutFuture::new(WS_OPEN_TIMEOUT_MS)).await;
@@ -3169,8 +3174,10 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
         state.has_connected_once.set(true);
         state.panel_discovery.update(|discovery| {
             discovery.begin_connection(1);
-            let _ =
-                discovery.accept_snapshot(1, shared_ui_logic::panel::source::community_fixture_snapshot());
+            let _ = discovery.accept_snapshot(
+                1,
+                shared_ui_logic::panel::source::community_fixture_snapshot(),
+            );
         });
     }
     provide_context(state);
@@ -3278,13 +3285,6 @@ pub(crate) mod tests {
     // a day: every test in this crate stopped compiling, so none of them ran
     // and none of them could fail.
     use super::{
-        BASE_TOPICS,
-        GATEWAY_NOT_READY,
-        GatewayReadiness,
-        PendingRpcs,
-        RpcFailure,
-        SubmittedCredential,
-        SubscribeError,
         approval_seed_applies,
         // `role_is_operator` was removed with the cached `role` field (see the
         // 2026-08-07 note above); nothing in this module used it and only the
@@ -3300,6 +3300,13 @@ pub(crate) mod tests {
         subscribe_diagnostic,
         subscribe_recorded,
         ws_url_for,
+        GatewayReadiness,
+        PendingRpcs,
+        RpcFailure,
+        SubmittedCredential,
+        SubscribeError,
+        BASE_TOPICS,
+        GATEWAY_NOT_READY,
     };
     use leptos::prelude::{GetUntracked, GetValue, Set, Update};
     use std::collections::BTreeSet;
@@ -3386,13 +3393,13 @@ pub(crate) mod tests {
         pub(crate) fn with_rpc(
             state: super::DashboardState,
             rpc: impl Fn(
-                &'static str,
-                serde_json::Value,
-            )
-                -> futures::future::LocalBoxFuture<'static, Result<serde_json::Value, String>>
-            + Send
-            + Sync
-            + 'static,
+                    &'static str,
+                    serde_json::Value,
+                )
+                    -> futures::future::LocalBoxFuture<'static, Result<serde_json::Value, String>>
+                + Send
+                + Sync
+                + 'static,
         ) -> Self {
             let effects = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
             let jobs =
@@ -3468,35 +3475,55 @@ pub(crate) mod tests {
 
     #[test]
     fn terminal_coverage_exact_epoch_checks_readiness_before_effects_and_allows_retry() {
-        use leptos::prelude::Owner;
-        use futures::FutureExt;
         use futures::channel::oneshot;
+        use futures::FutureExt;
+        use leptos::prelude::Owner;
         Owner::new().with(|| {
             let state = super::DashboardState::new();
             let host = PtyHarness::new(state);
             // A disconnected request must not even poll readiness.
-            assert!(futures::executor::block_on(state.acquire_pty_topic_at_epoch_with_io(
-                "pty.screen", 1, host.io.clone(), async { panic!("waited while disconnected") },
-            )).is_err());
+            assert!(
+                futures::executor::block_on(state.acquire_pty_topic_at_epoch_with_io(
+                    "pty.screen",
+                    1,
+                    host.io.clone(),
+                    async { panic!("waited while disconnected") },
+                ))
+                .is_err()
+            );
             assert!(host.methods().is_empty());
             state.is_connected.set(true);
             state.connection_epoch.set(1);
             let (ack, ready) = oneshot::channel();
-            let mut pending = state.acquire_pty_topic_at_epoch_with_io(
-                "pty.screen", 1, host.io.clone(), async { ready.await.unwrap(); Ok(()) },
-            ).boxed_local();
+            let mut pending = state
+                .acquire_pty_topic_at_epoch_with_io("pty.screen", 1, host.io.clone(), async {
+                    ready.await.unwrap();
+                    Ok(())
+                })
+                .boxed_local();
             assert!(pending.as_mut().now_or_never().is_none());
             state.connection_epoch.set(2);
             ack.send(()).unwrap();
             assert!(futures::executor::block_on(pending).is_err());
             assert!(host.flush().is_empty());
-            assert!(host.methods().is_empty(), "stale readiness has zero RPC effects");
-            assert!(futures::executor::block_on(state.acquire_pty_topic_at_epoch_with_io(
-                "pty.screen", 1, host.io.clone(), async { Ok(()) },
-            )).is_err());
-            let mut retry = state.acquire_pty_topic_at_epoch_with_io(
-                "pty.screen", 2, host.io.clone(), async { Ok(()) },
-            ).boxed_local();
+            assert!(
+                host.methods().is_empty(),
+                "stale readiness has zero RPC effects"
+            );
+            assert!(
+                futures::executor::block_on(state.acquire_pty_topic_at_epoch_with_io(
+                    "pty.screen",
+                    1,
+                    host.io.clone(),
+                    async { Ok(()) },
+                ))
+                .is_err()
+            );
+            let mut retry = state
+                .acquire_pty_topic_at_epoch_with_io("pty.screen", 2, host.io.clone(), async {
+                    Ok(())
+                })
+                .boxed_local();
             assert!(retry.as_mut().now_or_never().is_none());
             assert_eq!(host.flush(), [Ok(())]);
             let lease = futures::executor::block_on(retry).unwrap();
@@ -3504,7 +3531,11 @@ pub(crate) mod tests {
             state.connection_epoch.set(3);
             drop(lease);
             assert_eq!(host.flush(), [Ok(())]);
-            assert_eq!(host.methods(), ["events.subscribe"], "no replacement unsubscribe");
+            assert_eq!(
+                host.methods(),
+                ["events.subscribe"],
+                "no replacement unsubscribe"
+            );
         });
     }
 
@@ -3560,13 +3591,12 @@ pub(crate) mod tests {
         drop(second);
         assert_eq!(host.flush(), [Ok(())]);
         assert_eq!(host.methods(), ["events.subscribe", "events.unsubscribe"]);
-        assert!(
-            host.effects
-                .lock()
-                .unwrap()
-                .iter()
-                .all(|(_, params)| params == &super::topics_request("pty.screen", &[]))
-        );
+        assert!(host
+            .effects
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(_, params)| params == &super::topics_request("pty.screen", &[])));
     }
 
     #[test]
@@ -3753,12 +3783,10 @@ pub(crate) mod tests {
         assert_eq!(host.flush(), [Ok(())]);
         assert_eq!(host.methods(), ["events.subscribe"]);
         let ledger = host.state.subscribed_topics.get_value();
-        assert!(
-            ledger
-                .lock()
-                .unwrap()
-                .contains(&("pty.screen".into(), Vec::new()))
-        );
+        assert!(ledger
+            .lock()
+            .unwrap()
+            .contains(&("pty.screen".into(), Vec::new())));
         let lease = host.acquire();
         futures::executor::block_on(
             host.state
@@ -3766,12 +3794,10 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(host.methods(), ["events.subscribe"]);
-        assert!(
-            !ledger
-                .lock()
-                .unwrap()
-                .contains(&("pty.screen".into(), Vec::new()))
-        );
+        assert!(!ledger
+            .lock()
+            .unwrap()
+            .contains(&("pty.screen".into(), Vec::new())));
         drop(lease);
         assert_eq!(host.flush(), [Ok(())]);
         assert_eq!(host.methods(), ["events.subscribe", "events.unsubscribe"]);
@@ -3789,7 +3815,7 @@ pub(crate) mod tests {
 
     #[test]
     fn telecom_poll_needs_initial_success_and_stops_on_role_refusal() {
-        use super::{RpcFailure, telecom_poll_continues};
+        use super::{telecom_poll_continues, RpcFailure};
         let transport = Some(Err(RpcFailure {
             code: None,
             message: "temporary disconnect".into(),
