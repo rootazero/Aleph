@@ -97,16 +97,11 @@ pub async fn save_credential<I: BridgeIpc>(
 // ---------------------------------------------------------------------------
 
 /// Pure truth table: the Panel expects a native Bridge if the shell's
-/// main-frame marker is set, the shell's `data-shell` attribute is present, or
-/// Tauri's IPC internals exist. Any one is enough: a *missing* marker must not
-/// downgrade a native shell to "pure browser".
+/// main-frame marker or NSH's `data-shell` attribute is present. Either is
+/// sufficient: a missing marker must not downgrade the shell to browser mode.
 #[must_use]
-pub const fn native_expected_from(
-    marker: bool,
-    shell_attribute: bool,
-    tauri_internals: bool,
-) -> bool {
-    marker || shell_attribute || tauri_internals
+pub const fn native_expected_from(marker: bool, shell_attribute: bool) -> bool {
+    marker || shell_attribute
 }
 
 /// Whether this Panel runs inside the native shell and must use the Bridge.
@@ -119,11 +114,6 @@ pub fn native_expected() -> bool {
     let Some(window) = web_sys::window() else {
         return false;
     };
-    let has = |key: &str| {
-        Reflect::get(&window, &JsValue::from_str(key))
-            .map(|v| !v.is_undefined() && !v.is_null())
-            .unwrap_or(false)
-    };
     let marker = Reflect::get(&window, &JsValue::from_str("__ALEPH_PANEL_KEYRING__"))
         .map(|v| v.as_bool() == Some(true))
         .unwrap_or(false);
@@ -131,8 +121,9 @@ pub fn native_expected() -> bool {
         .document()
         .and_then(|d| d.document_element())
         .and_then(|e| e.get_attribute("data-shell"))
-        .is_some_and(|shell| matches!(shell.as_str(), "aleph-tauri" | "aleph-nsh"));
-    native_expected_from(marker, shell_attribute, has("__TAURI_INTERNALS__"))
+        .as_deref()
+        == Some("aleph-nsh");
+    native_expected_from(marker, shell_attribute)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -141,75 +132,7 @@ pub fn native_expected() -> bool {
     false
 }
 
-/// The real IPC: `window.__TAURI_INTERNALS__.invoke`, with the three fixed
-/// commands only (the callers above are the only users). No `eval`.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TauriIpc;
-
-#[cfg(target_arch = "wasm32")]
-impl BridgeIpc for TauriIpc {
-    fn invoke(
-        &self,
-        command: &'static str,
-        args: Value,
-    ) -> impl Future<Output = Result<Value, BridgeError>> {
-        wasm_invoke(command, args)
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl BridgeIpc for TauriIpc {
-    fn invoke(
-        &self,
-        _command: &'static str,
-        _args: Value,
-    ) -> impl Future<Output = Result<Value, BridgeError>> {
-        std::future::ready(Err(BridgeError::Unavailable))
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-async fn wasm_invoke(command: &'static str, args: Value) -> Result<Value, BridgeError> {
-    use js_sys::{Function, Promise, Reflect, JSON};
-    use wasm_bindgen::{JsCast, JsValue};
-    use wasm_bindgen_futures::JsFuture;
-
-    let window = web_sys::window().ok_or(BridgeError::Unavailable)?;
-    let internals = Reflect::get(&window, &JsValue::from_str("__TAURI_INTERNALS__"))
-        .map_err(|_| BridgeError::Unavailable)?;
-    if internals.is_undefined() || internals.is_null() {
-        return Err(BridgeError::Unavailable);
-    }
-    let invoke: Function = Reflect::get(&internals, &JsValue::from_str("invoke"))
-        .map_err(|_| BridgeError::Unavailable)?
-        .dyn_into()
-        .map_err(|_| BridgeError::Unavailable)?;
-    let js_args = if args.is_null() {
-        JsValue::UNDEFINED
-    } else {
-        JSON::parse(&args.to_string()).map_err(|_| BridgeError::Malformed)?
-    };
-    let ret = invoke
-        .call2(&internals, &JsValue::from_str(command), &js_args)
-        .map_err(|_| BridgeError::Unavailable)?;
-    let promise: Promise = ret.dyn_into().map_err(|_| BridgeError::Unavailable)?;
-    // The rejection payload is deliberately dropped: it may name the account
-    // or the keyring backend.
-    let value = JsFuture::from(promise)
-        .await
-        .map_err(|_| BridgeError::Rejected)?;
-    if value.is_undefined() {
-        return Ok(Value::Null);
-    }
-    let text = JSON::stringify(&value)
-        .map_err(|_| BridgeError::Malformed)?
-        .as_string()
-        .ok_or(BridgeError::Malformed)?;
-    serde_json::from_str(&text).map_err(|_| BridgeError::Malformed)
-}
-
-/// The explicit native IPC selector. NSH and Tauri have separate transports;
-/// NSH never emulates Tauri's private invoke object.
+/// The native credential transport through the typed NSH bridge.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NativeIpc;
 
@@ -220,13 +143,7 @@ impl BridgeIpc for NativeIpc {
         command: &'static str,
         args: Value,
     ) -> impl Future<Output = Result<Value, BridgeError>> {
-        async move {
-            if nsh_shell_present() {
-                nsh_invoke(command, args).await
-            } else {
-                wasm_invoke(command, args).await
-            }
-        }
+        nsh_invoke(command, args)
     }
 }
 
@@ -246,8 +163,7 @@ pub(crate) fn nsh_shell_present() -> bool {
     let Some(window) = web_sys::window() else {
         return false;
     };
-    // Presence selects the transport even if malformed: never fall through to
-    // Tauri or browser storage when an NSH bridge failed to initialize.
+    // Desktop settings remain visible when the bridge is present but unavailable.
     js_sys::Reflect::has(
         &window,
         &wasm_bindgen::JsValue::from_str("__alephShellBridge"),
@@ -1321,10 +1237,10 @@ mod tests {
 
     #[test]
     fn a_missing_marker_does_not_downgrade_a_native_shell() {
-        assert!(!native_expected_from(false, false, false));
-        assert!(native_expected_from(true, false, false));
-        assert!(native_expected_from(false, true, false));
-        assert!(native_expected_from(false, false, true));
+        assert!(!native_expected_from(false, false));
+        assert!(native_expected_from(true, false));
+        assert!(native_expected_from(false, true));
+        assert!(native_expected_from(true, true));
     }
 
     #[test]
@@ -1337,7 +1253,7 @@ mod tests {
     #[test]
     fn host_ipc_is_unavailable_not_a_fallback() {
         assert_eq!(
-            block_on(TauriIpc.invoke(COMMAND_LOAD, Value::Null)).unwrap_err(),
+            block_on(NativeIpc.invoke(COMMAND_LOAD, Value::Null)).unwrap_err(),
             BridgeError::Unavailable
         );
     }

@@ -170,9 +170,8 @@ pub(crate) enum MicError {
 
 /// Is the Panel running inside the native desktop shell? The shell injects
 /// `data-shell` on `<html>` for every document it loads, including the
-/// remote-served Panel, before the page's own first script: `"aleph-nsh"`
-/// from the NSH host (`desktop/nsh-shell/src/panel_bridge.js`), and
-/// `"aleph-tauri"` from the Tauri host until that host is removed.
+/// remote-served Panel: `"aleph-nsh"` from
+/// `desktop/nsh-shell/src/panel_bridge.js`.
 ///
 /// Prefer it over runtime globals because it is *our* marker: one writer per
 /// host, one spelling. The distinction matters for a mic *denial*: the shell
@@ -192,7 +191,7 @@ pub(crate) fn is_native_shell() -> bool {
 
 /// Whether a `data-shell` value names one of Aleph's desktop hosts.
 fn native_shell_marker(data_shell: Option<&str>) -> bool {
-    matches!(data_shell, Some("aleph-nsh" | "aleph-tauri"))
+    data_shell == Some("aleph-nsh")
 }
 
 impl MicError {

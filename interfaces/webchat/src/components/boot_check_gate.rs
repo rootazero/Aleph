@@ -1,7 +1,7 @@
 //! `BootCheckGate` — pre-app-shell overlay that blocks rendering of the main
 //! UI until the panel has connected to the Gateway at least once.
 //!
-//! Aleph's desktop App is a single-core single-window Tauri build, so this
+//! Aleph's desktop app uses one Core and one window, so this
 //! gate intentionally omits openhuman's Local/Cloud mode picker (R3 — no
 //! choice the user doesn't actually have). What it keeps:
 //!   * A "Connecting…" overlay while the first probe is in flight, so the

@@ -82,7 +82,7 @@ pub fn PhoneTabBar() -> impl IntoView {
 /// 20 px gap were stacked on top of desktop padding — 40 px of gutter on a
 /// 390 px viewport. It also scopes the `.phone-wrapped` shim (`styles/ios.css`),
 /// which stacks the desktop two-column layouts, collapses multi-column grids and
-/// drops the macOS traffic-light inset that is meaningless inside this shell.
+/// removes the wide-layout content inset inside the phone chrome.
 #[component]
 #[must_use]
 pub fn PhoneShell(
