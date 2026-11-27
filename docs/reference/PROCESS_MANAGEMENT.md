@@ -52,7 +52,7 @@ Aleph 启动对端 harness 子进程，让它作为 **ACP 客户端**的对面�
 
 - **单所有者**：每个 `SessionKey`（harness + cwd + 可选 session name）在 `src/acp/manager/` 里只有一个 slot。同键的**启动与回收串行**，异键并行；只有 harness 注册仍然有效时才发布 live owner，所以已更新或已注销的 harness 不会留下孤儿子进程。
 - **停机语义**：显式关闭、显式替换与成功的 harness 更新/禁用/注销会回收子进程并清除关联（含仅落盘、无进程的记录）；被拒绝的配置变更保留关联。**服务停止**保留可恢复 ID，经共享启动资源排空写入者（`src/bin/aleph-server/commands/start/builder/startup_resources.rs`）后退出，重启时只经 `session/load` 恢复，不新建空白上下文。
-- **取消**：走独立的 `CancelHandle`（`src/acp/session.rs`），**不等待 prompt 锁**，直接打断正在运行的 turn；结果区分「已发出通知」与「无会话可取消」。
+- **取消**：走独立的 `CancelHandle`（`src/acp/session.rs`），绕开 prompt 锁发送协作取消通知。结果区分「已发送」与「尚无远端 ID，未发送」。
 - **准入**：`trust_level=disabled` 在 manager 准入处被拒，发生在任何子进程启动之前。
 
 Aleph spawns the peer harness child as the far side of an **ACP client** session. The manager in `src/acp/manager/` owns that child and the local-key ↔ remote-session-ID association.

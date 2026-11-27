@@ -329,7 +329,7 @@ English: Registration identity is shared across event, pending snapshot and comp
 `acp.sessions.list` / `acp.sessions.cancel` / `acp.sessions.shutdown` 是 **Admin 类**方法（授权分类见 `src/gateway/method_census.rs`），实现位于 `src/gateway/handlers/acp_config.rs`。它们只控制 Aleph 侧自己拥有的 ACP 客户端会话生命周期，不改变对端 harness 的协议语义。
 
 - `acp.sessions.list`：返回会话快照，每条含 harness、cwd、可选 session name、远端 ACP session ID、存活状态与会话状态；**可选 `load_error`** 字段只在恢复失败时出现，说明上次 `session/load` 的失败原因（此时远端 ID 仍保留，可重试同一条恢复路径）。
-- `acp.sessions.cancel`：按 harness / cwd / session name 取消，**不等待 prompt 锁**，直接打断正在运行的 turn；返回值区分「已发出取消通知」与「无会话可取消」两种结果。
+- `acp.sessions.cancel`：按 harness / cwd / session name 向当前子进程发送协作取消通知。此调用绕开 prompt 锁。`cancelled: true` 表示通知已发送，`cancelled: false` 表示子进程尚无远端 ID。没有活动实例时返回错误。
 - `acp.sessions.shutdown`：显式关闭并清除该会话的关联记录——包括只有落盘记录、没有活进程的条目；重复调用是幂等的。harness 更新/禁用/注销同样会清除该 harness 的关联，而被拒绝的配置变更保留关联。服务停止则相反：保留可恢复 ID，并经共享启动资源排空写入者后退出。
 
 `acp.sessions.changed` 是**重读信号**，不是数据通道：它由已提交的内存状态变更发出，客户端据此重新 `acp.sessions.list`；落盘的 `acp_sessions.json` 才是重启后恢复的来源。
