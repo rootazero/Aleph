@@ -984,7 +984,7 @@ pub fn parse_mcp_config_content(
     base: &Path,
     plugin_id: &str,
 ) -> Result<Vec<CapabilityDeclaration>> {
-    crate::extension::mcp_config::parse_declared_servers(content, base, plugin_id)
+    crate::extension::mcp_config::parse_declared_servers(content, base, plugin_id, true)
         .map(|servers| {
             servers
                 .into_iter()
@@ -1548,9 +1548,11 @@ mod tests {
             err.to_string().contains("`mode:` is not supported"),
             "the error must name the rejected key: {err}"
         );
-        assert!(parse_agents_dir(dir.path(), "agents", "plug")
-            .unwrap()
-            .is_empty());
+        assert!(
+            parse_agents_dir(dir.path(), "agents", "plug")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// 24 of 28 marketplace agents write `tools: Read, Grep, Bash` — the comma
@@ -2233,12 +2235,16 @@ mod tests {
             .filter(|l| l.contains("hook matcher"))
             .collect();
         assert_eq!(notices.len(), 2, "{logged}");
-        assert!(notices
-            .iter()
-            .any(|l| l.contains("`resume`") && l.contains("never fires")));
-        assert!(notices
-            .iter()
-            .any(|l| l.contains("`x`") && l.contains("ignored")));
+        assert!(
+            notices
+                .iter()
+                .any(|l| l.contains("`resume`") && l.contains("never fires"))
+        );
+        assert!(
+            notices
+                .iter()
+                .any(|l| l.contains("`x`") && l.contains("ignored"))
+        );
     }
 
     /// The third reader of a matcher, `aleph.plugin.toml`'s `[[hooks]]

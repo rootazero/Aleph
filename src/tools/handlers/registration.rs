@@ -11,8 +11,8 @@ use crate::sync_primitives::Arc;
 use crate::mcp::{McpClient, McpTool};
 use crate::tool_metadata::ToolCatalog;
 use crate::tools::descriptor::ToolCapabilityDescriptor;
-use crate::tools::handlers::mcp::McpHandler;
 use crate::tools::handlers::ToolHandler;
+use crate::tools::handlers::mcp::McpHandler;
 use crate::tools::probes::mcp::McpServerProbe;
 use crate::tools::registration_scope::ToolRegistrationScope;
 use crate::tools::registry::ToolHandlerRegistry;
@@ -87,6 +87,9 @@ pub async fn register_mcp_tools(
     // disposer compares generations before removing each projection.
     let mut catalog_entries: Vec<(String, u64, String)> = Vec::new();
     for tool in tools {
+        if client.is_retired() {
+            break;
+        }
         // Quarantine structurally-unusable parameter schemas. A function-call
         // tool's parameters MUST be an object schema; an MCP server that
         // advertises a non-object schema would otherwise make every provider

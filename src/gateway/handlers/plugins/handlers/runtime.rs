@@ -36,9 +36,25 @@ pub async fn handle_call_tool(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => return e.with_id(request.id),
     };
 
-    // Call the plugin tool
+    let target = PluginTarget::from_fields(params.plugin_id, params.selector);
+    let access = match current_plugin_access() {
+        crate::extension::plugin_target::PluginAccess::LocalOperator => {
+            crate::extension::plugin_target::PluginAccess::global()
+        }
+        access => access,
+    };
+    let instance = match manager.resolve_plugin_target(&target, &access).await {
+        Ok(instance) => instance,
+        Err(error) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Tool call failed: {error}"),
+            );
+        }
+    };
     match manager
-        .call_plugin_tool(&params.plugin_id, &params.handler, params.args)
+        .call_plugin_tool_at(&instance.runtime_key(), &params.handler, params.args)
         .await
     {
         Ok(result) => JsonRpcResponse::success(request.id, json!({ "result": result })),

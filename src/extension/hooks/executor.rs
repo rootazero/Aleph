@@ -1,18 +1,18 @@
 //! `HookExecutor` implementation — action dispatch and execution logic
 
-use super::matcher::{compile_matcher, matcher_verdict, CompiledMatcher, MatcherVerdict};
+use super::matcher::{CompiledMatcher, MatcherVerdict, compile_matcher, matcher_verdict};
 use super::session_facts::SessionFacts;
 use super::{
-    plugin_shell_line, substitute_variables, ActionResult, HookContext, ShellHookConsent,
-    DEFAULT_COMMAND_TIMEOUT_SECS, MAX_HOOK_TIMEOUT_SECS, PLUGIN_DATA_VARIABLES,
-    PLUGIN_ROOT_VARIABLES,
+    ActionResult, DEFAULT_COMMAND_TIMEOUT_SECS, HookContext, MAX_HOOK_TIMEOUT_SECS,
+    PLUGIN_DATA_VARIABLES, PLUGIN_ROOT_VARIABLES, ShellHookConsent, plugin_shell_line,
+    substitute_variables,
 };
+use crate::extension::ExtensionError;
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
 use crate::extension::visibility::ScopeKey;
-use crate::extension::ExtensionError;
 use crate::session::{
     call_log::emit_for_ambient_call,
-    events::{now_ms, SessionEvent},
+    events::{SessionEvent, now_ms},
     service::SessionId,
 };
 use crate::sync_primitives::Arc;
@@ -297,7 +297,7 @@ fn build_event_payload_value(
     context: &HookContext,
     facts: &SessionFacts,
 ) -> serde_json::Value {
-    use serde_json::{json, Map, Value};
+    use serde_json::{Map, Value, json};
     let mut payload: Map<String, Value> = Map::new();
     payload.insert(
         "hook_event_name".into(),
@@ -396,7 +396,7 @@ fn describe_action(action: &HookAction) -> String {
         HookAction::Agent { agent } => ("agent", agent.as_str()),
         HookAction::Http { url, .. } => ("http", url.as_str()),
         HookAction::Plugin { plugin_id, handler } => {
-            return format!("plugin: {plugin_id}::{handler}")
+            return format!("plugin: {plugin_id}::{handler}");
         }
     };
     format!(
@@ -463,6 +463,7 @@ pub struct HookExecutor {
     /// disables the gate entirely (the default, so tests run commands freely).
     consent: Option<Arc<ShellHookConsent>>,
     memo_sink: Option<Arc<dyn HookMemoSink>>,
+    plugin_visibility: Option<Arc<std::sync::RwLock<crate::extension::PluginRuntimeView>>>,
     /// Metadata follows config insertion order, before any execution/view sort.
     metadata: Vec<Option<super::registry::HookMetadata>>,
     rejected: Vec<(HookConfig, super::registry::HookMetadata)>,
@@ -482,6 +483,7 @@ impl HookExecutor {
             regex_cache,
             consent: None,
             memo_sink: None,
+            plugin_visibility: None,
         }
     }
 
@@ -515,6 +517,14 @@ impl HookExecutor {
     /// `aleph-server hooks` CLI.
     pub fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
         self.consent = Some(consent);
+        self
+    }
+
+    pub(in crate::extension) fn with_plugin_visibility(
+        mut self,
+        view: Arc<std::sync::RwLock<crate::extension::PluginRuntimeView>>,
+    ) -> Self {
+        self.plugin_visibility = Some(view);
         self
     }
 
@@ -691,6 +701,27 @@ impl HookExecutor {
         ctx: &crate::extension::visibility::VisibilityCtx,
     ) -> bool {
         crate::extension::visibility::visible_to(&hook.scope_key, ctx)
+    }
+
+    fn hook_visible(
+        &self,
+        index: usize,
+        hook: &HookConfig,
+        ctx: &crate::extension::visibility::VisibilityCtx,
+        authorized: &crate::extension::visibility::VisibilityCtx,
+    ) -> bool {
+        let owner = self
+            .metadata
+            .get(index)
+            .and_then(Option::as_ref)
+            .and_then(|metadata| metadata.plugin_owner.as_deref());
+        match (owner, &self.plugin_visibility) {
+            (Some(owner), Some(view)) => view
+                .read()
+                .unwrap_or_else(|error| error.into_inner())
+                .package_visible(owner, authorized),
+            _ => self.project_scope_allows(hook, ctx),
+        }
     }
 
     /// Execute a single action.
@@ -1257,6 +1288,7 @@ impl HookExecutor {
 
         let mut current_context = context;
         let visibility = crate::extension::visibility::VisibilityCtx::for_session();
+        let authorized = crate::extension::visibility::VisibilityCtx::for_authorized_run();
 
         for (index, hook) in interceptors {
             // Check matcher pattern
@@ -1265,7 +1297,7 @@ impl HookExecutor {
             }
 
             // Project-scoped hooks fire only in their own workspace.
-            if !self.project_scope_allows(hook, &visibility) {
+            if !self.hook_visible(index, hook, &visibility, &authorized) {
                 continue;
             }
 
@@ -1531,6 +1563,7 @@ impl HookExecutor {
     /// Errors are logged but do not propagate.
     pub async fn execute_observers(&self, event: HookEvent, context: &HookContext) {
         let visibility = crate::extension::visibility::VisibilityCtx::for_session();
+        let authorized = crate::extension::visibility::VisibilityCtx::for_authorized_run();
         // Filter hooks by event and kind == Observer
         let observers: Vec<_> = self
             .hooks
@@ -1538,7 +1571,7 @@ impl HookExecutor {
             .enumerate()
             .filter(|(_, h)| h.event == event && h.kind == HookKind::Observer)
             .filter(|(_, h)| self.matches_pattern(h, context))
-            .filter(|(_, h)| self.project_scope_allows(h, &visibility))
+            .filter(|(index, hook)| self.hook_visible(*index, hook, &visibility, &authorized))
             .collect();
 
         if observers.is_empty() {
@@ -1629,7 +1662,7 @@ impl HookExecutor {
 mod tests {
     use super::*;
     use crate::extension::types::HookEvent;
-    use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
+    use crate::extension::visibility::{ScopeKey, VisibilityCtx, canonical_root};
     use std::path::PathBuf;
 
     fn dummy_hook(plugin_name: &str) -> HookConfig {
@@ -1709,10 +1742,12 @@ mod tests {
         assert!(star.reachable && star.issue.is_none(), "{star:?}");
         let broken = entry(HookEvent::BeforeToolCall, "((");
         assert!(!broken.reachable, "{broken:?}");
-        assert!(broken
-            .issue
-            .unwrap_or_default()
-            .contains("not a valid regex"));
+        assert!(
+            broken
+                .issue
+                .unwrap_or_default()
+                .contains("not a valid regex")
+        );
 
         let ignored = entry(HookEvent::UserPromptSubmit, "anything");
         assert!(ignored.reachable, "{ignored:?}");
@@ -1729,11 +1764,13 @@ mod tests {
 
         let entry = &HookExecutor::new(vec![hook]).inventory()[0];
         assert!(!entry.reachable);
-        assert!(entry
-            .issue
-            .as_deref()
-            .unwrap_or_default()
-            .contains("observers"));
+        assert!(
+            entry
+                .issue
+                .as_deref()
+                .unwrap_or_default()
+                .contains("observers")
+        );
     }
 
     #[test]
@@ -1961,7 +1998,9 @@ mod tests {
         assert!(
             exec.project_scope_allows(&dummy_hook("user:global"), &VisibilityCtx::for_session())
         );
-        assert!(exec.project_scope_allows(&dummy_hook("plugin:foo"), &VisibilityCtx::for_session()));
+        assert!(
+            exec.project_scope_allows(&dummy_hook("plugin:foo"), &VisibilityCtx::for_session())
+        );
     }
 
     /// The gate no longer sniffs the `user:project` label: a plugin-shipped
@@ -2612,7 +2651,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_tool_payload_carries_the_claude_code_envelope_keys() {
-        use crate::extension::hooks::{with_transcript_source, HookContext};
+        use crate::extension::hooks::{HookContext, with_transcript_source};
         let ctx = HookContext::new("agent:main:ws:1")
             .with_tool_name("file_read")
             .with_tool_input(r#"{"path":"/tmp/x"}"#)
@@ -2809,7 +2848,7 @@ mod tests {
     /// even though it names a file for another one.
     #[tokio::test]
     async fn a_source_without_this_sessions_file_leaves_the_key_out() {
-        use crate::extension::hooks::{with_transcript_source, HookContext};
+        use crate::extension::hooks::{HookContext, with_transcript_source};
         let ctx = HookContext::new("agent:main:other");
         let json: serde_json::Value = serde_json::from_str(
             &with_transcript_source(one_transcript("agent:main:ws:1", "/t.jsonl"), async {

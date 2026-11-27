@@ -30,9 +30,7 @@ impl PluginAccess {
     }
 
     pub(crate) fn for_run() -> Self {
-        crate::projects::current_project_root().map_or_else(Self::global, |root| {
-            Self::Scoped(VisibilityCtx::from_project_root(Some(root)))
-        })
+        Self::Scoped(VisibilityCtx::for_authorized_run())
     }
 
     pub(crate) fn allows(&self, scope: &ScopeKey) -> bool {
@@ -87,7 +85,7 @@ pub(crate) enum PluginTargetError {
     OperatorRequired(String),
 }
 
-fn resolve_target(
+pub(super) fn resolve_target(
     registry: &PluginRegistry,
     target: &PluginTarget,
     access: &PluginAccess,

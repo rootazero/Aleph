@@ -13,15 +13,15 @@ mod secret_resolver;
 
 pub use allowlist::{AllowlistError, AllowlistValidator};
 pub use capabilities::{
-    host_matches_pattern, CredentialBinding, CredentialInject, EndpointPattern, HttpCapability,
-    RateLimit, SecretsCapability, WasmCapabilities, WorkspaceCapability,
+    CredentialBinding, CredentialInject, EndpointPattern, HttpCapability, RateLimit,
+    SecretsCapability, WasmCapabilities, WorkspaceCapability, host_matches_pattern,
 };
 pub use capability_kernel::{CapabilityError, WasmCapabilityKernel};
-pub use credential_injector::{inject_credential, CredentialError};
+pub use credential_injector::{CredentialError, inject_credential};
 pub use limits::WasmResourceLimits;
 pub use secret_resolver::{
-    shared_resolver, DenyAllSecretResolver, InMemorySecretResolver, SecretResolver,
-    VaultBackedSecretResolver,
+    DenyAllSecretResolver, InMemorySecretResolver, SecretResolver, VaultBackedSecretResolver,
+    shared_resolver,
 };
 
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ use crate::extension::manifest::PluginManifest;
 
 use crate::sync_primitives::{Arc, Mutex};
 
-use extism::{Manifest as ExtismManifest, PluginBuilder, UserData, Wasm, PTR};
+use extism::{Manifest as ExtismManifest, PTR, PluginBuilder, UserData, Wasm};
 
 /// Input for WASM tool calls
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -313,6 +313,16 @@ impl WasmRuntime {
         resolver: Option<Arc<dyn SecretResolver>>,
         settings: &serde_json::Value,
     ) -> Result<(), ExtensionError> {
+        self.load_plugin_at(&manifest.id, manifest, resolver, settings)
+    }
+
+    pub(crate) fn load_plugin_at(
+        &mut self,
+        runtime_key: &str,
+        manifest: &PluginManifest,
+        resolver: Option<Arc<dyn SecretResolver>>,
+        settings: &serde_json::Value,
+    ) -> Result<(), ExtensionError> {
         let wasm_bytes = Self::read_guest_module(manifest)?;
         #[cfg(test)]
         if let Some(probe) = &self.probe {
@@ -512,7 +522,7 @@ impl WasmRuntime {
                 && (settings.is_null() || settings.as_object().is_some_and(|map| map.is_empty())),
         });
 
-        self.plugins.insert(manifest.id.clone(), loaded);
+        self.plugins.insert(runtime_key.to_owned(), loaded);
 
         Ok(())
     }
@@ -799,7 +809,7 @@ pub(crate) mod tests {
     #[test]
     fn ordinary_plugin_vm_enforces_the_mounted_memory_limit() {
         use self::guest_fixture::{
-            call_guest_raw, manifest_with_guest, write_memory_probe_guest, PAYLOAD_A,
+            PAYLOAD_A, call_guest_raw, manifest_with_guest, write_memory_probe_guest,
         };
 
         let directory = tempfile::tempdir().unwrap();

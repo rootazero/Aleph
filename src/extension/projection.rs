@@ -22,7 +22,7 @@
 //!     (delegation) and the harness prompt builder (`<available_agents>`).
 //!   - `SkillSystem` — the scan that feeds the model's `<available_skills>`
 //!     index; `init` receives the base dirs only.
-//!   - `ExtensionManager::active_plugin_tools` — the tool-name index.
+//!   - `ExtensionManager::plugin_runtime_view` — tool registrations and package winners.
 //!     (The hook executor is the fifth view; see `Views::after_transition`
 //!     for how it is rebuilt.)
 //!
@@ -73,8 +73,7 @@ use std::path::PathBuf;
 use tokio::sync::RwLock;
 
 use super::hooks::HookRegistry;
-use super::visibility::ScopeKey;
-use super::{ExtensionManager, PluginRegistry, ToolRegistration};
+use super::{ExtensionManager, PluginRegistry, PluginRuntimeView};
 use crate::discovery::DiscoveryManager;
 use crate::sync_primitives::{Arc, AtomicU64, Mutex as StdMutex, RwLock as StdRwLock};
 
@@ -90,8 +89,7 @@ pub(super) struct Views {
     pub(super) plugin_registry: Arc<RwLock<PluginRegistry>>,
     pub(super) discovery: Arc<DiscoveryManager>,
     pub(super) skill_system: crate::skill::SkillSystem,
-    pub(super) active_plugin_tools: Arc<StdRwLock<HashMap<String, ToolRegistration>>>,
-    pub(super) plugin_scope_keys: Arc<StdRwLock<HashMap<String, ScopeKey>>>,
+    pub(super) plugin_runtime_view: Arc<StdRwLock<PluginRuntimeView>>,
     pub(super) plugin_tool_revision: Arc<AtomicU64>,
     pub(super) runtime_owners: Arc<
         StdMutex<
@@ -112,8 +110,7 @@ impl ExtensionManager {
             plugin_registry: Arc::clone(&self.plugin_registry),
             discovery: Arc::clone(&self.discovery),
             skill_system: self.skill_system.clone(),
-            active_plugin_tools: Arc::clone(&self.active_plugin_tools),
-            plugin_scope_keys: Arc::clone(&self.plugin_scope_keys),
+            plugin_runtime_view: Arc::clone(&self.plugin_runtime_view),
             plugin_tool_revision: Arc::clone(&self.plugin_tool_revision),
             runtime_owners: Arc::clone(&self.runtime_owners),
             owner_trust_policy: Arc::clone(&self.owner_trust_policy),
@@ -172,6 +169,7 @@ impl Views {
                     let plugin = registry.active_plugin(&agent.plugin_id)?;
                     super::plugin_agent_to_def(agent).map(|def| crate::agents::PluginSubagent {
                         scope_key: plugin.scope_key.clone(),
+                        owner: Some(agent.plugin_id.clone()),
                         def,
                     })
                 })

@@ -170,6 +170,9 @@ async fn a_plugin_skill_pregrants_only_from_a_global_plugin() {
         } else {
             ScopeKey::Global
         };
+        let owner =
+            crate::extension::visibility::PluginInstanceKey::new(scope_key.clone(), PLUGIN.into())
+                .runtime_key();
         publish_plugin_skill_dirs(vec![PublishedPluginSkillDir {
             dir: plugin_skills.clone(),
             plugin_id: PLUGIN.into(),
@@ -188,7 +191,7 @@ async fn a_plugin_skill_pregrants_only_from_a_global_plugin() {
 
         assert_eq!(
             source,
-            Some(SkillSource::Plugin(PluginId::new(PLUGIN))),
+            Some(SkillSource::Plugin(PluginId::new(owner))),
             "{case}"
         );
         if matches!(case, "aleph" | "claude cache") {

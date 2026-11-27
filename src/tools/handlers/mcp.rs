@@ -110,19 +110,66 @@ impl McpHandler {
             .strip_prefix(self.server_id.as_str())
             .and_then(|rest| rest.strip_prefix(':'))
             .unwrap_or(&self.tool_name);
-        sanitize_tool_name(&format!("{}__{}", self.server_id, short))
+        qualified_tool_name(&self.server_id, short)
     }
 }
 
-/// Whether `name` is a registry key [`McpHandler::qualified_name`] can
-/// produce for some tool of `server_id`: the same composition
-/// (`{server_id}__{tool}` through [`sanitize_tool_name`]) decides, so the two
-/// cannot drift. A glob, an over-long name or a bare `{server}__` is no key.
-/// A server id so long that its own `__` prefix fills the 64-character key
-/// leaves no room for a tool part, and owns nothing here.
+pub(crate) fn qualified_tool_name(server_id: &str, short: &str) -> String {
+    let prefix = qualified_prefix(server_id);
+    if is_project_server(server_id) {
+        return format!("{prefix}{}", &digest_name(b"mcp-tool", short)[..32]);
+    }
+    sanitize_tool_name(&format!("{prefix}{short}"))
+}
+
+/// Map an authored MCP tool reference to one of the command owner's servers.
+pub(crate) fn scoped_tool_name(
+    declared_server: &str,
+    scoped_server: &str,
+    name: &str,
+) -> Option<String> {
+    let suffix = name.strip_prefix(&qualified_prefix(declared_server))?;
+    if !is_project_server(scoped_server) || suffix.is_empty() || sanitize_tool_name(name) != name {
+        return None;
+    }
+    Some(qualified_tool_name(scoped_server, suffix))
+}
+
+fn is_project_server(server_id: &str) -> bool {
+    crate::extension::mcp_config::owning_plugin_of_server_id(server_id)
+        .is_some_and(|owner| owner.starts_with("p_"))
+}
+
+fn digest_name(domain: &[u8], name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update(b"\0");
+    digest.update(name.as_bytes());
+    hex::encode(digest.finalize())
+}
+
+fn qualified_prefix(server_id: &str) -> String {
+    if is_project_server(server_id) {
+        format!("p_{}", &digest_name(b"mcp-server", server_id)[..30])
+    } else {
+        sanitize_tool_name(&format!("{server_id}__"))
+    }
+}
+
+/// Whether the name matches this server's provider key format.
 pub(crate) fn is_tool_key_of_server(server_id: &str, name: &str) -> bool {
-    let prefix = sanitize_tool_name(&format!("{server_id}__"));
-    name.len() > prefix.len() && name.starts_with(&prefix) && sanitize_tool_name(name) == name
+    let prefix = qualified_prefix(server_id);
+    let Some(suffix) = name.strip_prefix(&prefix) else {
+        return false;
+    };
+    if is_project_server(server_id) {
+        return suffix.len() == 32
+            && suffix
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    }
+    !suffix.is_empty() && sanitize_tool_name(name) == name
 }
 
 /// Map a candidate registry name onto the provider-safe alphabet
@@ -145,6 +192,26 @@ fn sanitize_tool_name(raw: &str) -> String {
 #[async_trait]
 impl ToolHandler for McpHandler {
     async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError> {
+        if self.client.is_retired() {
+            return Err(ToolError::NotFound {
+                name: self.qualified_name(),
+            });
+        }
+        if is_project_server(&self.server_id) {
+            let authorized =
+                crate::extension::mcp_config::owning_plugin_of_server_id(&self.server_id)
+                    .and_then(|owner| {
+                        crate::extension::try_extension_manager()?.plugin_scope_key(owner)
+                    })
+                    .is_some_and(|scope| {
+                        crate::extension::plugin_target::PluginAccess::for_run().allows(&scope)
+                    });
+            if !authorized {
+                return Err(ToolError::NotFound {
+                    name: self.qualified_name(),
+                });
+            }
+        }
         // The underlying McpClient resolves tools by their *inner* name (the
         // short name reported by the server), not the qualified form.
         match self.client.call_tool(&self.tool_name, input).await {

@@ -139,16 +139,13 @@ fn default_transport() -> String {
 /// them is the plugin's own program and must stay inside the root.
 const ROOT_VARIABLES: [&str; 2] = ["${CLAUDE_PLUGIN_ROOT}", "${ALEPH_PLUGIN_ROOT}"];
 
-/// Parse a plugin's MCP server declarations — the one reader (module doc).
-///
-/// Returns the servers in name order, each with its id from
-/// [`plugin_server_id`], every variable expanded and every stdio `command`
-/// resolved by [`resolve_command`]. `Err` names the server when one entry is
-/// malformed or refused; the caller fails the whole plugin with it.
+/// Parse and validate the declared servers. Cached packages retain data
+/// variables until the manager knows the exact instance that will use them.
 pub(crate) fn parse_declared_servers(
     content: &str,
     plugin_dir: &Path,
     plugin_id: &str,
+    defer_data: bool,
 ) -> Result<Vec<McpManagerConfig>, String> {
     let value: serde_json::Value =
         serde_json::from_str(content).map_err(|e| format!("JSON parse error: {e}"))?;
@@ -165,7 +162,7 @@ pub(crate) fn parse_declared_servers(
     let vars = PluginVars::new(plugin_id, plugin_dir);
     entries
         .into_iter()
-        .map(|(name, entry)| declared_server(plugin_id, &name, entry, &vars))
+        .map(|(name, entry)| declared_server(plugin_id, &name, entry, &vars, defer_data))
         .collect()
 }
 
@@ -175,13 +172,19 @@ fn declared_server(
     server_name: &str,
     entry: McpJsonServerEntry,
     vars: &PluginVars,
+    defer_data: bool,
 ) -> Result<McpManagerConfig, String> {
     let server_id = plugin_server_id(plugin_id, server_name);
     let display_name = format!("{server_name} ({plugin_id})");
+    let expand = |value: &str| {
+        if defer_data && PluginVars::references_data(value) {
+            value.to_owned()
+        } else {
+            vars.expand(value)
+        }
+    };
     let expand_map = |map: &HashMap<String, String>| -> HashMap<String, String> {
-        map.iter()
-            .map(|(k, v)| (k.clone(), vars.expand(v)))
-            .collect()
+        map.iter().map(|(k, v)| (k.clone(), expand(v))).collect()
     };
 
     let transport = match entry.transport.as_str() {
@@ -192,7 +195,7 @@ fn declared_server(
             return Err(format!(
                 "unknown MCP transport type '{other}' for server '{server_name}' \
                  (expected one of: stdio, http, sse)"
-            ))
+            ));
         }
     };
 
@@ -208,7 +211,12 @@ fn declared_server(
             })?;
             let command = resolve_command(&written, vars)
                 .map_err(|why| format!("MCP server '{server_name}' refused: {why}"))?;
-            let args: Vec<String> = entry.args.iter().map(|a| vars.expand(a)).collect();
+            let command = if defer_data && PluginVars::references_data(&written) {
+                written
+            } else {
+                command
+            };
+            let args: Vec<String> = entry.args.iter().map(|a| expand(a)).collect();
             Ok(McpManagerConfig::stdio(&server_id, &display_name, &command)
                 .with_args(args)
                 .with_env(expand_map(&entry.env))
@@ -222,7 +230,7 @@ fn declared_server(
                      (either add it or set `\"type\": \"stdio\"` with a `command`)"
                 )
             })?;
-            let url = vars.expand(&url);
+            let url = expand(&url);
             let mut config = if transport == McpTransportType::Sse {
                 McpManagerConfig::sse(&server_id, &display_name, &url)
             } else {
@@ -342,6 +350,41 @@ pub(crate) fn with_operator_env(
         .collect()
 }
 
+/// Bind a cached declaration to the exact instance before registering it.
+pub(super) fn bind_server_to_instance(
+    server: &mut McpManagerConfig,
+    runtime_key: &str,
+    plugin_dir: &Path,
+) -> Result<(), String> {
+    if let Some((_, name)) = server
+        .id
+        .strip_prefix("plugin:")
+        .and_then(|id| id.split_once('/'))
+    {
+        server.id = plugin_server_id(runtime_key, name);
+    }
+    let vars = PluginVars::new(runtime_key, plugin_dir);
+    if let Some(command) = server
+        .command
+        .as_mut()
+        .filter(|v| PluginVars::references_data(v))
+    {
+        *command = resolve_command(command, &vars)
+            .map_err(|why| format!("MCP server '{}' refused: {why}", server.name))?;
+    }
+    for value in server
+        .url
+        .iter_mut()
+        .chain(server.args.iter_mut())
+        .chain(server.env.values_mut())
+        .chain(server.headers.values_mut())
+        .filter(|v| PluginVars::references_data(v))
+    {
+        *value = vars.expand(value);
+    }
+    Ok(())
+}
+
 /// The transient server id of a plugin-declared MCP server. The plugin id is
 /// embedded so every consumer that only has the server id (the tool bridge,
 /// the request-time MCP join) can name the owner without a side table.
@@ -353,8 +396,7 @@ pub(crate) fn plugin_server_id(plugin_id: &str, server_name: &str) -> String {
 
 /// Inverse of [`plugin_server_id`]. `None` for a server no plugin declared
 /// (user `mcp.json` servers have no `plugin:` prefix). Splits at the FIRST
-/// `/`: plugin ids are `[a-z0-9-]` (`manifest::validate_plugin_id` /
-/// `sanitize_plugin_id`), so the first slash is always the separator.
+/// `/`, which is absent from both logical IDs and exact runtime keys.
 ///
 /// Feed it ONLY an MCP server id — the handler side's
 /// `tools::service::ToolSource::Mcp { server_id }` or the catalog side's

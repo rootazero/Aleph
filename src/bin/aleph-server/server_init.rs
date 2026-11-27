@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use alephcore::sync_primitives::Arc;
 
 use alephcore::gateway::busy_queue::{
-    spawn_panel_queued_run, spawn_queued_chat_run, spawn_queued_run, PanelShellOwners,
+    PanelShellOwners, spawn_panel_queued_run, spawn_queued_chat_run, spawn_queued_run,
 };
 use alephcore::gateway::event_bus::GatewayEventBus;
 use alephcore::gateway::handlers::agent::AgentRunManager;
@@ -151,7 +151,7 @@ where
     use alephcore::gateway::handlers::agent::AgentRunParams;
     use alephcore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
     use serde::Serialize;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     /// Result of agent.run request
     #[derive(Debug, Clone, Serialize)]
@@ -293,8 +293,15 @@ where
     // fallback, which ran *after* the busy lane and could only ever produce
     // `direct_tool`. Two things were broken by that and both are fixed here —
     // `/my-skill` never loaded its instructions or recorded a use, and any
+    let slash_workspace = run_request
+        .workspace_path()
+        .map(std::path::Path::to_path_buf);
     engine
-        .stamp_slash_mode(&slash_input, &mut run_request.metadata)
+        .stamp_slash_mode_in_workspace(
+            &slash_input,
+            &mut run_request.metadata,
+            slash_workspace.as_deref(),
+        )
         .await;
 
     // Publish the addressed session before acknowledging success. The request
@@ -362,7 +369,7 @@ where
     use alephcore::gateway::handlers::chat::ChatSendParams;
     use alephcore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
     use serde::Serialize;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     #[derive(Debug, Clone, Serialize)]
     struct ChatSendResult {
@@ -495,8 +502,15 @@ where
         Err(e) => return build_run_error_response(request.id, e),
     };
 
+    let slash_workspace = run_request
+        .workspace_path()
+        .map(std::path::Path::to_path_buf);
     engine
-        .stamp_slash_mode(&slash_input, &mut run_request.metadata)
+        .stamp_slash_mode_in_workspace(
+            &slash_input,
+            &mut run_request.metadata,
+            slash_workspace.as_deref(),
+        )
         .await;
 
     // Publish the addressed session before acknowledging success. The request

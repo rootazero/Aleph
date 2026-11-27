@@ -16,15 +16,15 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
+use super::super::RunRequest;
 use super::super::slash_skill_scope;
 use super::super::turn_permissions::{TurnPermissions, TurnToolPolicy};
-use super::super::RunRequest;
 use super::split_with;
-use crate::config::types::policies::{ExecTier, EXEC_TIER_SESSION_KEY};
+use crate::config::types::policies::{EXEC_TIER_SESSION_KEY, ExecTier};
 use crate::domain::skill::{PluginId, SkillSource};
 use crate::extension::visibility::ScopeKey;
 use crate::gateway::agent_instance::AgentInstance;
@@ -32,10 +32,10 @@ use crate::runtimes::post_install::HomeEnvGuards;
 use crate::skill::{SkillInfo, SkillSystem};
 use crate::sync_primitives::Arc;
 use crate::tool_metadata::ToolCatalog;
+use crate::tools::AlephTool;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
 use crate::tools::service::ToolService;
-use crate::tools::AlephTool;
-use crate::utils::paths::{publish_plugin_skill_dirs, PublishedPluginSkillDir};
+use crate::utils::paths::{PublishedPluginSkillDir, publish_plugin_skill_dirs};
 
 /// The unit-test engine (`execution_engine::tests::test_engine`).
 pub(super) type TestEngine = super::super::engine::ExecutionEngine<
@@ -225,8 +225,31 @@ impl World {
         }
         if let Stamp::Handler = stamp {
             self.stamper
-                .stamp_slash_mode(&request.input, &mut request.metadata)
+                .stamp_slash_mode_in_workspace(
+                    &request.input,
+                    &mut request.metadata,
+                    Some(&self.project),
+                )
                 .await;
+            // These fixtures publish catalog rows without a process-global
+            // extension manager. Supply the admitted mode to test the split.
+            if !request
+                .metadata
+                .contains_key(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY)
+            {
+                let parser = crate::command::CommandParser::new(Arc::clone(&self.catalog));
+                if let Some(parsed) = parser.parse_async(input).await {
+                    if let Some(mode) =
+                        crate::gateway::inbound_router::serialize_parsed_command(&parsed)
+                    {
+                        request.metadata.insert(
+                            crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY.into(),
+                            mode,
+                        );
+                        slash_skill_scope::mark_typed(&mut request.metadata);
+                    }
+                }
+            }
         }
         request
     }
@@ -271,7 +294,7 @@ impl World {
     async fn turn(&self, engine: &TestEngine, mut request: RunRequest) -> Turn {
         slash_skill_scope::forget_at_ingress(&mut request.metadata);
         self.stamper
-            .stamp_slash_mode_unattested(&request.input, &mut request.metadata)
+            .stamp_slash_mode_unattested(&request.input, &mut request.metadata, None)
             .await;
         split_with(&mut request, AGENT, &self.skills).await;
         let permissions = engine.resolve_turn_permissions(&request, &self.agent).await;

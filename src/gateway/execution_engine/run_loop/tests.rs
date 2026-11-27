@@ -9,8 +9,8 @@ use tracing::{error, info, warn};
 use crate::sync_primitives::Arc;
 
 use super::super::{ExecutionError, RunRequest};
-use crate::extension::hooks::{HookContext, HookExecutor};
 use crate::extension::HookEvent;
+use crate::extension::hooks::{HookContext, HookExecutor};
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
 
@@ -517,8 +517,7 @@ fn seam_used_does_not_count_a_use_import() {
 
 #[test]
 fn seam_used_does_not_count_the_seams_own_definition() {
-    let definition =
-        "fn build_sub_metadata(parent: Option<&str>) -> Meta {\n    Meta::default()\n}\n\
+    let definition = "fn build_sub_metadata(parent: Option<&str>) -> Meta {\n    Meta::default()\n}\n\
                       pub(crate) fn build_sub_metadata(parent: Option<&str>) -> Meta {\n}\n";
     assert!(
         !seam_used(definition, "build_sub_metadata("),
@@ -1948,7 +1947,7 @@ fn an_explicit_claim_upgrades_a_producer_whose_owner_is_not_on_the_roster() {
 #[tokio::test]
 async fn the_two_room_claim_twins_agree_on_which_project_governs() {
     use crate::gateway::caller_identity::CALLER_USER;
-    use crate::gateway::handlers::agent::{build_run_request, AgentRunParams, BuildRunError};
+    use crate::gateway::handlers::agent::{AgentRunParams, BuildRunError, build_run_request};
     use crate::routing::session_key::{PeerKind, SessionKey};
 
     // The project a side concluded governs this turn, or `None` for "this is a
@@ -2392,16 +2391,16 @@ fn layer_4_discriminates_the_answer_and_only_the_answer() {
 /// the one field `mcp_handler_admitted` reads.
 struct McpHandlerOf {
     name: String,
-    server: &'static str,
+    server: String,
 }
 
 impl McpHandlerOf {
     /// Admission-only form: the tool name is irrelevant to the plugin-ownership
     /// gate, which keys on the source's `server_id`.
-    fn new(server: &'static str) -> Self {
+    fn new(server: impl Into<String>) -> Self {
         Self {
             name: "t".to_string(),
-            server,
+            server: server.into(),
         }
     }
 }
@@ -2411,7 +2410,7 @@ impl McpHandlerOf {
 fn canonical_test_entry(name: &str, server: &'static str) -> crate::tools::registry::RegistryEntry {
     let handler: Arc<dyn crate::tools::handlers::ToolHandler> = Arc::new(McpHandlerOf {
         name: name.to_string(),
-        server,
+        server: server.to_owned(),
     });
     let descriptor = crate::tools::descriptor::ToolCapabilityDescriptor::from_definition(
         &handler.definition(),
@@ -2523,7 +2522,7 @@ impl crate::tools::handlers::ToolHandler for McpHandlerOf {
             description: String::new(),
             input_schema: serde_json::json!({}),
             source: crate::tools::service::ToolSource::Mcp {
-                server_id: self.server.into(),
+                server_id: self.server.clone(),
             },
             metadata: Default::default(),
         }
@@ -2555,7 +2554,7 @@ fn run_loop_consumes_host_snapshot() {
     let joined = join_canonical_tools(
         &applied,
         &mut registry,
-        |_| true,
+        |name, _| Some(name.to_owned()),
         &visible_mcp_servers(
             crate::extension::visibility::VisibilityCtx { project_root: None },
             None,
@@ -2634,7 +2633,7 @@ async fn actual_builtin_budget_reaches_canonical_join() {
     let joined = join_canonical_tools(
         &entries,
         &mut loop_registry,
-        |_| true,
+        |name, _| Some(name.to_owned()),
         &visible_mcp_servers(
             crate::extension::visibility::VisibilityCtx { project_root: None },
             None,
@@ -2714,7 +2713,7 @@ fn canonical_dispatch_filters_unchanged() {
     let joined = join_canonical_tools(
         &applied,
         &mut registry,
-        |name| name != "denied",
+        |name, _| (name != "denied").then(|| name.to_owned()),
         &visible_mcp_servers(
             crate::extension::visibility::VisibilityCtx { project_root: None },
             None,
@@ -2748,7 +2747,7 @@ fn canonical_dispatch_filters_unchanged() {
     let joined = join_canonical_tools(
         &applied,
         &mut allow_all_registry,
-        |_| true,
+        |name, _| Some(name.to_owned()),
         &visible_mcp_servers(
             crate::extension::visibility::VisibilityCtx { project_root: None },
             None,
@@ -2795,7 +2794,7 @@ fn revoked_projection_is_not_joined() {
     let joined = join_canonical_tools(
         &current,
         &mut registry,
-        |_| true,
+        |name, _| Some(name.to_owned()),
         &visible_mcp_servers(
             crate::extension::visibility::VisibilityCtx { project_root: None },
             None,
@@ -2829,7 +2828,7 @@ async fn already_running_invocation_is_not_cut() {
     join_canonical_tools(
         &applied,
         &mut registry,
-        |_| true,
+        |name, _| Some(name.to_owned()),
         &visible_mcp_servers(
             crate::extension::visibility::VisibilityCtx { project_root: None },
             None,
@@ -2876,12 +2875,18 @@ fn mcp_handler_admitted_gates_plugin_owned_servers_only() {
     );
 }
 
+fn project_mcp_server(root: &std::path::Path) -> String {
+    use crate::extension::visibility::{PluginInstanceKey, ScopeKey};
+    let owner = PluginInstanceKey::new(ScopeKey::project(root), "proj".into()).runtime_key();
+    crate::extension::mcp_config::plugin_server_id(&owner, "srv")
+}
+
 /// Face ⑤, both arms through a real manager: a project-keyed plugin's
 /// server is admitted in its project and refused elsewhere, and a
 /// non-plugin server is admitted in both.
 #[tokio::test]
 async fn mcp_handler_admitted_asks_the_manager_for_the_owners_visibility() {
-    use crate::extension::visibility::{canonical_root, VisibilityCtx};
+    use crate::extension::visibility::{VisibilityCtx, canonical_root};
     // with_defaults() turns the Claude root on and resolves it off `$HOME`,
     // so `$HOME` must move with `$ALEPH_HOME` (P5.11).
     let tmp = tempfile::tempdir().unwrap();
@@ -2902,7 +2907,7 @@ async fn mcp_handler_admitted_asks_the_manager_for_the_owners_visibility() {
         VisibilityCtx { project_root: None },
         Some(Arc::clone(&manager)),
     );
-    let owned = McpHandlerOf::new("plugin:proj/srv");
+    let owned = McpHandlerOf::new(project_mcp_server(proj.path()));
     assert!(
         mcp_handler_admitted(&owned, &here),
         "owner visible from its project ⇒ admitted"
@@ -2930,10 +2935,9 @@ async fn mcp_handler_admitted_asks_the_manager_for_the_owners_visibility() {
 /// empty (allow-all) allow-set stays empty while the tools still join.
 #[tokio::test]
 async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run() {
-    use crate::extension::visibility::{canonical_root, VisibilityCtx};
+    use crate::extension::visibility::{VisibilityCtx, canonical_root};
     use crate::mcp::tool_bridge::test_support::{capable_server, fake_manager};
-    use crate::mcp::tool_bridge::{spawn_tool_bridge, RESOURCE_LIST_TOOL, RESOURCE_TOOL};
-    const OWNED: &str = "plugin:proj/srv";
+    use crate::mcp::tool_bridge::{RESOURCE_LIST_TOOL, RESOURCE_TOOL, spawn_tool_bridge};
     // with_defaults() turns the Claude root on and resolves it off `$HOME`,
     // so `$HOME` must move with `$ALEPH_HOME` (P5.11).
     let tmp = tempfile::tempdir().unwrap();
@@ -2944,7 +2948,9 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
     let proj = tempdir().unwrap();
     let manager = manager_with_project_plugin(proj.path()).await;
 
-    let fake = fake_manager(vec![capable_server(OWNED), capable_server("github")]);
+    let owned = project_mcp_server(proj.path());
+    let owned_tool = crate::tools::handlers::mcp::qualified_tool_name(&owned, "t");
+    let fake = fake_manager(vec![capable_server(&owned), capable_server("github")]);
     let bridged = Arc::new(crate::tools::ToolHandlerRegistry::new());
     let bridge = spawn_tool_bridge(fake.handle.clone(), Arc::clone(&bridged), None);
     // RESOURCE_TOOL is the last of the resource cluster the reconcile installs.
@@ -2961,7 +2967,10 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
         settled,
         "premise: the bridge switched the resource builtins on"
     );
-    for (name, server) in [("plugin_proj_srv__t", OWNED), ("github__t", "github")] {
+    for (name, server) in [
+        (owned_tool.as_str(), owned.as_str()),
+        ("github__t", "github"),
+    ] {
         // The registry now keys entries by `descriptor.name` and rejects a
         // descriptor that disagrees with the handler's own definition, so the
         // handler must declare the same name it registers under. Build the
@@ -2970,7 +2979,7 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
         // test), so it is intentionally dropped.
         let handler: Arc<dyn crate::tools::handlers::ToolHandler> = Arc::new(McpHandlerOf {
             name: name.to_string(),
-            server,
+            server: server.to_owned(),
         });
         let descriptor = crate::tools::descriptor::ToolCapabilityDescriptor::from_definition(
             &handler.definition(),
@@ -2999,19 +3008,19 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
         let joined = join_canonical_tools(
             &bridged.entries_snapshot(),
             &mut registry,
-            |_| true,
+            |name, _| Some(name.to_owned()),
             &visible,
             &mut allowed,
         );
 
-        let owned_joined = registry.get("plugin_proj_srv__t").is_some();
+        let owned_joined = registry.get(owned_tool.as_str()).is_some();
         assert_eq!(owned_joined, in_project, "plugin tool in the loop registry");
         assert_eq!(
-            allowed.contains("plugin_proj_srv__t"),
+            allowed.contains(owned_tool.as_str()),
             in_project,
             "plugin tool in the allow-set"
         );
-        assert_eq!(joined.contains("plugin_proj_srv__t"), in_project);
+        assert_eq!(joined.contains(owned_tool.as_str()), in_project);
         for name in ["github__t", RESOURCE_LIST_TOOL] {
             assert!(
                 registry.get(name).is_some(),
@@ -3038,7 +3047,7 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
             "the lister reaches the user server: {asked:?}"
         );
         assert_eq!(
-            asked.iter().any(|id| id == OWNED),
+            asked.iter().any(|id| id == &owned),
             in_project,
             "the lister reaches the plugin's server only from its project: {asked:?}"
         );
@@ -3063,7 +3072,7 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
         allowed.is_empty(),
         "an empty allow-set stays empty: {allowed:?}"
     );
-    for name in ["plugin_proj_srv__t", "github__t", RESOURCE_LIST_TOOL] {
+    for name in [owned_tool.as_str(), "github__t", RESOURCE_LIST_TOOL] {
         assert!(
             registry.get(name).is_some() && joined.contains(name),
             "{name} still joins under an allow-all set"

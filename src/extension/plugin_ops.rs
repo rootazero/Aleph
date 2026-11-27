@@ -29,12 +29,12 @@ impl ExtensionManager {
             ));
         }
         let admitted_input = args.clone();
-        let owner = self.runtime_owner(plugin_id).ok_or_else(|| {
+        let owner = self.runtime_owner_at(plugin_id).ok_or_else(|| {
             ExtensionError::Runtime(format!(
                 "plugin '{plugin_id}' has no controlled runtime owner"
             ))
         })?;
-        if owner.record.id != plugin_id {
+        if owner.runtime_key != plugin_id {
             return Err(ExtensionError::Runtime(
                 "plugin runtime owner identity mismatch".into(),
             ));
@@ -72,7 +72,7 @@ impl ExtensionManager {
                 matches!(
                     capability,
                     crate::extension::capability::CapabilityDeclaration::Tool(tool)
-                        if tool.plugin_id == plugin_id && tool.handler == handler
+                        if tool.plugin_id == owner.record.id && tool.handler == handler
                 )
             })
         {
@@ -154,9 +154,25 @@ impl ExtensionManager {
         handler: &str,
         args: serde_json::Value,
     ) -> ExtensionResult<serde_json::Value> {
+        if !PluginInstanceKey::runtime_key_allowed(
+            plugin_id,
+            &super::visibility::VisibilityCtx::for_authorized_run(),
+        ) {
+            return Err(ExtensionError::PluginNotFound(plugin_id.to_owned()));
+        }
+        self.call_plugin_tool_at(plugin_id, handler, args).await
+    }
+
+    // The Gateway admits an exact instance against its verified project context.
+    pub(crate) async fn call_plugin_tool_at(
+        &self,
+        plugin_id: &str,
+        handler: &str,
+        args: serde_json::Value,
+    ) -> ExtensionResult<serde_json::Value> {
         self.ensure_runtime_mounted(plugin_id).await?;
 
-        let owner = self.runtime_owner(plugin_id);
+        let owner = self.runtime_owner_at(plugin_id);
         self.reject_ownerless_canonical_tool(plugin_id, owner.is_some())?;
         let admission = if let Some(owner) = &owner {
             let generation = owner.provider.generation();
@@ -187,7 +203,7 @@ impl ExtensionManager {
                     matches!(
                         capability,
                         crate::extension::capability::CapabilityDeclaration::Tool(tool)
-                            if tool.plugin_id == plugin_id && tool.handler == handler
+                            if tool.plugin_id == owner.record.id && tool.handler == handler
                     )
                 })
             {
@@ -245,7 +261,7 @@ impl ExtensionManager {
         has_captured_owner: bool,
     ) -> ExtensionResult<()> {
         if !has_captured_owner
-            && (self.runtime_owner(plugin_id).is_some()
+            && (self.runtime_owner_at(plugin_id).is_some()
                 || self
                     .tool_handler_registry
                     .read()
@@ -262,7 +278,7 @@ impl ExtensionManager {
 
     async fn ensure_plugin_active(&self, plugin_id: &str) -> ExtensionResult<()> {
         let registry = self.plugin_registry.read().await;
-        match registry.get_plugin(plugin_id) {
+        match registry.get_plugin_by_runtime_key(plugin_id) {
             Some(record) if record.status.is_active() => Ok(()),
             Some(_) => Err(ExtensionError::Runtime(format!(
                 "Plugin '{plugin_id}' is disabled"
@@ -298,7 +314,7 @@ impl ExtensionManager {
     ) -> ExtensionResult<serde_json::Value> {
         self.ensure_runtime_mounted(plugin_id).await?;
 
-        let owner = self.runtime_owner(plugin_id);
+        let owner = self.runtime_owner_at(plugin_id);
         if owner.is_none()
             && self
                 .tool_handler_registry
@@ -333,7 +349,7 @@ impl ExtensionManager {
             matches!(
                 capability,
                 crate::extension::capability::CapabilityDeclaration::Hook(hook)
-                    if hook.plugin_id == plugin_id
+                    if hook.plugin_id == owner.record.id
                         && hook.handler == handler
                         && hook.actions.is_empty()
             )
@@ -754,14 +770,24 @@ impl ExtensionManager {
         form: crate::extension::plugin_secrets::SettingsForm,
     ) -> Vec<(String, String)> {
         use crate::extension::plugin_secrets::{SettingsForm, without_secret_references};
-        if crate::extension::manifest::validate_plugin_id(plugin_id).is_err() {
+        let Some(instance) = self
+            .plugin_registry
+            .read()
+            .await
+            .active_plugin(plugin_id)
+            .map(PluginRecord::instance_key)
+        else {
             return Vec::new();
-        }
+        };
         let settings = match form {
-            SettingsForm::Runtime => self.plugin_settings_for_runtime(plugin_id).await,
-            SettingsForm::WithoutSecrets => {
-                without_secret_references(&self.plugin_settings(plugin_id).await)
-            }
+            SettingsForm::Runtime => self.plugin_settings_for_instance(&instance).await,
+            SettingsForm::WithoutSecrets => without_secret_references(
+                &self
+                    .plugins_config
+                    .read()
+                    .await
+                    .settings_json_for(&instance),
+            ),
         };
         crate::extension::plugin_vars::settings_env(&settings)
     }

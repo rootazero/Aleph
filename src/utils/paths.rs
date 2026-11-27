@@ -1151,8 +1151,20 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     //    the `skill_read` face of the one predicate.
     let visibility =
         crate::extension::visibility::VisibilityCtx::from_project_root(Some(start_dir.clone()));
+    let extension = crate::extension::try_extension_manager();
     for published in plugin_skill_dirs() {
-        if crate::extension::visibility::visible_to(&published.scope_key, &visibility) {
+        let visible = match extension {
+            Some(manager) => {
+                let owner = crate::extension::visibility::PluginInstanceKey::new(
+                    published.scope_key.clone(),
+                    published.plugin_id,
+                )
+                .runtime_key();
+                manager.plugin_visible(&owner, &visibility)
+            }
+            None => crate::extension::visibility::visible_to(&published.scope_key, &visibility),
+        };
+        if visible {
             push_if_new_skills_dir(&mut dirs, &published.dir, "plugin skills dir");
         }
     }
@@ -1319,9 +1331,11 @@ mod tests {
         })
         .unwrap();
         let skills = scanner.discover_skill_dirs().unwrap();
-        assert!(skills
-            .iter()
-            .any(|skill| skill.path.starts_with(home.join(".agents"))));
+        assert!(
+            skills
+                .iter()
+                .any(|skill| skill.path.starts_with(home.join(".agents")))
+        );
         assert!(skills.iter().all(|skill| skill.path.starts_with(&home)));
         crate::config::Config::default()
             .save_to_file(get_config_dir().unwrap().join("config.toml"))
@@ -1827,16 +1841,20 @@ mod tests {
         );
         // Text-blind to comments — this defect is discussed by name, in this
         // very file and in build.rs, using the spelling it hunts.
-        assert!(link_args_naming_the_source_tree(
-            "// println!(\"cargo:rustc-link-arg={CARGO_MANIFEST_DIR}/x\");"
-        )
-        .is_empty());
+        assert!(
+            link_args_naming_the_source_tree(
+                "// println!(\"cargo:rustc-link-arg={CARGO_MANIFEST_DIR}/x\");"
+            )
+            .is_empty()
+        );
         // And a link-arg carrying no path at all is not an offender.
-        assert!(link_args_naming_the_source_tree(
-            "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");\n\
+        assert!(
+            link_args_naming_the_source_tree(
+                "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");\n\
              println!(\"cargo:rustc-link-arg=-lz\");"
-        )
-        .is_empty());
+            )
+            .is_empty()
+        );
     }
 
     /// The guard's predicate itself: it must see the spellings the line-level

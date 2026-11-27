@@ -11,12 +11,12 @@ use crate::capability::ownership::{OwnerRef, RunId, VisibilityScope};
 use crate::capability::policy_runtime::{
     CapabilityCallContext, PolicyAttachment, ResourceUse, RunningCapabilityCall,
 };
-use crate::extension::hooks::{
-    budget_hook_contexts, HookContext, HookExecutor, PermissionDecision,
-};
 use crate::extension::HookEvent;
+use crate::extension::hooks::{
+    HookContext, HookExecutor, PermissionDecision, budget_hook_contexts,
+};
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
-use crate::sandbox::exec_approval::{denial_ledger, grants, ApprovalAction, Grant, GrantScope};
+use crate::sandbox::exec_approval::{ApprovalAction, Grant, GrantScope, denial_ledger, grants};
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::descriptor::{ReplayPolicy, ToolCallIdentity, ToolCapabilityDescriptor};
@@ -24,9 +24,9 @@ use crate::tools::registry::{CanonicalEntryLease, RegistryEntry, ToolHandlerRegi
 use crate::tools::runtime::LoopTool;
 use crate::tools::service::{RefusedBy, ToolError};
 
+use super::ScopedToolService;
 use super::gate_chain::GateRule;
 use super::ledger::ApprovalRecord;
-use super::ScopedToolService;
 
 /// Result size (per [`crate::tool_output::ingress::size_hint`]) at which the
 /// ingress clean moves off the async executor onto a blocking worker. Below it
@@ -518,17 +518,17 @@ impl ScopedToolService {
             if is_subagent || self.inner.is_request_local(name) {
                 None
             } else if let Some(projection) = resolved {
-                let lease = registry
-                    .capture_entry(name)
-                    .ok_or_else(|| ToolError::NotFound { name: name.into() })?;
-                let mut entry = lease.entry().clone();
-                captured_lease = Some(lease.clone());
                 let projected = projection.capability_descriptor().ok_or_else(|| {
                     ToolError::PermissionDenied {
                         name: name.into(),
                         reason: "noncanonical production projection cannot dispatch".into(),
                     }
                 })?;
+                let lease = registry
+                    .capture_entry(&projected.name)
+                    .ok_or_else(|| ToolError::NotFound { name: name.into() })?;
+                let mut entry = lease.entry().clone();
+                captured_lease = Some(lease.clone());
                 if projected.source != entry.descriptor.source {
                     return Err(ToolError::PermissionDenied {
                         name: name.into(),
@@ -557,7 +557,7 @@ impl ScopedToolService {
                         reason: "canonical MCP visibility is not bound".into(),
                     });
                 }
-                let backend_lease = self.resolve_canonical_tool(name, lease)?;
+                let backend_lease = self.resolve_canonical_tool(&projected.name, lease)?;
                 captured_backend_lease = Some(backend_lease);
                 Some(entry)
             } else {
@@ -1315,7 +1315,7 @@ impl ScopedToolService {
             })?;
             let identity = ToolCallIdentity::from_descriptor(&entry.descriptor);
             let proof_input = input.clone();
-            let proof_name = name.clone();
+            let proof_name = entry.descriptor.name.clone();
             let actor = crate::identity::current_actor();
             let facade =
                 self.canonical_facade
@@ -2176,7 +2176,7 @@ impl ScopedToolService {
         rule: Option<&str>,
         decision: ApprovalRecord<'_>,
     ) {
-        use crate::session::events::{now_ms, SessionEvent};
+        use crate::session::events::{SessionEvent, now_ms};
 
         let Some(turn) = self.turn_context.as_ref() else {
             return;
@@ -2864,7 +2864,7 @@ impl ScopedToolService {
     /// pipeline, so without reaching back in, a panic body would be the one
     /// error text the model sees unbounded and unfenced.
     pub(super) fn sanitize_tool_error(name: &str, err: ToolError) -> ToolError {
-        use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
+        use crate::security::content_sanitizer::{ContentSource, wrap_external_content};
         // Preserve the original variant so callers can keep matching on
         // `Timeout` / `Transport` / `Execution`; only the `cause` /
         // message string is bounded and sanitized.

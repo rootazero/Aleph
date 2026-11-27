@@ -12,7 +12,7 @@
 //! fresh snapshot and emits [`CapabilityChange::Invalidated`] rather than
 //! pretending it delivered every event.
 
-use crate::capability::backend::{CapabilityBackend, ToolBackendAdapter, TOOL_NAMESPACE};
+use crate::capability::backend::{CapabilityBackend, TOOL_NAMESPACE, ToolBackendAdapter};
 use crate::capability::descriptor::{
     CapabilityDescriptor, CapabilityId, CapabilityKind, CapabilityRevision, ProjectionMetadata,
     ServiceRelation,
@@ -1383,7 +1383,7 @@ impl ZahirFacade {
         let mut stream = CapabilityChangeStream::from_snapshot(snapshot);
         loop {
             match receiver.try_recv() {
-                Ok(publication) => {
+                Ok(mut publication) => {
                     let publication_cursor = Cursor(publication.revision);
                     // Already-reflected notifications are harmless replay, not
                     // evidence of a gap. Reject them before checking the live
@@ -1403,6 +1403,16 @@ impl ZahirFacade {
                         }
                         break;
                     }
+                    let visibility =
+                        crate::extension::visibility::VisibilityCtx::for_authorized_run();
+                    publication.tool_changes.retain(|change| {
+                        let source = match change {
+                            RegistryChange::Registered { source, .. }
+                            | RegistryChange::Replaced { source, .. }
+                            | RegistryChange::Unregistered { source, .. } => source,
+                        };
+                        ToolBackendAdapter::source_allowed(source, &visibility)
+                    });
                     let (cursor, changes) = self.map_registry_publication(publication);
                     for change in &changes {
                         if let Some(id) = change_id(change) {
@@ -1495,6 +1505,12 @@ impl ZahirFacade {
         }
         if canonical_entry.entry().descriptor.name != reference.id.name {
             return Err(ResolveError::Unknown);
+        }
+        if !ToolBackendAdapter::source_allowed(
+            &canonical_entry.entry().descriptor.source,
+            &crate::extension::visibility::VisibilityCtx::for_authorized_run(),
+        ) {
+            return Err(ResolveError::NotVisible);
         }
         self.reconcile_entry_binding(&reference.id.name);
         let provider_generation = canonical_entry.provider_generation();
@@ -1817,6 +1833,12 @@ impl ZahirFacade {
         else {
             return Err(ResolveError::Unknown);
         };
+        if !ToolBackendAdapter::source_allowed(
+            &canonical_entry.entry().descriptor.source,
+            &crate::extension::visibility::VisibilityCtx::for_authorized_run(),
+        ) {
+            return Err(ResolveError::NotVisible);
+        }
         if canonical_entry.provider_generation() != *provider_generation {
             return Err(ResolveError::StaleProvider);
         }
@@ -1973,6 +1995,12 @@ impl Zahir for ZahirFacade {
             return None;
         }
         let entry = self.adapter.registry.capture_entry(&reference.id.name)?;
+        if !ToolBackendAdapter::source_allowed(
+            &entry.entry().descriptor.source,
+            &crate::extension::visibility::VisibilityCtx::for_authorized_run(),
+        ) {
+            return None;
+        }
         self.reconcile_entry_binding(&reference.id.name);
         self.tree.generation(&reference.id, &reference.visibility)?;
         Some(CapabilityRevision(entry.entry().descriptor.revision))
@@ -2005,7 +2033,13 @@ impl Zahir for ZahirFacade {
             self.adapter
                 .registry
                 .capture_entry(&reference.id.name)
-                .filter(|_| {
+                .filter(|entry| {
+                    if !ToolBackendAdapter::source_allowed(
+                        &entry.entry().descriptor.source,
+                        &crate::extension::visibility::VisibilityCtx::for_authorized_run(),
+                    ) {
+                        return false;
+                    }
                     self.reconcile_entry_binding(&reference.id.name);
                     self.tree
                         .generation(&reference.id, &reference.visibility)
@@ -2064,9 +2098,13 @@ impl Zahir for ZahirFacade {
             .iter()
             .map(|descriptor| descriptor.id.clone())
             .collect();
+        let visibility = crate::extension::visibility::VisibilityCtx::for_authorized_run();
         let mut capabilities: Vec<_> = source_snapshot
             .entries()
             .values()
+            .filter(|entry| {
+                ToolBackendAdapter::source_allowed(&entry.descriptor.source, &visibility)
+            })
             .map(|entry| crate::capability::backend::to_descriptor(entry.descriptor.as_ref()))
             .map(|mut descriptor| {
                 descriptor.visibility = scope.visibility.clone();
@@ -2225,7 +2263,7 @@ mod tests {
     use crate::tools::handlers::ToolHandler;
     use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource};
     use async_trait::async_trait;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     fn fake_def(name: &str) -> ToolDefinition {
         ToolDefinition {
@@ -2369,10 +2407,12 @@ mod tests {
             kind: Some(CapabilityKind::Resource),
             ..Default::default()
         });
-        assert!(snapshot
-            .capabilities
-            .iter()
-            .any(|entry| entry.id == provider_id));
+        assert!(
+            snapshot
+                .capabilities
+                .iter()
+                .any(|entry| entry.id == provider_id)
+        );
 
         let lease = host
             .resolve(ref_for(&provider_id))
@@ -2663,8 +2703,8 @@ mod tests {
     #[test]
     fn shell_effect_rejects_same_descriptor_replacement() {
         use crate::sandbox::shell_input::{
-            nonblocking_test_pipe, JsonlFrame, ShellEffectDenied, ShellEffectResult,
-            ShellInputAction, ShellPipeAttempt,
+            JsonlFrame, ShellEffectDenied, ShellEffectResult, ShellInputAction, ShellPipeAttempt,
+            nonblocking_test_pipe,
         };
         use crate::sandbox::shell_lifecycle::ShellLifecycle;
         use std::io::{ErrorKind, Read};
@@ -2758,10 +2798,12 @@ mod tests {
         let snapshot = host.describe(scope_all());
         assert_eq!(snapshot.committed_cursor, Cursor(2));
         assert_eq!(snapshot.capabilities.len(), 2);
-        assert!(snapshot
-            .capabilities
-            .iter()
-            .all(|d| d.kind == crate::capability::descriptor::CapabilityKind::Tool));
+        assert!(
+            snapshot
+                .capabilities
+                .iter()
+                .all(|d| d.kind == crate::capability::descriptor::CapabilityKind::Tool)
+        );
     }
 
     #[test]
@@ -3066,9 +3108,10 @@ mod tests {
         assert_eq!(tree.claim_state(&claim, &id, &vis), ClaimState::Active);
         // The incumbent can still claim; the Runtime reconcile owner cannot.
         assert!(tree.claim(&id, &vis, incumbent, "r2".to_string()).is_some());
-        assert!(tree
-            .claim(&id, &vis, OwnerRef::Runtime, "r3".to_string())
-            .is_none());
+        assert!(
+            tree.claim(&id, &vis, OwnerRef::Runtime, "r3".to_string())
+                .is_none()
+        );
     }
 
     #[test]
@@ -3188,10 +3231,11 @@ mod tests {
             facet: None,
             visibility: VisibilityScope::default(),
         };
-        assert!(host
-            .snapshot_entries_in_scope(&skill_scope)
-            .entries
-            .is_empty());
+        assert!(
+            host.snapshot_entries_in_scope(&skill_scope)
+                .entries
+                .is_empty()
+        );
 
         // Foreign namespace → no entries.
         let foreign = Scope {

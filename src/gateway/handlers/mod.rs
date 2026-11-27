@@ -1311,7 +1311,9 @@ impl HandlerRegistry {
                 Some(context) if panel_capabilities::is_context_method(&request.method) => {
                     panel_capabilities::handle_with_context(request.clone(), context).await
                 }
-                _ if plugins::is_management_method(&request.method) => {
+                _ if plugins::is_management_method(&request.method)
+                    || request.method == "commands.list" =>
+                {
                     plugins::with_plugin_access(panel_context, handler(request.clone())).await
                 }
                 _ => handler(request.clone()).await,

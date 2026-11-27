@@ -22,25 +22,25 @@ pub mod usage;
 
 pub use compat::SkillInfo;
 pub use config::{InstallPreferences, SkillConfigUpdate, SkillEntryConfig, SkillsConfig};
-pub use cooccurrence::{cluster_chains, CoOccurrenceLog, RecentUse};
+pub use cooccurrence::{CoOccurrenceLog, RecentUse, cluster_chains};
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
-pub use frontmatter::{normalize_allowed_tools, ALLOWED_TOOLS_KEY};
+pub use frontmatter::{ALLOWED_TOOLS_KEY, normalize_allowed_tools};
 pub use guard::{
-    install_allowed, merge_verdicts, scan_content, scan_skill_directory, ScanVerdict, ThreatLevel,
-    TrustLevel,
+    ScanVerdict, ThreatLevel, TrustLevel, install_allowed, merge_verdicts, scan_content,
+    scan_skill_directory,
 };
 pub use installer::{
-    build_install_command, filter_install_specs_for_current_os, select_best_install,
-    InstallExecutor, InstallResult, InstallSuccess, SkillInstallError,
+    InstallExecutor, InstallResult, InstallSuccess, SkillInstallError, build_install_command,
+    filter_install_specs_for_current_os, select_best_install,
 };
-pub use manifest::{automation_notice, parse_skill_content, parse_skill_file, SkillParseError};
-pub use preprocess::{preprocess_skill_content, PreprocessError, SkillPreprocessContext};
-pub use prompt::{build_skills_prompt_xml, SkillPromptBudget};
+pub use manifest::{SkillParseError, automation_notice, parse_skill_content, parse_skill_file};
+pub use preprocess::{PreprocessError, SkillPreprocessContext, preprocess_skill_content};
+pub use prompt::{SkillPromptBudget, build_skills_prompt_xml};
 pub use registry::SkillRegistry;
 pub use shared::{ensure_shared_skill_system_initialized, shared_skill_system};
 pub use snapshot::SkillSnapshot;
 pub use status::{InstallOption, MissingRequirements, SkillStatusEntry, SkillStatusFilter};
-pub use usage::{record_use_in_dir, SkillState, UsageStats, UsageStore};
+pub use usage::{SkillState, UsageStats, UsageStore, record_use_in_dir};
 
 use crate::sync_primitives::{Arc, AtomicU64, Ordering};
 use std::path::{Path, PathBuf};
@@ -999,7 +999,13 @@ fn plugin_id_from_published_dirs(path: &Path) -> Option<String> {
             .iter()
             .filter(|d| covers(&d.dir))
             .max_by_key(|d| d.dir.components().count())
-            .map(|d| d.plugin_id.clone())
+            .map(|d| {
+                crate::extension::visibility::PluginInstanceKey::new(
+                    d.scope_key.clone(),
+                    d.plugin_id.clone(),
+                )
+                .runtime_key()
+            })
     };
     longest_covering(&|dir| path.starts_with(dir)).or_else(|| {
         let canonical = crate::extension::visibility::canonical_root(path);

@@ -247,7 +247,11 @@ pub struct PluginListResult {
 #[serde(rename_all = "camelCase")]
 pub struct PluginCallToolParams {
     /// Registry id of the plugin owning the handler.
+    #[serde(default)]
     pub plugin_id: String,
+    /// Exact selector returned by the plugin inventory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
     /// Exported handler function to invoke.
     pub handler: String,
     /// Arguments passed through to the handler.

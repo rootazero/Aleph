@@ -136,7 +136,49 @@ impl CommandParser {
             return None;
         }
 
-        let resolved = self.tool_registry.resolve_command(trimmed).await?;
+        self.parse_resolved(trimmed).await
+    }
+
+    /// Resolve a project command's logical namespace in the caller's workspace.
+    pub(crate) async fn parse_in_workspace(
+        &self,
+        input: &str,
+        workspace: Option<&std::path::Path>,
+    ) -> Option<ParsedCommand> {
+        use crate::extension::visibility::{PluginInstanceKey, ScopeKey, VisibilityCtx};
+
+        let input = input.trim();
+        let visibility = VisibilityCtx {
+            project_root: workspace.map(crate::extension::visibility::canonical_root),
+        };
+        let visible = crate::extension::visibility::manager_backed_owner_visible();
+        let command = input.strip_prefix('/')?;
+        let first = command.split_whitespace().next()?;
+        if let Some((root, (plugin_id, name))) =
+            visibility.project_root.as_ref().zip(first.split_once(':'))
+        {
+            let key = PluginInstanceKey::new(ScopeKey::Project(root.clone()), plugin_id.into());
+            let owner = key.runtime_key();
+            if visible(&owner, &visibility) {
+                let scoped = format!("/{owner}:{name}{}", &command[first.len()..]);
+                if let Some(parsed) = self.parse_resolved(&scoped).await {
+                    if parsed.owning_plugin.as_deref() == Some(owner.as_str()) {
+                        return Some(parsed);
+                    }
+                }
+            }
+        }
+        let parsed = self.parse_resolved(input).await?;
+        if let Some(owner) = parsed.owning_plugin.as_deref() {
+            if !visible(owner, &visibility) {
+                return None;
+            }
+        }
+        Some(parsed)
+    }
+
+    async fn parse_resolved(&self, input: &str) -> Option<ParsedCommand> {
+        let resolved = self.tool_registry.resolve_command(input).await?;
 
         // `ParsedCommand` needs `name`/`id` *and* context derivation consumes
         // the tool, so those two fields are cloned once; every other field

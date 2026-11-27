@@ -175,9 +175,13 @@ async def main():
 
         L.log("\n--- enable again (the direction that used to do nothing) ---")
         await flip(rpc, "enable")
-        st = await status(rpc)
-        L.check("plugins.list shows loaded again", st == "loaded", str(st))
         await poll(rpc, True, "both entries are back in tools.catalog on enable")
+        for _ in range(100):
+            st = await status(rpc)
+            if st != "pending":
+                break
+            await asyncio.sleep(0.1)
+        L.check("plugins.list shows loaded again", st == "loaded", str(st))
 
         reply = await rpc.call("extensions.toggle", {
             "id": f"local:plugin:{selector}", "enabled": False,

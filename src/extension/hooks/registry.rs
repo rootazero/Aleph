@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 #[cfg(test)]
-use tokio::sync::{broadcast, Notify, TryLockError};
+use tokio::sync::{Notify, TryLockError, broadcast};
 use tokio::sync::{RwLock, RwLockReadGuard};
 
 use super::{HookExecutor, HookInventoryEntry};
@@ -19,7 +19,7 @@ use crate::capability::ownership::{
 };
 use crate::capability::versioned_registry::{VersionedRegistry, VersionedSnapshot};
 use crate::extension::types::{HookConfig, HookPriority, PluginRecord};
-use crate::extension::visibility::{canonical_root, ScopeKey};
+use crate::extension::visibility::{ScopeKey, canonical_root};
 use crate::sync_primitives::Arc;
 
 /// Logical content identity, independent of registration order or multiplicity.
@@ -136,6 +136,7 @@ pub(super) struct HookMetadata {
     admission_reason: Option<String>,
     binding: Option<HookBinding>,
     ownership_refusal: Option<OwnershipRefusal>,
+    pub(super) plugin_owner: Option<String>,
 }
 
 impl HookMetadata {
@@ -266,6 +267,15 @@ fn admit(input: HookInput) -> Result<Registration, HookRegistryError> {
     let HookInput { mut config, origin } = input;
     let requested = config.priority;
     let (id, source_identity) = identity(&config, &origin)?;
+    let plugin_owner = match &origin {
+        HookOrigin::Plugin {
+            plugin_id, scope, ..
+        } => Some(
+            crate::extension::visibility::PluginInstanceKey::new(scope.clone(), plugin_id.clone())
+                .runtime_key(),
+        ),
+        _ => None,
+    };
     let (effective, admission, reason) = match (&origin, requested) {
         (HookOrigin::User { .. } | HookOrigin::Plugin { .. }, HookPriority::System) => (
             None,
@@ -295,6 +305,7 @@ fn admit(input: HookInput) -> Result<Registration, HookRegistryError> {
             admission_reason: reason,
             binding: None,
             ownership_refusal: None,
+            plugin_owner,
         },
     })
 }

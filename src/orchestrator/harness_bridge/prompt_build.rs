@@ -342,7 +342,7 @@ impl AgentHarnessRunner {
         // No extension manager (cold tests, simulated boot) ⇒ no plugin skill
         // is shown, which is the fail-closed answer — the manager is the only
         // authority on where a plugin came from.
-        let visibility = crate::extension::visibility::VisibilityCtx::for_session();
+        let visibility = crate::extension::visibility::VisibilityCtx::for_authorized_run();
         let skill_snapshot = match self.skill_system.as_ref() {
             Some(sys) => {
                 let mut snap = sys.current_snapshot().await;
@@ -350,10 +350,7 @@ impl AgentHarnessRunner {
                     crate::extension::visibility::retain_visible_plugin_skills(
                         std::mem::take(&mut snap.eligible_manifests),
                         &visibility,
-                        |id| {
-                            crate::extension::try_extension_manager()
-                                .and_then(|m| m.plugin_scope_key(id))
-                        },
+                        crate::extension::visibility::manager_backed_owner_visible(),
                     );
                 Some(snap)
             }
@@ -1272,10 +1269,10 @@ mod orientation_wiring_tests {
     use super::merge_stable_memory_envelopes;
     use crate::config::types::memory::MemoryInjectionMode;
     use crate::error::AlephError;
+    use crate::memory::notes::orientation::NoteOrientation;
     use crate::memory::notes::orientation::types::{
         IndexStats, LogEntry, OrientationSnapshot, TokenBudget,
     };
-    use crate::memory::notes::orientation::NoteOrientation;
     use crate::sync_primitives::Arc;
     use crate::thinker::MemoryContextProvider;
     use async_trait::async_trait;
@@ -1419,7 +1416,7 @@ mod agent_catalog_tests {
     #[test]
     fn catalog_precedence_is_unchanged_by_the_sort() {
         let registry = vec![
-            AgentDef::new("explore", AgentMode::SubAgent).with_description("registry explore")
+            AgentDef::new("explore", AgentMode::SubAgent).with_description("registry explore"),
         ];
         let plugin = vec![
             AgentDef::new("explore", AgentMode::SubAgent).with_description("plugin explore"),

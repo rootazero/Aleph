@@ -173,20 +173,21 @@ impl PluginLoader {
     /// plugins are MCP *servers* and are mounted by `lifecycle.rs` through
     /// `McpManager` (`mcp_server` step), `Static` plugins have none.
     pub(super) fn load_plugin(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
-        self.load_plugin_with_settings(manifest, &serde_json::Value::Null)
+        self.load_plugin_at(&manifest.id, manifest, &serde_json::Value::Null)
     }
 
-    fn load_plugin_with_settings(
+    fn load_plugin_at(
         &mut self,
+        runtime_key: &str,
         manifest: &PluginManifest,
         settings: &serde_json::Value,
     ) -> ExtensionResult<()> {
-        if self.is_loaded(&manifest.id) {
-            warn!("Plugin {} is already loaded, skipping", manifest.id);
+        if self.is_loaded(runtime_key) {
+            warn!("Plugin {runtime_key} is already loaded, skipping");
             return Ok(());
         }
         match manifest.kind {
-            PluginKind::Wasm => self.load_wasm_plugin(manifest, settings),
+            PluginKind::Wasm => self.load_wasm_plugin(runtime_key, manifest, settings),
             PluginKind::Mcp | PluginKind::Static => {
                 info!(
                     "Plugin {} has no in-process runtime, skipping loader",
@@ -200,6 +201,7 @@ impl PluginLoader {
     /// Load a WASM plugin.
     fn load_wasm_plugin(
         &mut self,
+        runtime_key: &str,
         manifest: &PluginManifest,
         settings: &serde_json::Value,
     ) -> ExtensionResult<()> {
@@ -229,10 +231,10 @@ impl PluginLoader {
         // `PluginLoader::new`: see `VaultBackedSecretResolver::for_current_process`
         // for why a constructor parameter is the wrong shape for this.
         let resolver = super::runtime::wasm::VaultBackedSecretResolver::for_current_process();
-        runtime.load_plugin_with(manifest, Some(resolver), settings)?;
+        runtime.load_plugin_at(runtime_key, manifest, Some(resolver), settings)?;
 
         self.loaded_plugins
-            .insert(manifest.id.clone(), PluginKind::Wasm);
+            .insert(runtime_key.to_owned(), PluginKind::Wasm);
 
         info!("Loaded WASM plugin '{}'", manifest.id);
         Ok(())
@@ -384,17 +386,24 @@ impl PluginLoader {
     }
 
     /// Called only by the normal mount effect. Does not register any grant.
-    fn bind_context_exports(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
+    fn bind_context_exports(
+        &mut self,
+        runtime_key: &str,
+        manifest: &PluginManifest,
+    ) -> ExtensionResult<()> {
         let mut bindings = Vec::new();
         for declaration in manifest
             .aleph_extensions
             .iter()
             .flat_map(|ext| &ext.contexts)
         {
-            let adapter =
-                super::context_adapter::WasmContextAdapter::bind(self, manifest, declaration)?;
+            let adapter = super::context_adapter::WasmContextAdapter::bind_mounted(
+                self,
+                runtime_key,
+                declaration,
+            )?;
             let key =
-                super::registry::namespaced_component_key(&manifest.id, &declaration.descriptor.id);
+                super::registry::namespaced_component_key(runtime_key, &declaration.descriptor.id);
             if bindings.iter().any(|(existing, _)| existing == &key) {
                 return Err(ExtensionError::Runtime(format!(
                     "duplicate context binding: {key}"
@@ -606,11 +615,12 @@ pub(crate) async fn load_wasm_effect(
     loader: Arc<tokio::sync::RwLock<PluginLoader>>,
     manifest: &PluginManifest,
 ) -> ExtensionResult<Disposer> {
-    load_wasm_effect_with_settings(loader, manifest, &serde_json::Value::Null).await
+    load_wasm_effect_with_settings(loader, &manifest.id, manifest, &serde_json::Value::Null).await
 }
 
 pub(crate) async fn load_wasm_effect_with_settings(
     loader: Arc<tokio::sync::RwLock<PluginLoader>>,
+    runtime_key: &str,
     manifest: &PluginManifest,
     settings: &serde_json::Value,
 ) -> ExtensionResult<Disposer> {
@@ -619,17 +629,17 @@ pub(crate) async fn load_wasm_effect_with_settings(
         PluginKind::Wasm,
         "only WASM plugins have a module to load"
     );
-    let plugin_id = manifest.id.clone();
+    let plugin_id = runtime_key.to_owned();
     let identity = {
         let mut guard = loader.write().await;
-        // The same predicate `load_plugin` uses to skip a duplicate, checked
+        // The same predicate `load_plugin_at` uses to skip a duplicate, checked
         // under the same guard so the two can never disagree.
         let skipped_duplicate = guard.is_loaded(&plugin_id);
-        guard.load_plugin_with_settings(manifest, settings)?;
+        guard.load_plugin_at(&plugin_id, manifest, settings)?;
         if skipped_duplicate {
             None
         } else {
-            if let Err(error) = guard.bind_context_exports(manifest) {
+            if let Err(error) = guard.bind_context_exports(&plugin_id, manifest) {
                 guard.unload_plugin(&plugin_id)?;
                 return Err(error);
             }
@@ -891,7 +901,11 @@ mod tests {
         let manifest_b = manifest_with_guest(directory_b.path(), "loader-shutdown", PAYLOAD_B);
         let mut loader = PluginLoader::new();
         loader
-            .load_plugin_with_settings(&manifest_a, &serde_json::json!({"key": "value"}))
+            .load_plugin_at(
+                &manifest_a.id,
+                &manifest_a,
+                &serde_json::json!({"key": "value"}),
+            )
             .unwrap();
         let old = loader.bind_wasm("loader-shutdown", HANDLER).unwrap();
         assert_eq!(

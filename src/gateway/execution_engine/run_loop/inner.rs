@@ -11,8 +11,8 @@ use tracing::{error, info, warn};
 use crate::sync_primitives::Arc;
 
 use super::super::{ExecutionError, RunRequest};
-use crate::extension::hooks::{budget_hook_contexts, join_messages, HookExecutor};
 use crate::extension::HookEvent;
+use crate::extension::hooks::{HookExecutor, budget_hook_contexts, join_messages};
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::EventEmitter;
 
@@ -217,7 +217,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // just above this frame) and handed to every face built below —
         // the plugin tool index here, the MCP join further down. One value
         // per run, not one read per face.
-        let visibility = crate::extension::visibility::VisibilityCtx::for_session();
+        let visibility = crate::extension::visibility::VisibilityCtx::for_authorized_run();
 
         // Build tool registry inputs (filtered by agent whitelist).
         let base_allowed_tools: Vec<crate::tool_metadata::UnifiedTool> = self
@@ -275,6 +275,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 "Applied slash-skill allowed_tools restriction"
             );
         }
+
+        let plugin_providers: std::collections::HashMap<_, _> = allowed_tools
+            .iter()
+            .filter_map(|tool| {
+                let crate::tool_metadata::ToolSource::Plugin { plugin_id } = &tool.source else {
+                    return None;
+                };
+                let provider = extension_manager
+                    .as_ref()?
+                    .plugin_tool_provider_name(plugin_id, &tool.name)?;
+                Some((provider, (plugin_id.as_str(), tool.name.as_str())))
+            })
+            .collect();
 
         // This turn's execution tier + explicit tool permission policy. Resolved
         // by the shared `turn_permissions` module: the slash-command fast path
@@ -671,12 +684,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             let joined = join_canonical_tools(
                                 &entries,
                                 &mut loop_registry_inner,
-                                |name| {
-                                    agent.is_tool_allowed(name)
+                                |name, source| {
+                                    if let crate::tools::service::ToolSource::Extension {
+                                        plugin_id,
+                                    } = source
+                                    {
+                                        let (owner, logical_name) = plugin_providers.get(name)?;
+                                        return (*owner == plugin_id)
+                                            .then(|| (*logical_name).to_owned());
+                                    }
+                                    (agent.is_tool_allowed(name)
                                         && super::super::slash_skill_scope::admits(
                                             slash_skill_scope.as_ref(),
                                             name,
-                                        )
+                                        ))
+                                    .then(|| name.to_owned())
                                 },
                                 &visible,
                                 &mut allowed_names,
@@ -906,8 +928,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             // SubagentTool construction
             let subagent_tool = {
-                use crate::agents::subagent_tool::SubagentTool;
                 use crate::agents::AgentRegistry;
+                use crate::agents::subagent_tool::SubagentTool;
 
                 let orchestrator = match self.orchestrator.get() {
                     Some(o) => o,
@@ -1648,29 +1670,35 @@ pub(super) fn select_canonical_mcp_projection(
 pub(super) fn join_canonical_tools(
     snapshot: &std::collections::HashMap<String, crate::tools::registry::RegistryEntry>,
     registry: &mut crate::tools::runtime::LoopToolRegistry,
-    is_allowed: impl Fn(&str) -> bool,
+    request_name: impl Fn(&str, &crate::tools::service::ToolSource) -> Option<String>,
     visible: &crate::tools::handlers::McpServerFilter,
     allowed_names: &mut std::collections::BTreeSet<String>,
 ) -> std::collections::BTreeSet<String> {
+    use crate::tools::service::ToolSource;
+
     let mut mcp_names = std::collections::BTreeSet::new();
     for (name, entry) in snapshot {
-        if !is_allowed(name) || registry.get(name).is_some() {
+        let Some(request_name) = request_name(name, &entry.descriptor.source) else {
             continue;
-        }
-        if !mcp_handler_admitted(entry.handler.as_ref(), visible) {
+        };
+        if registry.get(&request_name).is_some()
+            || (&request_name != name
+                && snapshot.get(&request_name).is_some_and(|other| {
+                    !matches!(other.descriptor.source, ToolSource::Extension { .. })
+                }))
+            || !mcp_handler_admitted(entry.handler.as_ref(), visible)
+        {
             continue;
         }
         registry.register(Box::new(
-            crate::tools::adapters::McpRegistryTool::from_canonical_entry(entry, visible),
+            crate::tools::adapters::McpRegistryTool::from_canonical_entry(entry, visible)
+                .with_request_name(request_name.clone()),
         ));
         if !allowed_names.is_empty() {
-            allowed_names.insert(name.clone());
+            allowed_names.insert(request_name.clone());
         }
-        if matches!(
-            &entry.descriptor.source,
-            crate::tools::service::ToolSource::Mcp { .. }
-        ) {
-            mcp_names.insert(name.clone());
+        if matches!(&entry.descriptor.source, ToolSource::Mcp { .. }) {
+            mcp_names.insert(request_name);
         }
     }
     mcp_names

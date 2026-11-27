@@ -28,13 +28,13 @@ use crate::builtin_tools::mcp_resource::{
 };
 use crate::mcp::manager::{McpManagerEvent, McpManagerHandle, McpTransportType};
 use crate::tool_metadata::ToolCatalog;
+use crate::tools::AlephToolDyn;
 use crate::tools::descriptor::ToolCapabilityDescriptor;
 use crate::tools::handlers::builtin::BuiltinHandler;
 use crate::tools::handlers::registration::{register_mcp_tools, unregister_mcp_tools};
 use crate::tools::handlers::{McpServerFilter, ToolHandler};
 use crate::tools::registration_scope::ToolRegistrationScope;
 use crate::tools::registry::ToolHandlerRegistry;
-use crate::tools::AlephToolDyn;
 
 /// Registry name of the capability-gated resource-reading builtin.
 pub(crate) const RESOURCE_TOOL: &str = "mcp_read_resource";
@@ -254,6 +254,9 @@ async fn sync_server(
         .and_then(|configs| configs.into_iter().find(|c| c.id == server_id))
         .and_then(|c| c.timeout_seconds);
     let tools = client.list_tools().await;
+    if client.is_retired() {
+        return;
+    }
     // Replace this server's previous scope. Disposing it first is what makes a
     // shrinking `tools/list` safe: the stale generation-guarded handles cannot
     // remove the entries the fresh registration is about to create, and the
@@ -265,13 +268,17 @@ async fn sync_server(
     let registered = register_mcp_tools(
         registry,
         tool_catalog,
-        client,
+        Arc::clone(&client),
         server_id,
         &tools,
         timeout_seconds,
         &mut scope,
     )
     .await;
+    if client.is_retired() {
+        dispose_server_scope(scope, server_id).await;
+        return;
+    }
     server_scopes.insert(server_id.to_string(), scope);
     tracing::info!(
         server_id,
@@ -989,6 +996,61 @@ mod tests {
         dispose_bridge_scopes(&mut server_scopes, &mut capabilities).await;
         assert!(registry.snapshot().is_empty());
         assert!(server_scopes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retired_mcp_client_cannot_republish_tools_after_replacement() {
+        let registry = ToolHandlerRegistry::new();
+        let owner = crate::extension::visibility::PluginInstanceKey::new(
+            crate::extension::visibility::ScopeKey::Project(std::path::PathBuf::from("project")),
+            "demo".into(),
+        );
+        let server = crate::extension::mcp_config::plugin_server_id(&owner.runtime_key(), "demo");
+        let old = Arc::new(crate::mcp::McpClient::new());
+        let mut previous = ToolRegistrationScope::new("previous");
+        let mut current = ToolRegistrationScope::new("current");
+        let mut late = ToolRegistrationScope::new("late");
+        let names = register_mcp_tools(
+            &registry,
+            None,
+            old.clone(),
+            &server,
+            &[mcp_tool("echo")],
+            None,
+            &mut previous,
+        )
+        .await;
+        assert_eq!(names.len(), 1);
+        let name = &names[0];
+        assert!(registry.capture_entry(name).is_some());
+        old.retire();
+        dispose_server_scope(previous, &server).await;
+        register_mcp_tools(
+            &registry,
+            None,
+            Arc::new(crate::mcp::McpClient::new()),
+            &server,
+            &[mcp_tool("echo"), mcp_tool("other")],
+            None,
+            &mut current,
+        )
+        .await;
+        let replacement = registry.capture_entry(name).expect("replacement published");
+        let late_names = register_mcp_tools(
+            &registry,
+            None,
+            old,
+            &server,
+            &[mcp_tool("echo"), mcp_tool("late")],
+            None,
+            &mut late,
+        )
+        .await;
+        assert!(late_names.is_empty());
+        assert_eq!(registry.capture_entry(name), Some(replacement));
+        assert_eq!(registry.entries_snapshot().len(), 2);
+        dispose_server_scope(current, &server).await;
+        assert!(registry.entries_snapshot().is_empty());
     }
 
     async fn eventually_absent(registry: &ToolHandlerRegistry, name: &str) -> bool {

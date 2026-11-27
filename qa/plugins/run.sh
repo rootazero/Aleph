@@ -547,8 +547,8 @@ visibility)
   # anywhere else would prove discovery, not visibility.
   PROJECT="$QA_ROOT/proj-vis"
   REQ_LOG="$QA_ROOT/requests.jsonl"
-  say "plant a project plugin: one skill, one agent, one MCP server"
-  python3 "$HERE/plant_visibility.py" "$PROJECT" "$HERE/mcp_mock_server.py" || exit 1
+  say "plant project and global copies of the same plugin"
+  python3 "$HERE/plant_visibility.py" "$PROJECT" "$HERE/mcp_mock_server.py" "$INSTALLED" || exit 1
 
   say "start mock provider (single-shot plan, recording every request)"
   python3 "$BUSY/mock_anthropic.py" "$MOCK_PORT" /etc/hostname single-shot "" "$REQ_LOG" \
@@ -579,7 +579,7 @@ visibility)
     *) echo "  [FAIL] the daemon is not in real mode — no run below would reach the mock"; RC=1 ;;
   esac
 
-  say "probe: one run inside the project, one run with no project"
+  say "probe model visibility with the project copy active and disabled"
   python3 "$HERE/drive_visibility.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$PROJECT" "$REQ_LOG" probe || RC=$?
   ;;
 

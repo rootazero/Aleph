@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use crate::extension::capability::{CapabilityDeclaration, CapabilitySource};
 use crate::extension::manifest::{PluginManifest, PluginPermission};
@@ -124,7 +124,14 @@ impl AdapterRegistry {
     /// Read a package for a consumer that displays its contribution bodies.
     pub fn parse_dir(&self, dir: &Path) -> Result<AdapterOutput> {
         let mut output = self.parse_declarations(dir)?;
-        Self::expand_plugin_variables(&mut output, dir);
+        let plugin_id = output.plugin_id.clone();
+        Self::expand_plugin_variables(&mut output, dir, &plugin_id);
+        for declaration in &mut output.capabilities {
+            if let CapabilityDeclaration::McpServer(server) = declaration {
+                super::super::mcp_config::bind_server_to_instance(server, &plugin_id, dir)
+                    .map_err(anyhow::Error::msg)?;
+            }
+        }
         Ok(output)
     }
 
@@ -206,10 +213,11 @@ impl AdapterRegistry {
     pub(crate) fn expand_plugin_variables(
         output: &mut AdapterOutput,
         plugin_dir: &Path,
+        runtime_key: &str,
     ) -> Option<std::path::PathBuf> {
         use crate::extension::plugin_vars::PluginVars;
 
-        let vars = PluginVars::new(&output.plugin_id, plugin_dir);
+        let vars = PluginVars::new(runtime_key, plugin_dir);
         let mut needs_data_dir = false;
         for cap in &mut output.capabilities {
             match cap {

@@ -129,6 +129,57 @@ impl PluginInstanceKey {
         format!("p:{}", hex::encode(hash.finalize()))
     }
 
+    /// Existing runtime maps accept string keys. The project prefix is
+    /// outside the validated logical plugin ID grammar and contains no colon.
+    pub(crate) fn runtime_key(&self) -> String {
+        let key = self.preference_key();
+        match &self.scope {
+            ScopeKey::Global => key,
+            ScopeKey::Project(_) => format!("p_{}_{}", &key[2..], self.plugin_id),
+        }
+    }
+
+    /// Logical group for the existing registry's exact runtime lookup.
+    pub(crate) fn runtime_group(runtime_key: &str) -> &str {
+        runtime_key
+            .strip_prefix("p_")
+            .and_then(|key| key.split_once('_'))
+            .map_or(runtime_key, |(_, id)| id)
+    }
+
+    /// Exact runtime IDs may be used inside the authorized project that owns them.
+    pub(crate) fn runtime_key_allowed(runtime_key: &str, ctx: &VisibilityCtx) -> bool {
+        if !runtime_key.starts_with("p_") {
+            return true;
+        }
+        ctx.project_root.as_ref().is_some_and(|root| {
+            Self::new(
+                ScopeKey::Project(root.clone()),
+                Self::runtime_group(runtime_key).to_owned(),
+            )
+            .runtime_key()
+                == runtime_key
+        })
+    }
+
+    /// The canonical tool provider name for this exact package instance.
+    pub(crate) fn tool_provider_name(&self, logical_name: &str) -> String {
+        use sha2::{Digest, Sha256};
+
+        if self.scope == ScopeKey::Global {
+            return logical_name.to_owned();
+        }
+        let selector = self.selector();
+        let mut hash = Sha256::new();
+        hash.update(b"aleph/plugin-registration/v1\0");
+        for field in [selector.as_str(), "tool", logical_name] {
+            hash.update((field.len() as u64).to_le_bytes());
+            hash.update(field.as_bytes());
+        }
+        let digest = hex::encode(hash.finalize());
+        format!("p_{}", &digest[..62])
+    }
+
     pub(crate) fn preference_key(&self) -> String {
         match self.scope {
             ScopeKey::Global => self.plugin_id.clone(),
@@ -162,6 +213,14 @@ impl VisibilityCtx {
         let effective = root.or_else(|| std::env::current_dir().ok());
         Self {
             project_root: effective.map(|p| canonical_root(&p)),
+        }
+    }
+
+    /// Scope inherited from an authorized run. Sessionless callers are global.
+    #[must_use]
+    pub(crate) fn for_authorized_run() -> Self {
+        Self {
+            project_root: crate::projects::current_project_root().map(|root| canonical_root(&root)),
         }
     }
 
@@ -200,7 +259,11 @@ pub fn scope_install_dir(
         PluginScope::Project => ".aleph/plugins",
         PluginScope::Local => ".aleph/plugins.local",
     };
-    let project = project_dir.ok_or("Project scope requires a project directory")?;
+    let missing_project = match scope {
+        PluginScope::Local => "Local scope requires a project directory",
+        _ => "Project scope requires a project directory",
+    };
+    let project = project_dir.ok_or(missing_project)?;
     let destination = project.join(dir);
     crate::extension::ensure_plugin_destination_is_safe(project, &destination)?;
     Ok(destination)
@@ -225,13 +288,12 @@ pub fn retain_visible_owned<T>(
 
 /// Face ②a: the `<available_skills>` index. Non-plugin skills pass through;
 /// a plugin skill is kept only when the registry can name its plugin AND
-/// that plugin is visible to `ctx`. `lookup` is `ExtensionManager::plugin_scope_key`
-/// in production and a closure in tests, so the filter stays a pure function.
+/// the selected package is visible to the requesting session.
 #[must_use]
 pub fn retain_visible_plugin_skills(
     manifests: Vec<crate::domain::skill::SkillManifest>,
     ctx: &VisibilityCtx,
-    lookup: impl Fn(&str) -> Option<ScopeKey>,
+    visible: impl Fn(&str, &VisibilityCtx) -> bool,
 ) -> Vec<crate::domain::skill::SkillManifest> {
     retain_visible_owned(
         manifests,
@@ -240,7 +302,7 @@ pub fn retain_visible_plugin_skills(
             crate::domain::skill::SkillSource::Plugin(id) => Some(id.as_str()),
             _ => None,
         },
-        |owner, ctx| lookup(owner).is_some_and(|key| visible_to(&key, ctx)),
+        visible,
     )
 }
 
@@ -585,10 +647,12 @@ mod tests {
             _ => None,
         };
         let names = |ctx: &VisibilityCtx| -> Vec<String> {
-            retain_visible_plugin_skills(manifests.clone(), ctx, lookup)
-                .iter()
-                .map(|m| m.name().to_string())
-                .collect()
+            retain_visible_plugin_skills(manifests.clone(), ctx, |owner, ctx| {
+                lookup(owner).is_some_and(|scope| visible_to(&scope, ctx))
+            })
+            .iter()
+            .map(|m| m.name().to_string())
+            .collect()
         };
         let in_p = VisibilityCtx {
             project_root: Some(canonical_root(p.path())),
