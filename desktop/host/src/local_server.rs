@@ -16,6 +16,13 @@ const POLL_INTERVAL: Duration = Duration::from_millis(400);
 /// Upper bound on a single localhost HTTP probe (connect + write + read).
 /// A process that accepts the connection but never replies cannot hang it.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Winsock can take just over two seconds to report a refused loopback
+/// connection. Allow that explicit refusal without widening the HTTP probe.
+const CONNECT_TIMEOUT: Duration = if cfg!(windows) {
+    Duration::from_secs(4)
+} else {
+    PROBE_TIMEOUT
+};
 
 #[cfg(feature = "gateway-admission")]
 mod admission;
@@ -149,7 +156,7 @@ fn classify_connect(result: Result<(), std::io::ErrorKind>) -> Option<bool> {
 }
 
 async fn port_open(port: u16) -> Option<bool> {
-    let result = tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect((DAEMON_HOST, port)))
+    let result = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((DAEMON_HOST, port)))
         .await
         .ok()?;
     classify_connect(result.map(|_| ()).map_err(|error| error.kind()))
@@ -442,7 +449,7 @@ mod tests {
             .bind((std::net::Ipv4Addr::LOCALHOST, 0).into())
             .unwrap();
         let address = closed.local_addr().unwrap();
-        let observed = std::net::TcpStream::connect_timeout(&address, Duration::from_millis(20));
+        let observed = std::net::TcpStream::connect_timeout(&address, Duration::from_secs(6));
         assert!(
             observed.is_err(),
             "a non-listening fixture accepted a connection"
