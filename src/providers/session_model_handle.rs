@@ -477,16 +477,12 @@ fn update_discovered(update: impl FnOnce(&mut SelectableModelsSnapshot)) {
             update(std::sync::Arc::make_mut(&mut current));
             Some(())
         });
-        match outcome {
-            // Applied to the scoped slot, or the scope deliberately holds no
-            // snapshot: in both cases the global slot stays untouched.
-            Ok(Some(())) | Ok(None) => return,
-            Err(_) => {
-                let update = update.take().expect("update once");
-                apply_discovered_update(update);
-            }
+        // Applied to the scoped slot, or the scope deliberately holds no
+        // snapshot: in both cases the global slot stays untouched.
+        if outcome.is_err() {
+            let update = update.take().expect("update once");
+            apply_discovered_update(update);
         }
-        return;
     }
     #[cfg(not(test))]
     apply_discovered_update(update);

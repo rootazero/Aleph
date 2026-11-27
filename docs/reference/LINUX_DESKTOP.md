@@ -59,6 +59,20 @@ Wayland **刻意没有** X11 EWMH 那样的跨合成器窗口协议。所以：
 
 ## 3. 装什么
 
+### 已安装的离线语音识别 / Installed offline speech recognition
+
+仅服务管理员在 **停止服务后** 编辑本机 `config.toml`，填写安装好的 `whisper.cpp` CLI 与模型的绝对路径，然后重启。这不是 `[voice.local]`，不能通过 Panel 或配置补丁设置。/ With the server **stopped**, provision both absolute paths in the machine's `config.toml`, then restart. This is separate from `[voice.local]` and cannot be set through Panel or config patching.
+
+```toml
+[desktop.offline_stt]
+executable = "/opt/whisper/bin/whisper-cli"
+model = "/opt/whisper/models/ggml-base.bin"
+```
+
+[The adapter](../../desktop/linux/src/offline_stt.rs) expects the CLI behavior of `whisper.cpp` v1.8.3. It requires regular files and Linux effective-access checks (`faccessat2`, normally Linux 5.8+); missing, partial, or inaccessible configuration leaves the installed adapter unavailable. No `PATH` search, shell invocation, automatic model download, or implicit network fallback. / 适配器依赖 `whisper.cpp` v1.8.3 的 CLI 行为、普通文件和内核的有效权限检查。配置缺失、不完整或不可访问时不挂载离线适配器；不搜索 `PATH`、不经 shell、不下载模型、不隐式走网络。
+
+Only live, same-user Desktop IPC can use installed STT, and only when no configured STT source is usable. Paired browsers do not inherit that eligibility. This does not enable the native Linux TSX mount. / 仅活跃同用户 Desktop IPC 且无可用配置 STT 时可用；浏览器配对不继承权限，也不借此启用 Linux 原生 TSX 挂载。
+
 ### NSH 桌面候选版：安装前检查 / NSH desktop candidate preflight
 
 在 Linux 桌面上，从 Aleph 源码检出的根目录运行以下命令，再启动 NSH 候选版。这个入口**不安装 Aleph 本身**，不适用于独立 `aleph-server` 安装器或当前 Tauri 分发。/ Run these from the root of the Aleph source checkout before launching the Linux NSH candidate. This does **not** install Aleph itself or affect the standalone server installer or current Tauri distribution.

@@ -77,11 +77,33 @@ pub fn App() -> impl IntoElement {
         service: LocalService::bundled(),
     };
     let window = main_window();
-    let close_window = window.clone();
-    window.on_close_press(move |_| close_window.hide());
+    #[cfg(all(feature = "tsx-panel", target_os = "macos"))]
+    if crate::panel_surface::registered() {
+        let observed_window = window.clone();
+        let last_visible = Cell::new(None);
+        // The Dock can reopen the window without using the shell's show action.
+        nsh_core::element::effect(move || {
+            if let Some(state) = observed_window.state() {
+                let visible = Some(state.visible);
+                if last_visible.replace(visible) != visible {
+                    crate::panel_surface::set_voice_visible(state.visible);
+                }
+            }
+        });
+    }
+    let hide_window = window.clone();
+    let hide = move || {
+        #[cfg(all(feature = "tsx-panel", target_os = "macos"))]
+        crate::panel_surface::set_voice_visible(false);
+        hide_window.hide();
+    };
+    let close = hide.clone();
+    window.on_close_press(move |_| close());
     let shortcut_window = window.clone();
     let bridge_window = window.clone();
     let show = move || {
+        #[cfg(all(feature = "tsx-panel", target_os = "macos"))]
+        crate::panel_surface::set_voice_visible(true);
         window.show();
         window.focus();
     };
@@ -159,7 +181,7 @@ pub fn App() -> impl IntoElement {
                 .state()
                 .is_some_and(|state| state.visible && state.focused)
             {
-                shortcut_window.hide();
+                hide();
             } else {
                 show();
             }
@@ -210,6 +232,8 @@ pub fn App() -> impl IntoElement {
 /// Quits; when the window shows this computer's server, stops it first. A
 /// QA run's server is not the bundled one, so a QA run only quits.
 fn quit_and_stop(switch: &Switch, qa: bool) {
+    #[cfg(all(feature = "tsx-panel", target_os = "macos"))]
+    crate::panel_surface::set_voice_visible(false);
     #[cfg(feature = "embedded-core")]
     if !qa && switch.current_target() == ConnectionTarget::Local {
         let service = switch.service.clone();

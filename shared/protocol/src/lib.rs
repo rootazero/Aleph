@@ -41,10 +41,12 @@ mod ids;
 pub mod json_canvas;
 pub mod jsonrpc;
 pub mod memory_graph;
+pub mod memory_trace;
 pub mod metrics;
 pub mod native_credentials;
 pub mod panel;
 pub mod panel_shell;
+pub mod panel_voice;
 pub mod paths;
 pub mod plan;
 pub mod plugins;
@@ -75,6 +77,8 @@ pub mod workspace;
 // Re-export commonly used types at crate root
 pub use auth::{GuestScope, IdentityContext, Role};
 pub use clarification::{
+    ClarificationAction, ClarificationActionParams, ClarificationActionResponse,
+    ClarificationActionStatus, ClarificationAnswerInput, ClarificationInput,
     ClarificationResolveParams, ClarificationResolveResponse, PendingClarification,
     PendingListResponse,
 };
@@ -128,3 +132,40 @@ pub use trace_replay::{
     AgentTraceListCursor, AgentTraceListPage, AgentTraceListRow, AgentTraceReplay,
     AgentTraceReplayEntry, AgentTraceTaskSummary,
 };
+
+#[cfg(test)]
+#[test]
+fn panel_voice_limits_and_error_wire_contract() {
+    use crate::panel_voice::{
+        VoiceErrorKind, MAX_PCM_BYTES, MAX_UTTERANCE_SAMPLES, SAMPLE_RATE_HZ, VOICE_TAB_ID,
+    };
+    assert_eq!(
+        (
+            MAX_UTTERANCE_SAMPLES,
+            MAX_PCM_BYTES,
+            SAMPLE_RATE_HZ,
+            VOICE_TAB_ID
+        ),
+        (320_000, 640_000, 16_000, "voice")
+    );
+    for (kind, wire) in [
+        (VoiceErrorKind::InvalidAudio, "invalid_audio"),
+        (VoiceErrorKind::NoSpeech, "no_speech"),
+        (VoiceErrorKind::TooLarge, "too_large"),
+        (VoiceErrorKind::NotConfigured, "not_configured"),
+        (VoiceErrorKind::OfflineUnavailable, "offline_unavailable"),
+        (VoiceErrorKind::UnsupportedLanguage, "unsupported_language"),
+        (VoiceErrorKind::PermissionDenied, "permission_denied"),
+        (VoiceErrorKind::ProviderFailed, "provider_failed"),
+        (VoiceErrorKind::UnsupportedOutput, "unsupported_output"),
+        (VoiceErrorKind::CaptureUnavailable, "capture_unavailable"),
+        (VoiceErrorKind::Cancelled, "cancelled"),
+    ] {
+        let value = serde_json::Value::String(wire.into());
+        assert_eq!(serde_json::to_value(kind).unwrap(), value);
+        assert_eq!(
+            serde_json::from_value::<VoiceErrorKind>(value).unwrap(),
+            kind
+        );
+    }
+}

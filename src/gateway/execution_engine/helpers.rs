@@ -288,6 +288,7 @@ pub async fn run_dispatch_and_drain(
         // Never withholds the terminal frame: this wrapper has no retry loop
         // above it, so an attempt of its is always the run's last word.
         false,
+        None,
     )
     .await
     .map_err(ExecutionError::from)
@@ -306,6 +307,7 @@ pub async fn run_dispatch_and_drain_classified(
     locale: Locale,
     occupancy_out: &std::sync::Mutex<Option<RunContextOccupancy>>,
     may_retry: bool,
+    chat_cancellation: Option<&crate::gateway::execution_adapter::ChatRunCancellation>,
 ) -> Result<String, DispatchFailure> {
     // Session this run's provider dials are witnessed under. Captured before
     // `req` moves into the dispatch; the drain below reads the witness at the
@@ -316,11 +318,16 @@ pub async fn run_dispatch_and_drain_classified(
     // rust-doctor-disable-next-line excessive-clone
     let witness_session_for_fallback = witness_session.clone();
 
-    // Give the harness its child token before it can start, including on retries.
-    let handle = orchestrator
-        .dispatch_with_cancel(req, cancel_token.child_token())
-        .await
-        .map_err(map_flow_error)?;
+    let child_cancel = cancel_token.child_token();
+    let handle = match chat_cancellation {
+        Some(cancellation) => {
+            orchestrator
+                .dispatch_chat_attempt(req, cancellation, may_retry, child_cancel)
+                .await
+        }
+        None => orchestrator.dispatch_with_cancel(req, child_cancel).await,
+    }
+    .map_err(map_flow_error)?;
     // 2. Drain task. Resolves to the *prepared but unsent* terminal frame
     //    (`Some`) when the harness broadcast `Complete`, and to `None` when it
     //    never did — so step 4 can emit a safety-net `RunComplete` in the rare
@@ -426,7 +433,8 @@ pub async fn run_dispatch_and_drain_classified(
             // report the run as whatever the final, instant, zeroed retry did.
             let superseded_by_a_retry =
                 may_retry && matches!(failure, DispatchFailure::Transient { .. });
-            if !superseded_by_a_retry {
+            // Managed failures get their one scoped RunError from execute().
+            if chat_cancellation.is_none() && !superseded_by_a_retry {
                 match held {
                     Some(held) => {
                         if let Err(err) = emit_held_complete(&emitter, run_id, &held).await {
@@ -448,15 +456,19 @@ pub async fn run_dispatch_and_drain_classified(
             // `settle_dropped_completion`'s doc, next to the code that does it.
 
             let failure = DispatchFailure::Fatal(format!("completion dropped: {e}"));
-            settle_dropped_completion(
-                &emitter,
-                run_id,
-                drain,
-                &failure,
-                locale,
-                TERMINAL_DRAIN_GRACE,
-            )
-            .await;
+            if chat_cancellation.is_some() {
+                drain.abort();
+            } else {
+                settle_dropped_completion(
+                    &emitter,
+                    run_id,
+                    drain,
+                    &failure,
+                    locale,
+                    TERMINAL_DRAIN_GRACE,
+                )
+                .await;
+            }
             return Err(failure);
         }
     };
@@ -504,6 +516,13 @@ pub async fn run_dispatch_and_drain_classified(
     //    and Panel consumers still observe the run end — with the full
     //    enriched summary instead of an all-zeros placeholder.
     let held = drain.await.ok().flatten();
+    // The real harness settles before its durable marker. This also fences
+    // runners that produce only a FlowOutcome, with no durable marker.
+    if let Some(cancellation) = chat_cancellation {
+        cancellation
+            .begin_terminal_commit()
+            .map_err(|_| DispatchFailure::Cancelled)?;
+    }
     if let Some(held) = held {
         // A successful attempt always speaks: `may_retry` is irrelevant here
         // because there is nothing left to supersede it.

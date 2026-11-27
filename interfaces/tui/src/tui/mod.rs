@@ -52,7 +52,7 @@ use aleph_protocol::browser_live::{
     CLOSED_TOPIC as BROWSER_LIVE_CLOSED_TOPIC, RESOURCE_TOPIC as BROWSER_LIVE_RESOURCE_TOPIC,
 };
 use aleph_protocol::providers::ProviderListResult;
-use aleph_protocol::{ClarificationResolveResponse, PendingListResponse, StreamEvent};
+use aleph_protocol::{ClarificationActionResponse, PendingListResponse, StreamEvent};
 
 use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
@@ -744,7 +744,10 @@ async fn main_loop<'c>(
                         }
                         "clarification.resolve" => {
                             if let Some(ticket) = submissions.remove(&completed.tag.identity) {
-                                let response = completed.result.ok().and_then(|v| serde_json::from_value::<ClarificationResolveResponse>(v).ok());
+                                let response = completed
+                                    .result
+                                    .ok()
+                                    .and_then(|v| serde_json::from_value::<ClarificationActionResponse>(v).ok());
                                 let effect = state.interaction.acknowledge(&ticket, response.as_ref());
                                 if effect != interaction::AckEffect::Ignored {
                                     pending_revision = pending_revision.wrapping_add(1);
@@ -1210,14 +1213,30 @@ async fn main_loop<'c>(
             // branch of the digit key, and an out-of-range digit is now the
             // first character of a typed answer. Moving the highlight is what
             // the arrow keys do, and they mutate `DialogState` in place.
-            Action::RespondToDialog { session_key, reply } => {
-                if !state.interaction.active_dialog().is_some_and(|dialog| {
-                    dialog.session_key == session_key
-                        && dialog.pending_reply().as_deref() == Some(reply.as_str())
-                }) {
-                    continue;
-                }
-                if let Some(ticket) = state.interaction.submit() {
+            //
+            // A questionnaire leaves the TUI in one write: every staged answer
+            // goes out together, guarded by the request and the question it
+            // belongs to. A cancel is the same write with a different action,
+            // so it can never discard a different questionnaire.
+            action @ (Action::SubmitAnswers { .. } | Action::CancelQuestion { .. }) => {
+                let session_key = match &action {
+                    Action::SubmitAnswers { session_key }
+                    | Action::CancelQuestion { session_key } => session_key.clone(),
+                    _ => unreachable!(),
+                };
+                let ticket = if matches!(&action, Action::CancelQuestion { .. }) {
+                    state.interaction.cancel_question()
+                } else {
+                    state.interaction.submit()
+                };
+                if let Some(ticket) = ticket {
+                    if ticket.params.session_key != session_key {
+                        // The overlay was replaced while the key was in flight:
+                        // the answer belongs to a request that is no longer
+                        // displayed, so it is not sent.
+                        state.interaction.acknowledge(&ticket, None);
+                        continue;
+                    }
                     let identity = ticket.rpc_identity();
                     let params = serde_json::to_value(&ticket.params)?;
                     let tag = rpc_jobs::RpcTag {

@@ -2,12 +2,15 @@
 //! (`interfaces/panel/web/host.js` is the Web side; both answer the same
 //! functions with the same shapes):
 //!
-//! - `aleph.rpc` `{ method, params }` -> `{ result }` | `{ error: { code, message } }`
+//! - `aleph.rpc` `{ method, params, voice_binding? }` -> `{ result }` | `{ error: { code, message } }`
+//!   Voice RPCs carry a host-only binding to the current authenticated link.
 //! - `aleph.pair` -> an error: Desktop IPC is authenticated by the operating
 //!   system, so the desktop shell never asks for pairing
 //! - `aleph.connect` -> opens a new Desktop IPC connection (after a drop)
 //! - `aleph.connection` -> the current connection state
-//! - event `aleph.connection` `{ state, endpoint, subject, pairing }`
+//! - event `aleph.connection` `{ state, endpoint, subject, pairing, voice_binding? }`
+//! - `aleph.voice.availability` describes the native mount, not permission or STT setup
+//! - event `aleph.voice.visibility` `{ visible }`
 //! - event `aleph.event` `{ topic, data }`: a live Gateway event (negotiated
 //!   `live_events`), or the host's own `connection.stale` when the client
 //!   dropped frames — the Panel then refetches instead of trusting its view
@@ -26,7 +29,11 @@ use aleph_protocol::system_hello::{ClientHello, Feature, HelloParams, ProtocolVe
 use aleph_protocol::StreamEvent;
 use nsh_engine::{HostCall, HostChannel};
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
+use uuid::Uuid;
+
+mod voice;
+use voice::{CaptureOwner, VoiceSlots};
 
 /// The Desktop IPC socket of an already-running Gateway (an absolute path).
 pub(crate) const IPC_ENV: &str = "ALEPH_SHELL_PANEL_IPC";
@@ -35,14 +42,21 @@ pub(crate) const IPC_ENV: &str = "ALEPH_SHELL_PANEL_IPC";
 /// Gateway binds a fresh path on every start, and the layout must survive one.
 const ENDPOINT: &str = "desktop-ipc";
 
-const FUNCTIONS: [&str; 4] = [
+const VOICE_AVAILABILITY: &str = "aleph.voice.availability";
+const VOICE_VISIBILITY: &str = "aleph.voice.visibility";
+const FUNCTIONS: [&str; 5] = [
     "aleph.rpc",
     "aleph.pair",
     "aleph.connect",
     "aleph.connection",
+    VOICE_AVAILABILITY,
 ];
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+// Includes the active ordinary call and callers queued behind the turn lock.
+const ORDINARY_RPC_SLOTS: usize = 4;
+// The Core capture may run for 45 seconds plus bounded teardown.
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(52);
 
 /// How often an idle connection is checked for loss. Without it a Panel
 /// waiting on events would learn of a Gateway restart only at its next call.
@@ -88,9 +102,27 @@ struct Shared {
     target: Target,
     runtime: tokio::runtime::Handle,
     link: Mutex<Link>,
-    /// The client refuses calls over the Gateway's in-flight limit instead of
-    /// queueing them, so calls take turns here (as the Web host queues them).
+    playback_admission: Arc<crate::voice_playback::admission::Admission>,
+    on_lost: Box<dyn Fn() + Send + Sync>,
+    /// Generic calls take turns here. Capture controls must reach Core while
+    /// the long capture RPC is in flight.
     turn: tokio::sync::Mutex<()>,
+    voice_slots: VoiceSlots,
+    ordinary_slots: Arc<Semaphore>,
+}
+
+enum AdmittedRpc {
+    Ordinary(OwnedSemaphorePermit),
+    Voice(voice::AdmittedVoice),
+}
+
+fn take_rpc_fields(mut data: Value) -> (String, Option<Value>) {
+    let fields = data.as_object_mut().expect("admitted RPC envelope");
+    let Some(Value::String(method)) = fields.remove("method") else {
+        unreachable!("admitted RPC method");
+    };
+    let params = fields.remove("params").filter(|value| !value.is_null());
+    (method, params)
 }
 
 struct Link {
@@ -100,10 +132,29 @@ struct Link {
     /// Bumped by every connect, so an older attempt's late outcome is ignored.
     attempt: u64,
     closed: bool,
+    capture: Option<CaptureOwner>,
+    last_capture: u64,
+    voice_binding: Option<Uuid>,
+}
+
+impl Link {
+    fn install_client(&mut self, client: Arc<AlephClient>) {
+        self.state = "connected";
+        self.subject = client.hello_subject();
+        self.client = Some(client);
+        self.voice_binding = Some(Uuid::new_v4());
+        self.capture = None;
+    }
 }
 
 impl Handle {
-    pub(crate) fn start(host: HostChannel, target: Target) -> std::io::Result<Handle> {
+    pub(crate) fn start(
+        host: HostChannel,
+        target: Target,
+        visible: bool,
+        playback_admission: Arc<crate::voice_playback::admission::Admission>,
+        on_lost: impl Fn() + Send + Sync + 'static,
+    ) -> std::io::Result<Handle> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("aleph-panel-host")
@@ -113,6 +164,7 @@ impl Handle {
             Target::Local(_) => "connecting",
             Target::Unavailable(_) => "unavailable",
         };
+        playback_admission.set_visible(visible);
         let shared = Arc::new(Shared {
             host,
             target,
@@ -123,8 +175,15 @@ impl Handle {
                 client: None,
                 attempt: 0,
                 closed: false,
+                capture: None,
+                voice_binding: None,
+                last_capture: 0,
             }),
+            playback_admission,
+            on_lost: Box::new(on_lost),
             turn: tokio::sync::Mutex::new(()),
+            voice_slots: VoiceSlots::default(),
+            ordinary_slots: Arc::new(Semaphore::new(ORDINARY_RPC_SLOTS)),
         });
         for name in FUNCTIONS {
             let handler = Arc::downgrade(&shared);
@@ -143,16 +202,42 @@ impl Handle {
     }
 }
 
+impl Handle {
+    pub(crate) fn set_visible(&self, visible: bool) {
+        let cancel = {
+            let mut link = self.shared.link();
+            if link.closed || !self.shared.playback_admission.set_visible(visible) {
+                return;
+            }
+            self.shared.publish_visibility(visible);
+            if visible {
+                None
+            } else {
+                link.capture
+                    .and_then(|capture| link.start_capture_cleanup(capture))
+            }
+        };
+        if let Some(cleanup) = cancel {
+            let shared = self.shared.clone();
+            self.shared.runtime.spawn(async move {
+                shared.clean_capture(cleanup).await;
+            });
+        }
+    }
+}
+
 impl Drop for Handle {
     fn drop(&mut self) {
-        for name in FUNCTIONS {
-            self.shared.host.remove_handler(name);
-        }
         {
             let mut link = self.shared.link();
             link.closed = true;
-            // Dropping the client stops its socket.
-            link.client = None;
+            self.shared.playback_admission.disconnected();
+            if let Some(client) = link.client.take() {
+                client.retire_panel_connection();
+            }
+        }
+        for name in FUNCTIONS {
+            self.shared.host.remove_handler(name);
         }
         // The surface drops on the UI thread: stop without waiting. In-flight
         // calls are cancelled, which drops their clones of the client.
@@ -171,6 +256,18 @@ impl Shared {
 
     fn dispatch(self: Arc<Self>, mut call: HostCall) {
         match call.name() {
+            VOICE_AVAILABILITY => {
+                // Order the new subscriber's snapshot with live visibility edges.
+                {
+                    let link = self.link();
+                    if !link.closed {
+                        self.publish_visibility(self.playback_admission.visibility().0);
+                    }
+                }
+                call.resolve(
+                    json!({"capture": true, "playback": true, "capture_transport": "desktop"}),
+                );
+            }
             "aleph.connection" => {
                 let state = self.connection();
                 call.resolve(state);
@@ -185,8 +282,7 @@ impl Shared {
             )),
             "aleph.rpc" => {
                 let data = call.take_data();
-                let runtime = self.runtime.clone();
-                runtime.spawn(async move { call.resolve(self.rpc(data).await) });
+                self.start_rpc(data, move |reply| call.resolve(reply));
             }
             other => {
                 let message = format!("no host function {other}");
@@ -197,7 +293,17 @@ impl Shared {
 
     fn connection(&self) -> Value {
         let link = self.link();
-        connection_state(link.state, link.subject.as_deref())
+        let mut state = connection_state(link.state, link.subject.as_deref());
+        if let Some(binding) = link.voice_binding {
+            state["voice_binding"] = json!(binding);
+        }
+        state
+    }
+
+    fn publish_visibility(&self, visible: bool) {
+        let _ = self
+            .host
+            .send(VOICE_VISIBILITY, json!({ "visible": visible }));
     }
 
     fn publish(&self) {
@@ -234,9 +340,8 @@ impl Shared {
                 Ok((client, events)) => {
                     let topics = client.take_topic_events();
                     let client = Arc::new(client);
-                    link.state = "connected";
-                    link.subject = client.hello_subject();
-                    link.client = Some(client.clone());
+                    link.install_client(client.clone());
+                    shared.playback_admission.connected(attempt, client.clone());
                     shared.runtime.spawn(forward_events(
                         Arc::downgrade(&shared),
                         Arc::downgrade(&client),
@@ -273,26 +378,88 @@ impl Shared {
         if !current || link.closed {
             return;
         }
+        // Invalidate ingress synchronously and enqueue teardown before a
+        // newer connection can take ownership.
+        self.playback_admission.disconnected();
         link.client = None;
+        link.capture = None;
+        link.voice_binding = None;
         link.state = "disconnected";
+        (self.on_lost)();
         drop(link);
         self.publish();
     }
 
-    async fn rpc(&self, data: Value) -> Value {
-        let Some(method) = data.get("method").and_then(Value::as_str) else {
-            return error_reply(-32602, "aleph.rpc needs { method, params }");
+    fn start_rpc(self: Arc<Self>, data: Value, resolve: impl FnOnce(Value) + Send + 'static) {
+        let admission = match self.admit_rpc(&data) {
+            Ok(admission) => admission,
+            Err(reply) => return resolve(reply),
         };
-        let params = data
-            .get("params")
-            .filter(|params| !params.is_null())
-            .cloned();
+        // The bridge envelope can contain ignored fields. Keep only the
+        // wire-sized method/params and the permit in the spawned task.
+        let (method, params) = take_rpc_fields(data);
+        let runtime = self.runtime.clone();
+        runtime.spawn(async move {
+            resolve(self.dispatch_rpc(&method, params.as_ref(), admission).await)
+        });
+    }
+
+    fn admit_rpc(&self, data: &Value) -> Result<AdmittedRpc, Value> {
+        let method = data
+            .get("method")
+            .and_then(Value::as_str)
+            .ok_or_else(|| error_reply(-32602, "aleph.rpc needs { method, params }"))?;
+        let binding = data.get("voice_binding");
+        let params = data.get("params").filter(|value| !value.is_null());
+        if method.starts_with("voice.turn.")
+            || (matches!(method, "chat.send" | "chat.abort") && binding.is_some())
+        {
+            return self
+                .admit_voice_rpc(method, params, binding)
+                .map(AdmittedRpc::Voice);
+        }
+        let permit = self
+            .ordinary_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| error_reply(PANEL_HOST_UNAVAILABLE, "the ordinary RPC queue is full"))?;
+        if !AlephClient::panel_rpc_request_fits(method, params) {
+            return Err(error_reply(
+                PANEL_HOST_UNAVAILABLE,
+                "ordinary RPC exceeds its wire budget",
+            ));
+        }
+        Ok(AdmittedRpc::Ordinary(permit))
+    }
+
+    #[cfg(test)]
+    async fn rpc(&self, data: Value) -> Value {
+        match self.admit_rpc(&data) {
+            Ok(admission) => {
+                let (method, params) = take_rpc_fields(data);
+                self.dispatch_rpc(&method, params.as_ref(), admission).await
+            }
+            Err(reply) => reply,
+        }
+    }
+
+    async fn dispatch_rpc(
+        &self,
+        method: &str,
+        params: Option<&Value>,
+        admission: AdmittedRpc,
+    ) -> Value {
+        let _permit = match admission {
+            AdmittedRpc::Voice(voice) => return self.voice_rpc(method, params, voice).await,
+            AdmittedRpc::Ordinary(permit) => permit,
+        };
         let _turn = self.turn.lock().await;
-        let Some(client) = self.link().client.clone() else {
+        let client = self.link().client.clone();
+        let Some(client) = client else {
             return error_reply(PANEL_HOST_UNAVAILABLE, "the Gateway is not connected");
         };
         let result = client
-            .call_with_timeout::<Value, Value>(method, params, CALL_TIMEOUT)
+            .call_with_timeout::<_, Value>(method, params, CALL_TIMEOUT)
             .await;
         if !client.is_connected() {
             self.lost(&client);
@@ -394,6 +561,9 @@ fn rpc_reply(result: CliResult<Value>) -> Value {
 }
 
 #[cfg(test)]
+mod voice_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -485,7 +655,14 @@ mod tests {
         }
 
         let host = HostChannel::default();
-        let handle = Handle::start(host, Target::resolve(true, None)).unwrap();
+        let handle = Handle::start(
+            host,
+            Target::resolve(true, None),
+            true,
+            Arc::default(),
+            || {},
+        )
+        .unwrap();
         assert_eq!(
             handle.shared.connection(),
             json!({ "state": "unavailable", "endpoint": "desktop-ipc", "subject": null, "pairing": false })
@@ -494,7 +671,14 @@ mod tests {
 
     #[test]
     fn rpc_without_a_connection_is_host_unavailable() {
-        let handle = Handle::start(HostChannel::default(), Target::resolve(true, None)).unwrap();
+        let handle = Handle::start(
+            HostChannel::default(),
+            Target::resolve(true, None),
+            true,
+            Arc::default(),
+            || {},
+        )
+        .unwrap();
         let reply = handle
             .shared
             .runtime

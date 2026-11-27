@@ -109,11 +109,17 @@ pub enum Action {
     PaletteConfirm,
 
     // -- Dialog response --
-    /// Answer an `AskUser` dialog. Routed to `clarification.resolve` keyed by
-    /// `session_key` (the reply routes by session, not by run).
-    RespondToDialog {
+    /// Submit every staged answer of the displayed questionnaire. Routed to
+    /// `clarification.resolve` keyed by `session_key` (the action routes by
+    /// session, not by run) and guarded by the request and question ids the
+    /// answers belong to.
+    SubmitAnswers {
         session_key: String,
-        reply: String,
+    },
+    /// Discard the displayed questionnaire. Deliberately distinct from `Esc`,
+    /// which only hides the overlay and must never discard an answer.
+    CancelQuestion {
+        session_key: String,
     },
 
     // -- Tool approval (Ask exec tier) --
@@ -255,19 +261,18 @@ pub struct DialogState {
     /// Clarification registry key — the answer is posted back to
     /// `clarification.resolve` against this, NOT the run id (replies route by
     /// session). Carried on the `AskUser` frame.
-    pub session_key: String,
     pub question: String,
     pub options: Vec<String>,
     pub selected: usize,
-    /// Several picks are accepted, comma-separated.
+    /// Several choices can be checked before staging.
     pub multi_select: bool,
+    pub checked: Vec<u32>,
     /// The answer is a credential: the buffer is rendered masked and never
     /// echoed. Purely a display property here — the transport rule that makes
     /// `secret` load-bearing is enforced server-side in `clarification::ask`,
     /// which is why a secret question can only ever reach this overlay.
     pub secret: bool,
-    /// The typed answer, sent verbatim. Core's `interpret_reply` is the only
-    /// interpreter, so a typed `2` and a pressed `2` are the same bytes.
+    /// The literal free-text answer, distinct from indexed choices.
     pub input: String,
     /// Keys go to [`Self::input`] rather than the menu.
     ///
@@ -279,48 +284,35 @@ pub struct DialogState {
 }
 
 impl DialogState {
-    /// Whether one keypress can answer the question outright.
-    ///
-    /// Mirrors the server's own rule for suppressing an inline keyboard
-    /// (`clarification::render::keyboard_for`): a single index cannot express a
-    /// multi-select answer, so offering one would render a control that
-    /// silently answers less than the question asks. Same predicate, so the
-    /// terminal and a messaging channel cannot disagree about it.
+    /// Whether there is a choice menu to switch to or from.
     #[must_use]
     pub const fn has_quick_pick(&self) -> bool {
-        !self.options.is_empty() && !self.multi_select
+        !self.options.is_empty()
     }
 
-    /// The reply `Enter` would send right now, if any.
-    ///
-    /// Driven by the mode, not by whether the buffer happens to be empty: a
-    /// user who typed something and then tabbed back to the menu means the
-    /// menu, and a blank buffer in text mode means "nothing to send yet"
-    /// rather than "send the highlight".
-    ///
-    /// A pick sends the **1-based index**, not the label. Labels carry their
-    /// `— description` suffix, and core's `interpret_reply` matches labels
-    /// exactly, so a described choice sent by label arrives as free text with
-    /// no selected index — the answer looks right to a human and is `custom`
-    /// to the model. The index is also byte-identical to what the Panel and a
-    /// channel's `clarify:<n>` button send, which keeps `interpret_reply` the
-    /// single interpreter for all three surfaces.
-    #[must_use]
-    pub fn pending_reply(&self) -> Option<String> {
-        if self.typing {
-            let typed = self.input.trim();
-            return (!typed.is_empty()).then(|| typed.to_string());
+    /// Index selected in single-choice mode, independent of the text buffer.
+    pub fn staged_choice(&self) -> Option<usize> {
+        (!self.typing && !self.multi_select && self.selected < self.options.len())
+            .then_some(self.selected)
+    }
+
+    pub fn toggle_choice(&mut self) {
+        if self.selected >= self.options.len() {
+            return;
         }
-        (self.selected < self.options.len()).then(|| (self.selected + 1).to_string())
+        let Ok(index) = u32::try_from(self.selected) else {
+            return;
+        };
+        if let Some(position) = self.checked.iter().position(|&item| item == index) {
+            self.checked.remove(position);
+        } else {
+            self.checked.push(index);
+        }
     }
 }
 
-/// The question an `AskUser` frame is asking, flattened for the overlay.
-///
-/// A struct rather than four positional arguments because two of them are
-/// adjacent bools: `show_dialog(key, q, opts, true, false)` reads identically
-/// whichever way round the last two go, and one of them decides whether the
-/// answer is masked.
+/// A test fixture for an old, read-only dialog projection.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AskDialogView {
     /// Prompt as rendered — position marker, header chip, and hint included.
@@ -1994,12 +1986,7 @@ impl AppState {
         }
     }
 
-    /// Show an `AskUser` dialog. `session_key` is the clarification key the
-    /// answer resolves against (`clarification.resolve`).
-    ///
-    /// The overlay opens in text mode whenever there is nothing to quick-pick,
-    /// so the first keystroke on a free-text (or multi-select) question already
-    /// goes where the user means it to.
+    #[cfg(test)]
     pub fn show_dialog(&mut self, session_key: String, view: AskDialogView) {
         self.interaction
             .offer_question(aleph_protocol::PendingClarification {

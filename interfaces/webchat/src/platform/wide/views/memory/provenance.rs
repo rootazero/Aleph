@@ -1,13 +1,6 @@
-//! Evidence-chain section for the memory detail drawer.
-//!
-//! `memory.trace` has been registered and reachable by the LLM (`memory_trace`
-//! tool) since 2026-06-27, but the panel never called it: the drawer showed a
-//! note's body and backlinks with no way to ask "what conversation is this
-//! claim actually based on?".
-//!
-//! Both directions are wired. From a note we walk DOWN to the raw rows it was
-//! distilled from; from a raw row we walk UP to the notes citing it.
+//! Displays recorded evidence for the note or raw row open in the drawer.
 
+use aleph_protocol::memory_trace::{FactOrigin, NoteSource, NoteSourceStatus};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -29,13 +22,37 @@ fn show_notes_section(kind: TraceKind, notes_len: usize) -> bool {
     matches!(kind, TraceKind::Raw) && notes_len > 0
 }
 
+fn trace_is_empty(kind: TraceKind, trace: &TraceResult) -> bool {
+    !show_notes_section(kind, trace.notes.len())
+        && trace.note_sources.is_empty()
+        && trace.facts.is_empty()
+        && trace.evidence.is_empty()
+        && !trace.truncated
+        && !trace.incomplete
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct EvidenceKey {
+    raw_id: String,
+    via_note: Option<String>,
+}
+
+impl From<&EvidenceItem> for EvidenceKey {
+    fn from(item: &EvidenceItem) -> Self {
+        Self {
+            raw_id: item.raw_id.clone(),
+            via_note: item.via_note.clone(),
+        }
+    }
+}
+
 #[component]
 #[must_use]
 pub fn ProvenanceSection(agent: Signal<String>, target: String, kind: TraceKind) -> impl IntoView {
     let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
     let trace = RwSignal::new(Loadable::<TraceResult>::Loading);
-    let expanded = RwSignal::new(None::<String>);
+    let expanded = RwSignal::new(None::<EvidenceKey>);
 
     {
         let target = target.clone();
@@ -44,7 +61,8 @@ pub fn ProvenanceSection(agent: Signal<String>, target: String, kind: TraceKind)
             let agent = agent.get_untracked();
             trace.set(Loadable::Loading);
             spawn_local(async move {
-                let res = MemoryApi::trace(&state, &agent, &target, kind, TRACE_MAX_RESULTS).await;
+                let res =
+                    MemoryApi::trace(&state, &agent, &target, kind, TRACE_MAX_RESULTS, true).await;
                 trace.set(Loadable::from_rpc(res));
             });
         });
@@ -69,23 +87,9 @@ pub fn ProvenanceSection(agent: Signal<String>, target: String, kind: TraceKind)
                 }.into_any(),
 
                 Loadable::Ready(res) => {
-                    // For `TraceKind::Raw`, `notes` is `notes_citing(raw_id)` —
-                    // the notes that cite this raw row, a real relationship the
-                    // user has no other way to see. For `TraceKind::Note` it is
-                    // always exactly `[target]` (the note tracing itself — see
-                    // `memory_trace.rs`'s `TraceKind::Note` arm): rendering that
-                    // verbatim would show every note's own path under this
-                    // header, which is not "which notes cite this" but "what did
-                    // I just ask about". Gate on the direction, not just
-                    // emptiness — mirrors the Delete-verb split elsewhere in this
-                    // console (notes vs. raw use different server calls; this is
-                    // the same "the two directions carry different meaning"
-                    // reasoning applied to a display field).
-                    let capped = res.evidence.len() >= TRACE_MAX_RESULTS;
-                    let notes = res.notes;
-                    let evidence = res.evidence;
-                    let has_notes = show_notes_section(kind, notes.len());
-                    let has_evidence = !evidence.is_empty();
+                    let empty = trace_is_empty(kind, &res);
+                    let has_notes = show_notes_section(kind, res.notes.len());
+                    let TraceResult { notes, evidence, note_sources, facts, truncated, incomplete, .. } = res;
                     view! {
                         <div>
                             {has_notes.then(|| view! {
@@ -100,27 +104,42 @@ pub fn ProvenanceSection(agent: Signal<String>, target: String, kind: TraceKind)
                                     </ul>
                                 </div>
                             })}
-                            {if has_evidence {
-                                view! {
-                                    <div>
-                                        <ul class="space-y-1.5">
-                                            {evidence.into_iter().map(|item| view! {
-                                                <EvidenceRow item=item expanded=expanded />
-                                            }).collect_view()}
-                                        </ul>
-                                        // No silent caps.
-                                        {capped.then(|| view! {
-                                            <p class="text-[10px] italic text-text-tertiary mt-1">
-                                                {t!(i18n, memory.provenance_capped)}
-                                            </p>
-                                        })}
+                            {(!note_sources.is_empty()).then(|| view! {
+                                <div class="mb-2">
+                                    <div class="text-[10px] uppercase tracking-widest text-text-tertiary mb-1">
+                                        {t!(i18n, memory.provenance_source_notes)}
                                     </div>
-                                }.into_any()
-                            } else {
-                                view! {
-                                    <p class="text-[11px] italic text-text-tertiary">{t!(i18n, memory.provenance_empty)}</p>
-                                }.into_any()
-                            }}
+                                    <ul class="space-y-1">
+                                        {note_sources.into_iter().map(|edge| view! { <SourceNoteRow edge=edge /> }).collect_view()}
+                                    </ul>
+                                </div>
+                            })}
+                            {(!facts.is_empty()).then(|| view! {
+                                <div class="mb-2">
+                                    <div class="text-[10px] uppercase tracking-widest text-text-tertiary mb-1">
+                                        {t!(i18n, memory.provenance_facts)}
+                                    </div>
+                                    <ul class="space-y-1">
+                                        {facts.into_iter().map(|fact| view! { <FactOriginRow fact=fact /> }).collect_view()}
+                                    </ul>
+                                </div>
+                            })}
+                            {(!evidence.is_empty()).then(|| view! {
+                                <ul class="space-y-1.5">
+                                    {evidence.into_iter().map(|item| view! {
+                                        <EvidenceRow item=item expanded=expanded />
+                                    }).collect_view()}
+                                </ul>
+                            })}
+                            {empty.then(|| view! {
+                                <p class="text-[11px] italic text-text-tertiary">{t!(i18n, memory.provenance_empty)}</p>
+                            })}
+                            {truncated.then(|| view! {
+                                <p class="text-[10px] italic text-text-tertiary mt-1">{t!(i18n, memory.provenance_capped)}</p>
+                            })}
+                            {incomplete.then(|| view! {
+                                <p class="text-[10px] italic text-text-tertiary mt-1">{t!(i18n, memory.provenance_incomplete)}</p>
+                            })}
                         </div>
                     }.into_any()
                 }
@@ -130,30 +149,85 @@ pub fn ProvenanceSection(agent: Signal<String>, target: String, kind: TraceKind)
 }
 
 #[component]
-fn EvidenceRow(item: EvidenceItem, expanded: RwSignal<Option<String>>) -> impl IntoView {
+fn SourceNoteRow(edge: NoteSource) -> impl IntoView {
     let i18n = use_i18n();
-    let raw_id = item.raw_id.clone();
-    let id_for_click = raw_id.clone();
-    let id_for_open = raw_id.clone();
-    let is_open = Signal::derive(move || expanded.get().as_deref() == Some(id_for_open.as_str()));
-    let has_body = item.content.is_some();
-    let content = item.content.clone();
-    let via_note = item.via_note.clone();
-    let via_session = item.via_session.clone();
-    let pruned = item.pruned;
+    let label = move || match edge.status {
+        NoteSourceStatus::Available => None,
+        NoteSourceStatus::Unavailable => {
+            Some(t_string!(i18n, memory.provenance_unavailable).to_string())
+        }
+        NoteSourceStatus::NotVisited => {
+            Some(t_string!(i18n, memory.provenance_not_visited).to_string())
+        }
+    };
+    view! {
+        <li class="text-[11px] break-all">
+            <span class="font-mono text-text-secondary">{edge.note_path}" → "{edge.source_path}</span>
+            <span class="ml-2 text-text-tertiary">{label}</span>
+        </li>
+    }
+}
+
+#[component]
+fn FactOriginRow(fact: FactOrigin) -> impl IntoView {
+    let i18n = use_i18n();
+    let FactOrigin {
+        text,
+        origin,
+        inferred,
+        source_id,
+        ..
+    } = fact;
+    let show_inferred = inferred && origin != "inferred";
+    let label = move || match origin.as_str() {
+        "raw_source" => t_string!(i18n, memory.provenance_origin_raw).to_string(),
+        "prior_note" => t_string!(i18n, memory.provenance_origin_note).to_string(),
+        "inferred" => t_string!(i18n, memory.provenance_origin_inferred).to_string(),
+        "system" => t_string!(i18n, memory.provenance_origin_system).to_string(),
+        "legacy" => t_string!(i18n, memory.provenance_origin_legacy).to_string(),
+        _ => origin.clone(),
+    };
+    view! {
+        <li class="text-[11px] text-text-secondary break-words">
+            <div class="whitespace-pre-wrap">{text}</div>
+            <div class="flex flex-wrap gap-x-2 text-[10px] text-text-tertiary">
+                <span>{label}</span>
+                {show_inferred.then(|| view! { <span>{t!(i18n, memory.provenance_inferred_flag)}</span> })}
+                {source_id.map(|id| view! { <span class="font-mono break-all">{id}</span> })}
+            </div>
+        </li>
+    }
+}
+
+#[component]
+fn EvidenceRow(item: EvidenceItem, expanded: RwSignal<Option<EvidenceKey>>) -> impl IntoView {
+    let i18n = use_i18n();
+    let key_for_click = EvidenceKey::from(&item);
+    let key_for_open = key_for_click.clone();
+    let is_open =
+        Signal::derive(move || expanded.with(|open| open.as_ref() == Some(&key_for_open)));
+    let EvidenceItem {
+        raw_id,
+        via_note,
+        via_session,
+        content,
+        pruned,
+    } = item;
+    let has_body = content.is_some();
 
     view! {
         <li class="rounded-lg border border-border-subtle bg-surface-sunken px-2.5 py-2">
             <button
                 class="w-full text-left"
                 prop:disabled=!has_body
+                aria-expanded=move || if is_open.get() { "true" } else { "false" }
                 on:click=move |_| {
                     if !has_body { return; }
                     expanded.update(|e| {
-                        *e = if e.as_deref() == Some(id_for_click.as_str()) {
+                        *e = if e.as_ref() == Some(&key_for_click) {
                             None
                         } else {
-                            Some(id_for_click.clone())
+                            Some(key_for_click.clone())
                         };
                     });
                 }
@@ -192,6 +266,50 @@ fn EvidenceRow(item: EvidenceItem, expanded: RwSignal<Option<String>>) -> impl I
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preserves_fact_only_wire_data_and_evidence_states() {
+        let mut trace: TraceResult = serde_json::from_str(
+            r#"{"target":"synthesis/topic","notes":["synthesis/topic"],"evidence":[],
+                "facts":[{"note_path":"synthesis/topic","fact_idx":0,"text":"Runs daily",
+                "origin":"prior_note","inferred":false,"source_id":"habits/run"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(trace.facts[0].source_id.as_deref(), Some("habits/run"));
+        assert!(!show_notes_section(TraceKind::Note, trace.notes.len()));
+        assert!(!trace_is_empty(TraceKind::Note, &trace));
+        trace.facts.clear();
+        assert!(trace_is_empty(TraceKind::Note, &trace));
+        trace.note_sources.push(NoteSource {
+            note_path: "synthesis/topic".into(),
+            source_path: "habits/run".into(),
+            status: NoteSourceStatus::Unavailable,
+        });
+        assert!(!trace_is_empty(TraceKind::Note, &trace));
+        trace.note_sources.clear();
+        trace.incomplete = true;
+        assert!(!trace_is_empty(TraceKind::Note, &trace));
+        trace.truncated = true;
+        assert!(!trace_is_empty(TraceKind::Note, &trace));
+        trace.incomplete = false;
+        assert!(!trace_is_empty(TraceKind::Note, &trace));
+    }
+
+    #[test]
+    fn same_raw_rows_via_different_notes_have_independent_expansion_keys() {
+        let first = EvidenceItem {
+            raw_id: "raw-1".into(),
+            via_note: Some("habits/run".into()),
+            via_session: None,
+            content: Some("Runs daily".into()),
+            pruned: false,
+        };
+        let mut second = first.clone();
+        second.via_note = Some("synthesis/topic".into());
+        let opened = Some(EvidenceKey::from(&first));
+        assert!(opened.as_ref() == Some(&EvidenceKey::from(&first)));
+        assert!(opened.as_ref() != Some(&EvidenceKey::from(&second)));
+    }
 
     #[test]
     fn shows_notes_for_raw_direction_when_the_server_returned_some() {

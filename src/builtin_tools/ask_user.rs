@@ -227,23 +227,21 @@ impl AskUserTool {
 
     /// Turn the tool's two accepted argument shapes into one request.
     ///
-    /// Rejects rather than repairs in the three cases where repairing would
-    /// mean inventing intent: both shapes at once (what order?), neither
-    /// (nothing to ask), and a blank prompt (a question the user cannot read).
+    /// Rejects malformed or ambiguous questions before a waiter is registered.
     fn build_request(args: &AskUserArgs) -> Result<ClarificationRequest> {
-        let flat = args
-            .question
-            .as_deref()
-            .map(str::trim)
-            .filter(|q| !q.is_empty());
-        if flat.is_some() && !args.questions.is_empty() {
+        if !args.questions.is_empty() && (args.question.is_some() || !args.choices.is_empty()) {
             return Err(AlephError::tool(
-                "ask_user: pass either `question` (one question) or `questions` (a list), not both",
+                "ask_user: pass either `question` with optional `choices`, or `questions`, not both",
             ));
         }
 
         let mut questions: Vec<ClarificationQuestion> = Vec::new();
-        if let Some(prompt) = flat {
+        if let Some(prompt) = args
+            .question
+            .as_deref()
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+        {
             questions.push(ClarificationQuestion::select(
                 "q1",
                 prompt,
@@ -264,11 +262,16 @@ impl AskUserTool {
                         i + 1
                     )));
                 }
-                let id =
-                    q.id.as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map_or_else(|| format!("q{}", i + 1), ToString::to_string);
+                let id = match q.id.as_deref().map(str::trim) {
+                    None => format!("q{}", i + 1),
+                    Some("") => {
+                        return Err(AlephError::tool(format!(
+                            "ask_user: question {} has an empty id",
+                            i + 1
+                        )))
+                    }
+                    Some(id) => id.to_string(),
+                };
                 let mut built = ClarificationQuestion::select(
                     &id,
                     prompt,
@@ -299,6 +302,11 @@ impl AskUserTool {
             )));
         }
 
+        for (i, question) in questions.iter().enumerate() {
+            validate_options(&question.options).map_err(|reason| {
+                AlephError::tool(format!("ask_user: question {}: {reason}", i + 1))
+            })?;
+        }
         ClarificationRequest::new(questions).map_err(AlephError::tool)
     }
 
@@ -373,6 +381,29 @@ impl AlephTool for AskUserTool {
 // Tests
 // =============================================================================
 
+// Match the text interpreter's locale-independent lowercase comparison.
+// Label and value may be identical for one option, not shared across options.
+fn validate_options(options: &[ClarificationOption]) -> std::result::Result<(), String> {
+    let mut aliases = std::collections::HashMap::new();
+    for (i, option) in options.iter().enumerate() {
+        for alias in [&option.label, &option.value] {
+            if alias.trim().is_empty() {
+                return Err(format!("option {} has a blank label or value", i + 1));
+            }
+            if let Some(other) = aliases.insert(alias.to_lowercase(), i) {
+                if other != i {
+                    return Err(format!(
+                        "options {} and {} have an ambiguous label or value",
+                        other + 1,
+                        i + 1
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,6 +438,63 @@ mod tests {
             side_question: false,
             telecom_authority: None,
         }
+    }
+
+    #[tokio::test]
+    async fn ask_rejects_mixed_shapes_and_ambiguous_options_before_parking() {
+        let tool = tool();
+        // Without a turn, reaching `ask` would give a transport error.
+        // Each case must instead fail in model-argument validation.
+        let malformed = [
+            (
+                serde_json::json!({"question":" ","questions":[{"question":"Pick?"}]}),
+                "not both",
+            ),
+            (
+                serde_json::json!({"choices":["alpha"],"questions":[{"question":"Pick?"}]}),
+                "not both",
+            ),
+            (
+                serde_json::json!({"questions":[{"id":" ","question":"Pick?"}]}),
+                "empty id",
+            ),
+            (
+                serde_json::json!({"questions":[{"id":"q2","question":"First?"},{"question":"Second?"}]}),
+                "duplicate question id",
+            ),
+            (
+                serde_json::json!({"questions":[{"question":" "}]}),
+                "empty text",
+            ),
+            (
+                serde_json::json!({"question":"Pick?","choices":[" "]}),
+                "blank",
+            ),
+            (
+                serde_json::json!({"question":"Pick?","choices":["Staging",{"label":"staging","description":"duplicate"}]}),
+                "ambiguous",
+            ),
+        ];
+        for (raw, expected) in malformed {
+            let input = serde_json::from_value::<AskUserArgs>(raw.clone()).unwrap();
+            let error = tool.call(input).await.unwrap_err().to_string();
+            assert!(error.contains(expected), "{raw}: {error}");
+        }
+    }
+
+    #[test]
+    fn option_value_cannot_alias_another_option_label() {
+        assert!(validate_options(&[ClarificationOption::new("one", "one")]).is_ok());
+        let options = [
+            ClarificationOption::new("First", "Primary"),
+            ClarificationOption::new("second", "FIRST"),
+        ];
+        assert!(validate_options(&options)
+            .unwrap_err()
+            .contains("ambiguous"));
+        assert!(validate_options(&[ClarificationOption::new(" ", "Name")])
+            .unwrap_err()
+            .contains("blank"));
     }
 
     #[tokio::test]

@@ -2539,15 +2539,24 @@ impl NoteStore for SqliteMemoryBackend {
         self.record_signals(query, channel, &recall_hits, None, agent_id, agent_id)
     }
 
-    async fn sources_of(&self, agent_id: &str, note_path: &str) -> Result<Vec<String>, AlephError> {
+    async fn sources_of(
+        &self,
+        agent_id: &str,
+        note_path: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, AlephError> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         self.with_connection(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT source_ref FROM notes_sources WHERE agent_id = ?1 AND note_path = ?2",
+                    "SELECT source_ref FROM notes_sources \
+                     WHERE agent_id = ?1 AND note_path = ?2 ORDER BY source_ref LIMIT ?3",
                 )
                 .map_err(|e| AlephError::config(format!("sources_of prepare: {e}")))?;
             let rows = stmt
-                .query_map(params![agent_id, note_path], |r| r.get::<_, String>(0))
+                .query_map(params![agent_id, note_path, limit], |r| {
+                    r.get::<_, String>(0)
+                })
                 .map_err(|e| AlephError::config(format!("sources_of query: {e}")))?;
             let mut out = Vec::new();
             for r in rows {
@@ -2561,7 +2570,9 @@ impl NoteStore for SqliteMemoryBackend {
         &self,
         agent_id: &str,
         source_ref: &str,
+        limit: usize,
     ) -> Result<Vec<String>, AlephError> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         self.with_connection(|conn| {
             // Both provenance tables, not just `notes_sources`. They record two
             // different citations and neither contains the other: `notes_sources`
@@ -2588,11 +2599,13 @@ impl NoteStore for SqliteMemoryBackend {
                  UNION \
                  SELECT note_path FROM notes_provenance \
                  WHERE agent_id = ?1 AND source_id = ?2 \
-                 ORDER BY note_path",
+                 ORDER BY note_path LIMIT ?3",
                 )
                 .map_err(|e| AlephError::config(format!("notes_citing prepare: {e}")))?;
             let rows = stmt
-                .query_map(params![agent_id, source_ref], |r| r.get::<_, String>(0))
+                .query_map(params![agent_id, source_ref, limit], |r| {
+                    r.get::<_, String>(0)
+                })
                 .map_err(|e| AlephError::config(format!("notes_citing query: {e}")))?;
             let mut out = Vec::new();
             for r in rows {

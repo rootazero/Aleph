@@ -721,13 +721,14 @@ pub(super) async fn try_inject_steering(
     orchestrator: &OnceLock<Arc<Orchestrator>>,
     request: &RunRequest,
     new_run_id: &str,
-) -> bool {
+    chat_cancellation: Option<&crate::gateway::execution_adapter::ChatRunCancellation>,
+) -> Result<bool, super::ExecutionError> {
     if !fold_is_admissible(enabled, request, sibling) {
-        return false;
+        return Ok(false);
     }
 
     let Some(orchestrator) = orchestrator.get() else {
-        return false;
+        return Ok(false);
     };
 
     // `SessionId` is a type alias for `SessionKey`, so the gateway key is the
@@ -738,21 +739,29 @@ pub(super) async fn try_inject_steering(
     // and coalescing-aware (Hermes / Pi / OpenSquilla parity), then decide from
     // that single snapshot. Fail open: a transient read error falls back to the
     // legacy always-inject-with-preamble path, never dropping the message.
-    let pending = read_steering_events(orchestrator, &session_id)
-        .await
-        .as_deref()
-        .map_or(0, count_pending_steering);
+    let read = read_steering_events(orchestrator, &session_id);
+    let events = if let Some(cancellation) = chat_cancellation {
+        let token = cancellation.token();
+        tokio::select! {
+            biased;
+            _ = token.cancelled() => return Err(super::ExecutionError::Cancelled),
+            events = read => events,
+        }
+    } else {
+        read.await
+    };
+    let pending = events.as_deref().map_or(0, count_pending_steering);
 
     // Bound: cap the un-consumed steering burst. Past the cap, reject so the
     // busy wait lane redelivers once the loop drains the burst or goes idle —
     // backpressure against a flooding channel, not a drop.
     if pending >= max_pending {
-        return defer_for_backpressure(
+        return Ok(defer_for_backpressure(
             &request.session_key.to_key_string(),
             new_run_id,
             pending,
             max_pending,
-        );
+        ));
     }
 
     // If this session is driving a scratchpad execution list, tell the model to
@@ -793,19 +802,40 @@ pub(super) async fn try_inject_steering(
         author_user_id: crate::scope::room_author_from_metadata(&request.metadata),
     };
 
+    // All retryable preparation is done. Once submitted, the actor may still
+    // append even if this future is dropped; wait for its explicit decision.
+    let inline = chat_cancellation
+        .map(|cancellation| cancellation.begin_inline_attempt())
+        .transpose()?;
     match orchestrator
         .session_service
         .emit_event(&session_id, event)
         .await
     {
-        Ok(_) => accept_injection(&request.session_key, new_run_id),
+        Ok(_) => {
+            if let Some(inline) = inline {
+                inline.complete();
+            }
+            Ok(accept_injection(&request.session_key, new_run_id))
+        }
+        Err(error @ crate::session::SessionError::AppendOutcomeUnknown(_)) => {
+            drop(inline);
+            tracing::warn!(%error, "mid-loop steering append outcome unknown; refusing to retry");
+            Err(super::ExecutionError::DeliveryUnconfirmed)
+        }
         Err(e) => {
+            if let Some(inline) = inline {
+                inline.refuse();
+            }
+            if let Some(cancellation) = chat_cancellation {
+                cancellation.check()?;
+            }
             tracing::warn!(
                 session = %request.session_key.to_key_string(),
                 error = %e,
                 "mid-loop steering: failed to inject; falling back to the busy queue",
             );
-            false
+            Ok(false)
         }
     }
 }

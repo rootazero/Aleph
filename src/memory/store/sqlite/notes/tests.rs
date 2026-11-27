@@ -1106,15 +1106,38 @@ mod tests {
             .await
             .unwrap();
 
-        let mut srcs = backend
-            .sources_of("default", "preference/typescript")
+        for (limit, expected) in [
+            (0, &[][..]),
+            (1, &["raw-1"][..]),
+            (3, &["raw-1", "raw-2"][..]),
+        ] {
+            assert_eq!(
+                backend
+                    .sources_of("default", "preference/typescript", limit)
+                    .await
+                    .unwrap(),
+                expected,
+            );
+        }
+        let mut second = note;
+        second.title = "editor".into();
+        backend
+            .index_note(&second, "default", "preference")
             .await
             .unwrap();
-        srcs.sort();
-        assert_eq!(srcs, vec!["raw-1".to_string(), "raw-2".to_string()]);
-
-        let citing = backend.notes_citing("default", "raw-1").await.unwrap();
-        assert_eq!(citing, vec!["preference/typescript".to_string()]);
+        for (limit, expected) in [
+            (0, &[][..]),
+            (1, &["preference/editor"][..]),
+            (3, &["preference/editor", "preference/typescript"][..]),
+        ] {
+            assert_eq!(
+                backend
+                    .notes_citing("default", "raw-1", limit)
+                    .await
+                    .unwrap(),
+                expected
+            );
+        }
     }
 
     /// A fact can quote a raw that never reaches the note's `source_notes`
@@ -1157,20 +1180,23 @@ mod tests {
 
         assert_eq!(
             backend
-                .notes_citing("default", "raw-fact-only")
+                .notes_citing("default", "raw-fact-only", 2)
                 .await
                 .unwrap(),
             vec!["preference/typescript".to_string()],
             "the note quotes this raw in a fact; only `notes_provenance` knows"
         );
         assert_eq!(
-            backend.notes_citing("default", "raw-batch").await.unwrap(),
+            backend
+                .notes_citing("default", "raw-batch", 2)
+                .await
+                .unwrap(),
             vec!["preference/typescript".to_string()],
             "the note-level citation must keep working"
         );
         assert!(
             backend
-                .notes_citing("default", "raw-never-mentioned")
+                .notes_citing("default", "raw-never-mentioned", 2)
                 .await
                 .unwrap()
                 .is_empty(),
@@ -1204,7 +1230,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            backend.notes_citing("default", "raw-both").await.unwrap(),
+            backend
+                .notes_citing("default", "raw-both", 2)
+                .await
+                .unwrap(),
             vec!["preference/typescript".to_string()]
         );
     }

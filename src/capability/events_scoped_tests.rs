@@ -23,7 +23,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Notify, RwLock};
 
-
 /// Retained records the trusted scope admits: the snapshot half of
 /// `subscribe_scoped`, reading CURRENT access outside the buffer lock.
 async fn scoped_snapshot(

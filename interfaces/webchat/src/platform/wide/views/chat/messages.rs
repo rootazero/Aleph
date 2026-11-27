@@ -584,9 +584,9 @@ pub(crate) fn MessageList() -> impl IntoView {
 ///
 /// Its own component so the card appears *reactively*: the question lands mid-
 /// turn, long after the transcript around it was rendered. Reading
-/// `DashboardState::pending_clarifications` here re-runs the lookup whenever the
-/// pending list changes — including when the question is answered, which is what
-/// makes the card go away again.
+/// `DashboardState::clarifications` here re-runs the lookup whenever the board
+/// changes — including when the question is answered, which is what makes the
+/// card go away again.
 #[component]
 fn PendingAskCard() -> impl IntoView {
     let chat = expect_context::<ChatState>();
@@ -594,11 +594,10 @@ fn PendingAskCard() -> impl IntoView {
 
     let pending = Memo::new(move |_| {
         dashboard.and_then(|d| {
-            crate::state::notifications::pending_ask_for_session(
-                &d.pending_clarifications.get(),
-                chat.session_key.get().as_deref(),
-            )
-            .cloned()
+            d.clarifications
+                .get()
+                .request_of(chat.session_key.get().as_deref()?)
+                .cloned()
         })
     });
 

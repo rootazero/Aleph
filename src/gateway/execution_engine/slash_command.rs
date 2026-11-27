@@ -12,11 +12,23 @@ use crate::sync_primitives::Arc;
 use super::{ExecutionError, RunRequest};
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
+use crate::gateway::execution_adapter::ChatRunCancellation;
 
 use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 
 use super::engine::ExecutionEngine;
+
+async fn close_cancelled(
+    journal: Option<&super::fast_path::FastPathJournal>,
+    result: Option<Result<serde_json::Value, String>>,
+) {
+    if let Some(journal) = journal {
+        if let Err(error) = journal.close_cancelled(result).await {
+            warn!(%error, "fast path: cancelled close batch failed; the dispatch stays open for the boot repair");
+        }
+    }
+}
 
 // Shorthand slash aliases live in the tool-metadata layer
 // (`crate::tool_metadata::aliases`) as the single source shared by the inbound
@@ -188,6 +200,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         request: &RunRequest,
         agent: Arc<AgentInstance>,
         emitter: Arc<E>,
+        chat_cancellation: Option<&ChatRunCancellation>,
     ) -> Result<String, ExecutionError> {
         // Deliberately NO per-run write to the shared `ToolContextHandle`: the
         // per-run `FsScope` published around the tool call below (the
@@ -227,8 +240,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // — which is what lets a test hand it a refusing one and prove
                 // the tool does not run over an unrecorded dispatch.
                 let session = crate::session::service::global_session_service();
-                self.execute_direct_tool(run_id, &mode, request, &agent, emitter, session)
-                    .await
+                self.execute_direct_tool(
+                    run_id,
+                    &mode,
+                    request,
+                    &agent,
+                    emitter,
+                    session,
+                    chat_cancellation,
+                )
+                .await
             }
 
             "skill" => {
@@ -321,6 +342,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         agent: &AgentInstance,
         emitter: Arc<E>,
         session: Option<Arc<dyn crate::session::service::SessionService>>,
+        chat_cancellation: Option<&ChatRunCancellation>,
     ) -> Result<String, ExecutionError> {
         let tool_id = mode["tool_id"]
             .as_str()
@@ -350,12 +372,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // from inside the tool body; a refusing service that must see zero
         // dispatches), not only by the source census below.
         let journal = session.map(|svc| {
-            super::fast_path::FastPathJournal::new_with_telecom_public(
+            let mut journal = super::fast_path::FastPathJournal::new_with_telecom_public(
                 svc,
                 request.session_key.clone(),
                 tool_id,
                 request.telecom_public.as_ref(),
-            )
+            );
+            if chat_cancellation.is_some() {
+                journal.run_id = run_id.to_owned();
+            }
+            journal
         });
         if let Some(journal) = journal.as_ref() {
             journal
@@ -396,10 +422,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // (this path no longer writes the shared handle).
         let fs_scope =
             crate::tools::fs_scope::FsScope::workspace(agent.workspace().join("output/documents"));
-        let execution = crate::tools::fs_scope::with_fs_scope(
-            Some(fs_scope),
-            self.tool_registry.execute_tool(tool_id, arguments),
-        );
+        let execution = crate::tools::fs_scope::with_fs_scope(Some(fs_scope), async {
+            self.tool_registry.execute_tool(tool_id, arguments).await
+        });
 
         let deadline = request.timeout_secs.map(|timeout_secs| {
             std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs)
@@ -411,18 +436,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // cancelled any more, and then the deadline below is the only bound.
         let run_cancel_token = {
             let runs = self.active_runs.read().await;
-            runs.get(run_id).map(|run| run.cancel_token.clone())
+            runs.get(run_id)
+                .map(|run| run.cancel_token.clone())
+                .or_else(|| chat_cancellation.map(ChatRunCancellation::token))
         };
 
         let result = tokio::select! {
             biased;
             _ = async {
-                match run_cancel_token {
+                match run_cancel_token.as_ref() {
                     Some(token) => token.cancelled().await,
                     None => std::future::pending::<()>().await,
                 }
             } => {
-                return Err(ExecutionError::Cancelled);
+                Err(ExecutionError::Cancelled)
             }
             _ = async {
                 if let Some(dl) = deadline {
@@ -434,9 +461,23 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     std::future::pending::<()>().await;
                 }
             } => {
-                return Err(ExecutionError::Timeout);
+                Err(ExecutionError::Timeout)
             }
-            exec_result = execution => exec_result,
+            exec_result = execution => Ok(exec_result),
+        };
+
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                if let Some(cancellation) = chat_cancellation {
+                    let stopped = cancellation.begin_terminal_commit().is_err();
+                    if stopped || matches!(error, ExecutionError::Cancelled) {
+                        close_cancelled(journal.as_ref(), None).await;
+                        return Err(ExecutionError::Cancelled);
+                    }
+                }
+                return Err(error);
+            }
         };
 
         match result {
@@ -464,15 +505,33 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     + std::time::Duration::from_millis(
                         crate::tools::budget::resolve_tool_budget_ms(tool_id, None),
                     );
-                let _ = crate::tools::scoped::artifact_harvest::harvest_media_for_session(
+                let session_key = request.session_key.to_key_string();
+                let harvest = crate::tools::scoped::artifact_harvest::harvest_media_for_session(
                     tool_id,
                     &result,
-                    &request.session_key.to_key_string(),
+                    &session_key,
                     Some(run_id),
                     Some(&request.pending_media),
                     deadline,
-                )
-                .await;
+                );
+                if let Some(cancellation) = chat_cancellation {
+                    let token = run_cancel_token.unwrap_or_else(|| cancellation.token());
+                    tokio::select! {
+                        biased;
+                        _ = token.cancelled() => {},
+                        _ = harvest => {},
+                    }
+                    // Harvest is not a terminal commit. A stop here preserves
+                    // the observed tool result, not a successful assistant turn.
+                    let already_cancelled = token.is_cancelled();
+                    let stopped = cancellation.begin_terminal_commit().is_err();
+                    if already_cancelled || stopped {
+                        close_cancelled(journal.as_ref(), Some(Ok(result))).await;
+                        return Err(ExecutionError::Cancelled);
+                    }
+                } else {
+                    let _ = harvest.await;
+                }
 
                 let response = extract_tool_response(&result);
 
@@ -506,6 +565,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
             Err(e) => {
                 let msg = format!("Tool '{tool_id}' execution failed: {e}");
+                if let Some(cancellation) = chat_cancellation {
+                    let already_cancelled = run_cancel_token
+                        .as_ref()
+                        .is_some_and(|token| token.is_cancelled());
+                    let stopped = cancellation.begin_terminal_commit().is_err();
+                    if already_cancelled || stopped {
+                        close_cancelled(journal.as_ref(), Some(Err(msg))).await;
+                        return Err(ExecutionError::Cancelled);
+                    }
+                }
                 let failed = ExecutionError::Failed(msg.clone());
                 // The receipt carries the tool's failure; the reply row
                 // carries the echo the user actually saw — `execute.rs` hands

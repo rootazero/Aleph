@@ -3183,6 +3183,7 @@ async fn the_turn_start_hooks_are_told_the_turns_permission_mode() {
             Some(Arc::new(executor)),
             "turn-start-permission-mode".to_string(),
             Arc::new(std::sync::Mutex::new(None)),
+            None,
         )
         .await;
     assert!(

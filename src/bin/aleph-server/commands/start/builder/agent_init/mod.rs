@@ -1137,6 +1137,20 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         });
 
+        // chat.send and chat.abort share one receipt owner, including the busy-queue handoff.
+        let engine_arc: Arc<dyn alephcore::gateway::ExecutionAdapter> = engine.clone();
+        let real_run_manager = Arc::new(
+            AgentRunManager::new(
+                router.clone(),
+                event_bus.clone(),
+                agent_registry.clone(),
+                engine_arc.clone(),
+            )
+            .with_app_config(app_config_arc.clone()),
+        );
+        let chat_run_manager = real_run_manager.clone();
+        run_manager = Some(real_run_manager);
+
         // chat.send also uses real ExecutionEngine
         let engine_chat = engine.clone();
         let event_bus_chat = event_bus.clone();
@@ -1156,6 +1170,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let wm = wm_chat.clone();
             let pr = pr_chat.clone();
             let sm = sm_chat.clone();
+            let manager = chat_run_manager.clone();
             let telecom_service = telecom_context_chat
                 .get()
                 .and_then(|ctx| ctx.telecom_lifecycle())
@@ -1172,6 +1187,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     pr,
                     sm,
                     telecom_service,
+                    manager,
                 )
                 .await
             }
@@ -1182,7 +1198,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         register_trace_handlers(server, resilience_db.clone(), session_store.clone());
 
         // Capture for inbound router
-        let engine_arc: Arc<dyn alephcore::gateway::ExecutionAdapter> = engine;
         exec_adapter = Some(engine_arc.clone());
         agent_reg = Some(agent_registry.clone());
         tool_reg_out = Some(tool_registry_for_heartbeat);
@@ -1236,21 +1251,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 goal_wake_boot.rearm_parked_goals().await;
             }));
         }
-
-        // Create run_manager with real execution dependencies.
-        // Inject the live config so Panel runs honor the global output_mode
-        // toggle (typewriter/instant) fresh per run — same source the chat
-        // channels read.
-        let real_run_manager = Arc::new(
-            AgentRunManager::new(
-                router.clone(),
-                event_bus.clone(),
-                agent_registry.clone(),
-                engine_arc.clone(),
-            )
-            .with_app_config(app_config_arc.clone()),
-        );
-        run_manager = Some(real_run_manager);
 
         // activity.stats — returns active agent run count + coord task count
         {

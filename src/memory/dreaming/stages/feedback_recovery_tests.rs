@@ -232,7 +232,7 @@ async fn feedback_progresses_through_a_same_second_backlog_larger_than_a_page() 
             "type":"skip", "source_fact":format!("same-second-{index}"), "reason":"transient",
         })).collect::<Vec<_>>();
         ctx.provider = Arc::new(MockProvider::new(
-            &serde_json::json!({"actions": actions}).to_string(),
+            serde_json::json!({"actions": actions}).to_string(),
         ));
         ctx.report = DreamReport::default();
         assert!(
@@ -327,7 +327,7 @@ async fn correction_tool_reaches_admission_note_recall_and_fix_queue() {
         .await
     );
     ctx.provider = Arc::new(MockProvider::new(
-        &json!({"actions":[{
+        json!({"actions":[{
             "type":"supersede", "old_note_path":"feedback/obsolete", "title":"successor",
             "rule":"Prefer the zirconium naming convention.", "confidence":0.99,
             "severity":"high", "source_facts":[correction.raw_memory_id],

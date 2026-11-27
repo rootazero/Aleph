@@ -512,13 +512,14 @@ pub trait RawMemoryStore: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// Fetch all raw memory rows for a session, ordered by `created_at` ASC.
-    /// Default: empty.
-    async fn get_raws_by_session(
+    /// Fetch a bounded prefix of raw IDs for one scoped session, oldest first.
+    /// Does not read bodies. Default: empty.
+    async fn get_raw_ids_by_session(
         &self,
         _agent_id: &str,
         _session_id: &str,
-    ) -> Result<Vec<RawMemory>, AlephError> {
+        _limit: usize,
+    ) -> Result<Vec<String>, AlephError> {
         Ok(Vec::new())
     }
 

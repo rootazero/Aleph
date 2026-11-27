@@ -437,15 +437,13 @@ Source evidence and owner/admission/retention/test census: [2026-11-03 run](../s
 
 Endpoint effect evidence was closed in a separate validation-only slice: the real admin router now pins `204` before the owned daemon's first scan publishes a report, `503` while the runtime is Starting, Draining or Failed, and a restart whose response content — not handler identity — distinguishes the current generation. The full `alephcore --lib` suite fails the same 51 named tests at the pinned pre-slice baseline `063345f2f30bf999b28ee5d84aac860be8432fa7`, so the local delta adds no new full-suite failure. [2026-11-03 validation-closure run](../superpowers/runs/2026-11-03-memory-source-owned-validation-closure-run.md). / 端点效果证据在独立的 validation-only 切片中闭合：真实 admin router 现在钉住 owned daemon 首轮扫描发布前的 `204`、runtime 处于 Starting/Draining/Failed 时的 `503`，以及由响应内容（而非 handler identity）区分当前代的重启。全量 `alephcore --lib` 在固定 pre-slice 基线上失败的是同一批 51 个具名测试，因此本地 delta 没有新增全量失败。见 validation-closure 运行记录。 / 源码证据及 owner/admission/retention/test census 见运行记录，范围见已批准设计与实施计划。本切片只闭合所列边界，不宣称 universal all-writer stop、native unload、RSS 回收、进程隔离或外部 exactly-once。
 
-## 12. Provenance Chain (Evidence Drill-Down)
+## 12. Provenance Chain (Evidence Drill-Down) / 证据链
 
-
-
-Evidence traceability from user profile → synthesized notes → distilled notes → raw source data is enforced via four-level provenance metadata:
+The evidence trace follows recorded references, not a fixed four-level hierarchy. A synthesis note can cite another note; a profile section starts with sessions; a distilled note can cite raw memories directly. None of these references proves that a source supports the claim. / 追溯沿已记录的引用走，不要求经过固定四层，也不裁定原文能否支持陈述。
 
 **L3 (Session-level):** `USER.md` contains a machine-readable `## Sources` block listing, per profile section (Identity, Communication Style, etc.), which session IDs last modified that section. Example: `- Identity: sid_abc, sid_def`.
 
-**L2 (Synthesis-level):** Synthesis notes (output of the Dream Daemon consolidation phase) store `source_notes` — an array of note paths that were clustered/merged to produce the synthesis. The field persists in note frontmatter as `source_notes: [path/to/note1, path/to/note2]`.
+**L2 (Synthesis-level):** [`NoteSynthesisStage`](../../src/memory/dreaming/stages/note_synthesis.rs) derives the prompt, `links`, and frontmatter `source_notes` from the same ordered input list: at most 15 readable, nonblank previews of 300 characters. Fewer than three usable previews in a category leaves the prior summary unchanged. The stage uses the existing `NoteIndexer` writer. Dreaming's health score is computed after stage writes; it does not roll them back. / 合成提示词、普通链接和来源路径取自同一份实际输入列表；不足三条保留原综述。做梦健康评分发生在写入后，不回滚。
 
 **L1 (Distillation-level):** Regular notes produced by `CompressionService` store per-fact provenance via two mechanisms:
 - `source_notes` field: list of raw-memory IDs or notes that fed this note's creation.
@@ -454,18 +452,16 @@ Evidence traceability from user profile → synthesized notes → distilled note
 Both are materialized into SQLite tables `notes_sources` and `notes_provenance` by the `NoteIndexer` via `index_note()`.
 
 **L0 (Raw source):** Markdown raw bodies are authoritative; `metadata.db` stores the rebuildable `raw_memory_index`. Read APIs:
-- `RawMemoryStore::get_raws_by_ids(ids)` — fetch raw rows by ID.
-- `RawMemoryStore::get_raws_by_session(session_id)` — fetch all raws in a session.
-- `NoteStore::notes_citing(raw_id)` — every note that references a raw, from **both** tables: `notes_sources` (note-level, the `source_notes` frontmatter list) `UNION` `notes_provenance` (fact-level, an inline `<!-- src: ... -->` marker on one line). Neither contains the other — a note can quote a raw in a single fact without that raw reaching its frontmatter — and until 2026-08-23 the query read only the first, while this line, the trait doc, and the `RAW_MEMORY.md` retention invariant all already described the union.
+- `RawMemoryStore::get_raws_by_ids(agent_id, ids)` reads scoped raw bodies; `get_raw_ids_by_session(agent_id, session_id, limit)` returns an ordered ID prefix without reading bodies.
+- `NoteStore::notes_citing(agent_id, source_ref, limit)` returns a sorted, deduplicated prefix of reverse matches from the `notes_sources` / `notes_provenance` union. Reverse matches are SQLite projection rows, not a revalidation of each citation against the current file. / 反查是 SQLite 投影，不表示当前 Markdown 已重新核实每条引用。
 
-**Consumer:** The `memory_trace` builtin tool and the `memory.trace` gateway RPC expose the drill-down chain:
-- `TraceKind::ProfileSection` → session IDs from `USER.md ## Sources`.
-- Kind `note` → `source_notes` list (L2→L1), plus a `facts[]` block: every fact of the note with its marker text stripped, its `origin` (`raw_source` / `prior_note` / `inferred` / `system` / `legacy`), its `inferred` flag and its `source_id`. This is the first structured read of that axis. The markers are written on every fact at ingest and stripped from every other rendering; the one other path that reaches a caller is `note_manage(action='get')`, which returns the raw file — capped, unstructured, and with nothing saying what the HTML comments mean.
-- Kind `raw` → raw-memory content loaded from Markdown through `RawMemoryStore`.
+**Forward Trace / 正向追溯.** [`memory_trace`](../../src/builtin_tools/memory_trace.rs) reads source paths and fact markers from the same Markdown bytes. `raw_source` and `prior_note` identify different kinds of sources. An untyped `source_notes` entry matches an existing exact raw ID first; otherwise a well-formed note path is treated as a possible note. Ordinary `[[wikilinks]]` are navigation, not evidence. On unreadable, missing, or invalid indexed Markdown, the walker can use bounded `sources_of` as a degraded fallback; it does not mix that projection with a successfully parsed file. `facts[]` contains annotations on the requested note only: text without its marker, `origin`, `inferred`, and `source_id`. `inferred` records an annotation, not whether anyone actually said the words.
 
-Missing or pruned raws are gracefully degraded with `pruned: true` marker; the chain never errors.
+正向遍历从同一份 Markdown 取来源和事实标注；普通 wikilink 不当证据。可解析文件不与索引旧引用混读；已索引文件不可用时才降级读取 `sources_of`。`inferred` 是标注，不是对用户历史发言的判断。
 
-**Where `facts[]` is read from.** The note markdown, not `notes_provenance`. The table is a projection of the same markers, rebuilt on every index pass, and it does not store fact text — so a reader wanting both would pair text from the file with provenance from the index and mis-attribute any fact whose note changed since. The table earns its place on the other axis only: the fact-level half of `notes_citing`, which no single file can answer. That is also why there is no `NoteStore::get_provenance` — a per-note forward read of the table was a second, weaker answer to a question the note itself answers, and it shipped with zero callers.
+**Address and presentation / 分区与呈现.** The [shared wire contract](../../shared/protocol/src/memory_trace.rs) serves the existing tool, `memory.trace` RPC, and [Panel drawer](../../interfaces/webchat/src/platform/wide/views/memory/provenance.rs). The Gateway checks visibility before storage access. A composed ID or `exact_partition: true` with `agent_id` selects the literal partition; the flag grants no additional access. Older bare-ID requests still resolve the current scoped partition, including the curated write ledger. Panel sends the note/raw row's actual address. Note/profile files are confined to the named partition. / Panel 按行的存储地址精确读取；老请求含精选写入账本仍用原 scope。精确寻址不扩大权限，不跨分区补查。
+
+**Limits and status / 上限与状态.** The walk follows authorized sources breadth-first (at most 64 note expansions and 500 source/reverse candidates); raw traces put the requested raw first, and profile traces start from the section's recorded sessions. Note and profile reads are limited to 4 MiB per file. The response shows at most 500 evidence rows and 100 root facts, with an 800-character cap on each fact text or raw excerpt. `max_results` limits evidence or ledger rows only, including zero. `truncated` means a budget omitted work or output; `incomplete` means a recorded source could not be resolved or read. A missing raw is `pruned`; `note_sources` distinguishes `available`, `unavailable`, and `not_visited`. / 预算截断与缺失不可混用；未展开的笔记不标成不可用。
 
 ## 13. Subdocument Navigation
 

@@ -36,9 +36,9 @@ pub(super) enum GateOutcome {
     /// dropping it releases the session claim + permit (including on early
     /// return or panic).
     Admitted(RunSlot),
-    /// Already fully handled inline (a busy sibling on this session was
-    /// steered via mid-loop injection) — `execute()` must close this run id
-    /// with `RunJoined` and return `Ok(())` now, without running anything.
+    /// Already handled inline by steering a live sibling on this session.
+    /// Ordinary Chat follows that sibling via `RunJoined`; an exact receipt
+    /// closes independently. Neither starts a new run.
     HandledInline {
         /// The live run the message was folded into.
         joined_run_id: String,
@@ -114,7 +114,11 @@ where
         cancel_tx: mpsc::Sender<()>,
         cancel_rx: &mut mpsc::Receiver<()>,
         cancel_token: tokio_util::sync::CancellationToken,
+        chat_cancellation: Option<&crate::gateway::execution_adapter::ChatRunCancellation>,
     ) -> Result<GateOutcome, ExecutionError> {
+        if let Some(cancellation) = chat_cancellation {
+            cancellation.check()?;
+        }
         // Reserve the SESSION's run slot first (per-session mutual exclusion —
         // INV-SEQ / audit 4.2: exactly one run may be `Running` per session at
         // a time, or two runs could interleave writes into the same
@@ -223,6 +227,9 @@ where
                             )
                     });
                     if let Some(target) = cancel_target {
+                        let inline = chat_cancellation
+                            .map(|cancellation| cancellation.begin_inline_attempt())
+                            .transpose()?;
                         // Cancel the leader's own run AND its delegated children
                         // (no detached-member leak). A bare `self.cancel(target)`
                         // would kill only the parent and re-open that leak. No
@@ -238,6 +245,13 @@ where
                                 error = %e,
                                 "busy-input interrupt: cancel_session failed"
                             );
+                        }
+                        // Interrupt never consumes this receipt: it remains queued.
+                        if let Some(inline) = inline {
+                            inline.refuse();
+                        }
+                        if let Some(cancellation) = chat_cancellation {
+                            cancellation.check()?;
                         }
                         info!(
                             session = %request.session_key.to_key_string(),
@@ -271,8 +285,9 @@ where
                             self.orchestrator.as_ref(),
                             request,
                             run_id,
+                            chat_cancellation,
                         )
-                        .await
+                        .await?
                         .then(|| s.run_id.clone()),
                         None => None,
                     };
@@ -352,6 +367,9 @@ where
         }
         {
             let mut runs = self.active_runs.write().await;
+            if let Some(cancellation) = chat_cancellation {
+                cancellation.check()?;
+            }
             let admitted_at = std::time::Instant::now();
             if owned_worktree {
                 slot.owned_registration = Some((Arc::clone(&self.active_runs), admitted_at));
@@ -384,33 +402,20 @@ where
         // that a `/stop` request is honoured without waiting for an unrelated
         // run to release its permit.
         let agent_id = request.session_key.agent_id().to_string();
-        slot._permit = Some(match self.concurrency.try_acquire(&agent_id) {
-            Some(p) => p,
-            None => {
-                tokio::select! {
-                    biased;
-                    // Cancellation arrives before a permit is available. The
-                    // token is consumed here on purpose: this run never
-                    // starts (its registration is removed and its session
-                    // claim released below), so the run loop will not read
-                    // it.
-                    _ = cancel_rx.recv() => {
-                        // Remove the run registration we inserted above so the
-                        // session is not left in a permanently-Running state.
-                        {
-                            let mut runs = self.active_runs.write().await;
-                            runs.remove(run_id);
-                        }
-                        // Drop slot here so the session claim is released
-                        // before we return the error.
-                        drop(slot);
-                        return Err(ExecutionError::Cancelled);
-                    }
-                    // A permit became available — proceed normally.
-                    p = self.concurrency.acquire(&agent_id) => p,
-                }
-            }
-        });
+        slot._permit = match self.concurrency.try_acquire(&agent_id) {
+            Some(permit) => Some(permit),
+            None => tokio::select! {
+                biased;
+                _ = cancel_rx.recv() => None,
+                _ = cancel_token.cancelled(), if chat_cancellation.is_some() => None,
+                permit = self.concurrency.acquire(&agent_id) => Some(permit),
+            },
+        };
+        if slot._permit.is_none() || (chat_cancellation.is_some() && cancel_token.is_cancelled()) {
+            // Do not leave a registered run behind if neither the execution nor the permit wait will own it.
+            self.active_runs.write().await.remove(run_id);
+            return Err(ExecutionError::Cancelled);
+        }
 
         Ok(GateOutcome::Admitted(slot))
     }

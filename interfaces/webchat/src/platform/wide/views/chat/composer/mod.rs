@@ -423,14 +423,22 @@ pub(crate) fn InputArea() -> impl IntoView {
         });
     };
 
-    // The question this conversation is parked on, if any.
+    // The question this conversation is parked on, if any. The board owns the
+    // pending questions (one live request per session); the composer only
+    // needs to know whether the CARD is waiting for an answer.
     let pending_ask = Memo::new(move |_| {
-        crate::state::notifications::pending_ask_for_session(
-            &dashboard.pending_clarifications.get(),
-            chat.session_key.get().as_deref(),
-        )
-        .cloned()
+        dashboard
+            .clarifications
+            .get()
+            .request_of(chat.session_key.get().as_deref()?)
+            .cloned()
     });
+
+    // Set when Enter was pressed while the card owned the send key. The
+    // composer never answers a parked question on the user's behalf (the card
+    // is the only addressed answer surface), so it points at the card instead
+    // of silently sending, queueing or dropping the draft.
+    let ask_hint = RwSignal::new(false);
 
     // Queue a follow-up while a run is active instead of sending it now.
     // Runs the same client-side injection guard as `send_message` so a
@@ -470,88 +478,16 @@ pub(crate) fn InputArea() -> impl IntoView {
         current_namespace.set(None);
     };
 
-    // Answer a pending `ask_user` with the current draft. Returns `true` when a
-    // question was pending — the caller must then NOT fall through to the send /
-    // queue path.
+    // NOTE: the composer deliberately does NOT answer a parked `ask_user`.
+    // The question card is the only addressed answer surface: it stages the
+    // answers, sends one typed `submit` (or `cancel`), and shows what it
+    // sent. An implicit "whatever you typed is the answer" path here would
+    // guess — a chat reply typed while the agent waits is not necessarily the
+    // answer to THAT question, and the old path echoed it into the transcript
+    // as if the user had answered deliberately.
     //
-    // This is the composer's half of the rule every channel already enforces in
-    // `inbound_router::try_intercept_hitl`: while a clarification is pending,
-    // whatever the user sends IS the answer. Without it the draft would be
-    // queued behind a turn that can never reach its next boundary — the parked
-    // tool would sit there until it timed out, and the user would have no way to
-    // reach it except aborting the run.
-    //
-    // A stale question is the trap: core answers `resolved: false` when nobody
-    // was unblocked (expired / superseded / run cancelled). The reply is then
-    // still an unsent chat message — restore the draft and route it through the
-    // normal path instead of swallowing it.
-    let answer_pending_ask = move || -> bool {
-        if intercept_theme(&input_text.get_untracked()) {
-            return true;
-        }
-        let Some(ask) = pending_ask.get_untracked() else {
-            return false;
-        };
-        let reply = input_text.get_untracked().trim().to_string();
-        // A question IS pending, so consume the keystroke either way — an empty
-        // draft simply isn't an answer.
-        if reply.is_empty() {
-            return true;
-        }
-        input_text.set(String::new());
-        let dash = dashboard;
-        spawn_local(async move {
-            match crate::api::ClarificationApi::resolve(
-                &dash,
-                &ask.session_key,
-                &reply,
-                crate::api::expected_request_id(&ask.request_id),
-            )
-                .await
-                .map(|o| (o.accepted, o.is_finished()))
-            {
-                Ok((true, finished)) => {
-                    chat.push_user_message(&reply);
-                    // Only drop the card when the whole request is over. A
-                    // multi-question request keeps the card (re-rendered at the
-                    // new cursor by the advance frame) so the next question can
-                    // still own Enter — dropping it here would strand the rest
-                    // of the walk behind a card the user can no longer see.
-                    if finished {
-                        dash.pending_clarifications
-                            .update(|l| l.retain(|p| p.session_key != ask.session_key));
-                    }
-                }
-                Ok((false, _)) => {
-                    // The question is dead: drop it so it stops owning Enter,
-                    // put the draft back, and send it as the ordinary message it
-                    // turned out to be.
-                    dash.pending_clarifications
-                        .update(|l| l.retain(|p| p.session_key != ask.session_key));
-                    input_text.set(reply);
-                    // Probe a *component-owned* signal, not `chat`: both calls
-                    // below read several of these, and `chat` (like `input_text`
-                    // = `chat.draft`) is root-owned, so it would answer "alive"
-                    // long after this composer was disposed. Same fix as the
-                    // phone composer's arm (see `crate::disposed_reads`).
-                    if is_sending.try_get_untracked().is_none() {
-                        return;
-                    }
-                    if chat.active_run_id.try_get_untracked().flatten().is_some() {
-                        enqueue_message();
-                    } else {
-                        send_message();
-                    }
-                }
-                Err(e) => {
-                    // The answer never left the client — keep the draft.
-                    input_text.set(reply);
-                    chat.set_send_error(ChatSendError::classify(e));
-                }
-            }
-        });
-        true
-    };
+    // So Enter while a card is up keeps the draft, sends nothing, and raises
+    // a hint pointing at the card.
 
     // Flush the entire prompt queue into the live run in one batch. Each prompt
     // rides the normal send path: while a run is active the gateway
@@ -1183,7 +1119,8 @@ pub(crate) fn InputArea() -> impl IntoView {
                 if let Some(maybe_ns) = trimmed.strip_prefix('/') {
                     if !maybe_ns.contains(' ') {
                         let cmds = all_commands.get_untracked();
-                        if let Some(parent) = cmds.iter().find(|c| c.key == maybe_ns && c.is_namespace)
+                        if let Some(parent) =
+                            cmds.iter().find(|c| c.key == maybe_ns && c.is_namespace)
                         {
                             ev.prevent_default();
                             current_namespace.set(Some(parent.key.clone()));
@@ -1199,9 +1136,16 @@ pub(crate) fn InputArea() -> impl IntoView {
                     }
                 }
                 ev.prevent_default();
-                // A pending question owns the send key — the turn is blocked on
-                // the answer, so queueing the draft would strand it.
-                if answer_pending_ask() {
+                // A local slash command is not an answer to the parked
+                // question — it must still run while the card is up.
+                if intercept_theme(&input_text.get_untracked()) {
+                    return;
+                }
+                // A pending question owns the send key. The CARD is the only
+                // addressed answer surface, so the composer keeps the draft,
+                // sends nothing, and points at the card.
+                if pending_ask.get_untracked().is_some() {
+                    ask_hint.set(true);
                     return;
                 }
                 // While a run is active, Enter queues the follow-up instead
@@ -1356,6 +1300,15 @@ pub(crate) fn InputArea() -> impl IntoView {
                 // any conversation long enough to scroll (the team-attachment
                 // refusal landed ~700px off-screen).
                 <SendErrorBanner />
+
+                // Hint raised when Enter was pressed while the question card
+                // owned the send key. The draft is still there — the card is
+                // the only place that can answer the parked question.
+                <Show when=move || ask_hint.get() && pending_ask.get().is_some()>
+                    <div class="mx-1 mb-1 px-2.5 py-1.5 rounded-md text-xs border bg-warning-subtle border-warning/30 text-warning" role="status">
+                        {t_string!(i18n, chat.ask_user_guide)}
+                    </div>
+                </Show>
 
                 // Voice-notice banner — a non-fatal notice from the spoken
                 // layer (currently only "this system cannot decode the audio").
@@ -2192,6 +2145,39 @@ mod ime_tests {
         let g = ImeGate::new();
         assert!(!g.should_suppress_enter(0));
         assert!(!g.should_suppress_enter(1_000_000));
+    }
+
+    /// The wide composer must not answer a parked question for the user.
+    ///
+    /// The question card is the only addressed answer surface: it stages the
+    /// answers, sends one typed `submit` (or `cancel`), and shows what it
+    /// sent. An implicit "whatever you typed is the answer" path guesses — and
+    /// it used to echo that guess into the transcript as if the user had
+    /// answered deliberately.
+    #[test]
+    fn the_wide_composer_never_answers_a_parked_question() {
+        let src = include_str!("mod.rs");
+        let production: String = crate::i18n_census::production_lines(src)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for banned in [
+            "answer_pending_ask",
+            "ClarificationApi::resolve",
+            "ClarificationApi::resolve_all",
+        ] {
+            assert!(
+                !production.contains(banned),
+                "the wide composer must leave the parked question to the card, \
+                 but it still contains `{banned}`"
+            );
+        }
+        assert!(
+            production.contains("ask_user_guide"),
+            "the wide composer must point the user at the card when Enter is \
+             pressed while a question is parked"
+        );
     }
 
     /// After a settled window expires, a *new* composition cycle still works:

@@ -58,6 +58,9 @@ pub(super) async fn send_to_agent(
         // tells us its canonical spelling, rather than us inventing one it
         // cannot parse.
         session_key: (!state.session_key.is_empty()).then(|| state.session_key.clone()),
+        // This client is listening for interactive events on the same Gateway.
+        // Without a channel, Core correctly treats the turn as unreachable.
+        channel: Some("cli:tui".into()),
         ..AgentRunRequest::default()
     };
     match client

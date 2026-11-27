@@ -68,7 +68,8 @@ async fn transcribe_known_audio_file_returns_text() {
             METHOD_SPEECH_TRANSCRIBE_FILE,
             TranscribeFileParams {
                 audio_path: record.file_path,
-                language: "en-US".into(),
+                language: Some("en-US".into()),
+                offline_only: None,
             },
         )
         .await

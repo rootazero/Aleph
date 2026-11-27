@@ -8,18 +8,11 @@ import { TranscriptList } from "./chat/TranscriptList";
 import { ContextSheet } from "./chat/ContextSheet";
 import type { Change } from "./chat/Diff";
 import type { Diagram } from "./chat/MessageBody";
+import { newIdempotencyKey } from "./chatIdempotency";
 
 const HISTORY_LIMIT = 200;
 const COMMIT_REREAD_MS = 350;
 const DETAIL_RUN_LIMIT = 12;
-
-// The native runtime need not ship Web Crypto for this cache-scoped key.
-function newIdempotencyKey(): string {
-  const hex = (digits: number) =>
-    Array.from({ length: digits }, () => Math.floor(Math.random() * 16).toString(16)).join("");
-  const variant = (8 + Math.floor(Math.random() * 4)).toString(16);
-  return `${hex(8)}-${hex(4)}-4${hex(3)}-${variant}${hex(3)}-${hex(12)}`;
-}
 
 type History = {
   session_key: string;

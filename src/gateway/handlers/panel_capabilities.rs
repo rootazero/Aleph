@@ -15,28 +15,40 @@ use crate::gateway::protocol::{
 
 /// Add the renderer declaration only when the actual Core read surface is mounted.
 pub(crate) fn with_memory_nebula(
-    mut snapshot: PanelUiCapabilitySnapshot,
+    snapshot: PanelUiCapabilitySnapshot,
     mounted: bool,
+) -> PanelUiCapabilitySnapshot {
+    if mounted {
+        with_builtin_shell_tab(snapshot, NEBULA_TAB_ID, "Memory Nebula", "network")
+    } else {
+        snapshot
+    }
+}
+
+fn with_builtin_shell_tab(
+    mut snapshot: PanelUiCapabilitySnapshot,
+    tab_id: &str,
+    label: &str,
+    icon: &str,
 ) -> PanelUiCapabilitySnapshot {
     let key = PanelTabKey {
         plugin_id: PANEL_BUILTIN_NAMESPACE.into(),
-        tab_id: NEBULA_TAB_ID.into(),
+        tab_id: tab_id.into(),
     };
-    if !mounted
-        || snapshot
-            .declarations
-            .iter()
-            .any(|tab| tab.descriptor.key == key)
+    if snapshot
+        .declarations
+        .iter()
+        .any(|tab| tab.descriptor.key == key)
     {
         return snapshot;
     }
     snapshot.declarations.push(PanelUiCapabilityDeclaration {
         descriptor: PanelTabDescriptor {
             key,
-            label: "Memory Nebula".into(),
-            icon: "network".into(),
+            label: label.into(),
+            icon: icon.into(),
             order: 0,
-            entry: format!("shell/{NEBULA_TAB_ID}"),
+            entry: format!("shell/{tab_id}"),
             api_major: PANEL_UI_API_MAJOR,
             trust: PanelUiTrust::Verified,
             permissions: Vec::new(),
@@ -52,13 +64,27 @@ pub(crate) fn with_memory_nebula(
     snapshot
 }
 
-/// Preserve the outer RPC result, including any flattened project selection.
 pub(crate) fn project_memory_nebula(result: &mut serde_json::Value) {
+    project_declaration(result, |snapshot| with_memory_nebula(snapshot, true));
+}
+
+pub(crate) fn project_voice(result: &mut serde_json::Value) {
+    use aleph_protocol::panel_voice::VOICE_TAB_ID;
+    project_declaration(result, |snapshot| {
+        with_builtin_shell_tab(snapshot, VOICE_TAB_ID, "Voice", "mic")
+    });
+}
+
+/// Preserve the outer RPC result, including any flattened project selection.
+fn project_declaration(
+    result: &mut serde_json::Value,
+    project: impl FnOnce(PanelUiCapabilitySnapshot) -> PanelUiCapabilitySnapshot,
+) {
     let Ok(snapshot) = serde_json::from_value::<PanelUiCapabilitySnapshot>(result.clone()) else {
         return;
     };
     let count = snapshot.declarations.len();
-    let projected = with_memory_nebula(snapshot, true);
+    let projected = project(snapshot);
     if let Some(declaration) = projected.declarations.get(count) {
         if let (Some(declarations), Ok(value)) = (
             result

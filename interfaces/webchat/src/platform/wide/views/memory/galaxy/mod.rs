@@ -226,9 +226,9 @@ fn GalaxyCanvasView() -> impl IntoView {
         spawn_local(async move {
             let response = GraphApi::query(&state, &agent, 500).await;
             if graph_version.try_get_untracked() != Some(version)
-                || state.connection_epoch.get_untracked() != epoch
-                || agent_id.get_untracked() != agent
-                || !state.is_connected.get_untracked()
+                || state.connection_epoch.try_get_untracked() != Some(epoch)
+                || agent_id.try_get_untracked().as_deref() != Some(agent.as_str())
+                || state.is_connected.try_get_untracked() != Some(true)
             {
                 return;
             }
@@ -348,10 +348,10 @@ fn GalaxyCanvasView() -> impl IntoView {
         spawn_local(async move {
             let response = GraphApi::search(&state, &agent, &query, 20).await;
             if search_version.try_get_untracked() != Some(version)
-                || state.connection_epoch.get_untracked() != epoch
-                || agent_id.get_untracked() != agent
-                || !state.is_connected.get_untracked()
-                || search_query.get_untracked() != query
+                || state.connection_epoch.try_get_untracked() != Some(epoch)
+                || agent_id.try_get_untracked().as_deref() != Some(agent.as_str())
+                || state.is_connected.try_get_untracked() != Some(true)
+                || search_query.try_get_untracked().as_deref() != Some(query.as_str())
             {
                 return;
             }

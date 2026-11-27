@@ -352,7 +352,7 @@ impl SessionService for InProcessActorSessionService {
             })?;
         rx.await.map_err(|e| {
             tracing::warn!(session_id = ?id, error = %e, "EmitBatch reply dropped");
-            SessionError::ActorShutdown
+            SessionError::AppendOutcomeUnknown(SessionError::ActorShutdown.to_string())
         })?
     }
 
@@ -363,9 +363,9 @@ impl SessionService for InProcessActorSessionService {
         event: SessionEvent,
     ) -> Result<EventSeq, SessionError> {
         let seqs = self.emit_batch(id, vec![event], None).await?;
-        seqs.first()
-            .copied()
-            .ok_or_else(|| SessionError::Other("emit_batch: one event in, no seq out".into()))
+        seqs.first().copied().ok_or_else(|| {
+            SessionError::AppendOutcomeUnknown("emit_batch: one event in, no seq out".into())
+        })
     }
 
     async fn subscribe(

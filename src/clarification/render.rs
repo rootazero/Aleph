@@ -9,18 +9,46 @@
 //! everything else depends on (`ask_user` → `clarification`, router →
 //! `clarification`), not inside one of the consumers.
 //!
-//! Two products, always built together so they cannot disagree:
-//! * the **text body**, which every channel can carry and which always lists
-//!   every option — this is the plain-text fallback, not a degraded mode; and
-//! * an optional **inline keyboard**, a tappable shortcut for channels that
-//!   render one. The callback payload is `clarify:<1-based index>`, byte-identical
-//!   to what a user typing that number produces, so
-//!   `crate::clarification::session::interpret_reply` stays the single
-//!   interpreter for both.
+//! The text body needs no live identity. Only a registered request gets an
+//! inline keyboard, with buttons addressed to an exact request and cursor.
 
 use super::{ClarificationOption, ClarificationQuestion};
 use crate::gateway::channel::{InlineButton, InlineKeyboard};
 use crate::gateway::i18n::Msg;
+use uuid::Uuid;
+
+pub(crate) const CLARIFICATION_BUTTON_PREFIX: &str = "clarify:";
+const MAX_CALLBACK_BYTES: usize = 64;
+
+pub(crate) struct ClarificationButton {
+    pub request_id: Uuid,
+    pub cursor: usize,
+    pub index: u32,
+}
+
+pub(crate) fn parse_button_callback(payload: &str) -> Option<ClarificationButton> {
+    if payload.len() > MAX_CALLBACK_BYTES {
+        return None;
+    }
+    let payload = payload.strip_prefix(CLARIFICATION_BUTTON_PREFIX)?;
+    let (request_id, choice) = payload.split_once(':')?;
+    let (cursor, ordinal) = choice.split_once(':')?;
+    if request_id.len() != 32
+        || !cursor.bytes().all(|b| b.is_ascii_digit())
+        || !ordinal.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let request_id = Uuid::parse_str(request_id).ok()?;
+    let cursor = cursor.parse().ok()?;
+    let ordinal: u32 = ordinal.parse().ok()?;
+    let index = ordinal.checked_sub(1)?;
+    (index < MAX_CHOICE_BUTTONS as u32).then_some(ClarificationButton {
+        request_id,
+        cursor,
+        index,
+    })
+}
 
 /// Max button label length (chars) before truncation.
 const MAX_LABEL_CHARS: usize = 32;
@@ -125,25 +153,37 @@ fn menu(options: &[ClarificationOption]) -> String {
 /// * **multi-select** — a tap carries exactly one index, so a keyboard would
 ///   offer a control that silently answers less than the question asks;
 /// * **too many options** — the payload would outgrow the channel's limits.
-fn keyboard_for(question: &ClarificationQuestion) -> Option<InlineKeyboard> {
-    if !question.has_options()
+fn keyboard_for(
+    question: &ClarificationQuestion,
+    request_id: Uuid,
+    cursor: usize,
+) -> Option<InlineKeyboard> {
+    if question.secret
+        || !question.has_options()
         || question.multi_select
         || question.options.len() > MAX_CHOICE_BUTTONS
     {
         return None;
     }
+    let request_id = request_id.simple();
     let buttons: Vec<InlineButton> = question
         .options
         .iter()
         .enumerate()
         .map(|(i, opt)| InlineButton {
             text: button_label(i + 1, &opt.label),
-            // 1-based index; the router strips `clarify:` and resolves the
-            // pending clarification with the bare number (see
-            // `try_intercept_hitl`).
-            callback_data: format!("clarify:{}", i + 1),
+            callback_data: format!(
+                "{CLARIFICATION_BUTTON_PREFIX}{request_id}:{cursor}:{}",
+                i + 1
+            ),
         })
         .collect();
+    if buttons
+        .iter()
+        .any(|b| b.callback_data.len() > MAX_CALLBACK_BYTES)
+    {
+        return None;
+    }
     let mut keyboard = InlineKeyboard::new();
     for chunk in buttons.chunks(2) {
         keyboard.rows.push(chunk.to_vec());
@@ -196,8 +236,21 @@ pub fn render(question: &ClarificationQuestion, index: usize, total: usize) -> R
 
     RenderedQuestion {
         text,
-        keyboard: keyboard_for(question),
+        keyboard: None,
     }
+}
+
+pub(crate) fn render_addressed(
+    question: &ClarificationQuestion,
+    cursor: usize,
+    total: usize,
+    request_id: &str,
+) -> RenderedQuestion {
+    let mut rendered = render(question, cursor, total);
+    rendered.keyboard = Uuid::parse_str(request_id)
+        .ok()
+        .and_then(|id| keyboard_for(question, id, cursor));
+    rendered
 }
 
 /// Escape Telegram-flavoured Markdown special characters in LLM-supplied text.
@@ -278,7 +331,11 @@ mod tests {
 
     #[test]
     fn keyboard_callbacks_are_one_based_indices() {
-        let kb = keyboard_for(&ClarificationQuestion::select("q", "?", opts()))
+        let id = Uuid::new_v4();
+        let q = ClarificationQuestion::select("q", "?", opts());
+        assert!(render(&q, 1, 3).keyboard.is_none());
+        let kb = render_addressed(&q, 1, 3, &id.to_string())
+            .keyboard
             .expect("2 options render a keyboard");
         let datas: Vec<&str> = kb
             .rows
@@ -286,7 +343,14 @@ mod tests {
             .flatten()
             .map(|b| b.callback_data.as_str())
             .collect();
-        assert_eq!(datas, vec!["clarify:1", "clarify:2"]);
+        for (index, data) in datas.into_iter().enumerate() {
+            assert_eq!(data, format!("clarify:{}:1:{}", id.simple(), index + 1));
+            let parsed = parse_button_callback(data).unwrap();
+            assert_eq!(
+                (parsed.request_id, parsed.cursor, parsed.index),
+                (id, 1, index as u32)
+            );
+        }
     }
 
     /// A tap can only ever carry ONE index, so offering buttons for a
@@ -295,7 +359,7 @@ mod tests {
     #[test]
     fn multi_select_suppresses_the_keyboard_but_not_the_menu() {
         let q = ClarificationQuestion::select("q", "?", opts()).with_multi_select(true);
-        assert!(keyboard_for(&q).is_none());
+        assert!(keyboard_for(&q, Uuid::nil(), 0).is_none());
         let r = render(&q, 0, 1);
         assert!(r.text.contains("1. in-place"));
         assert!(
@@ -311,16 +375,28 @@ mod tests {
             .map(|i| ClarificationOption::new(&format!("opt{i}"), &format!("opt{i}")))
             .collect();
         assert!(
-            keyboard_for(&ClarificationQuestion::select("q", "?", many)).is_none(),
+            keyboard_for(
+                &ClarificationQuestion::select("q", "?", many),
+                Uuid::nil(),
+                0
+            )
+            .is_none(),
             "oversized choice lists must not render buttons"
         );
 
         let twelve: Vec<ClarificationOption> = (0..12)
             .map(|i| ClarificationOption::new(&format!("opt{i}"), &format!("opt{i}")))
             .collect();
-        let kb = keyboard_for(&ClarificationQuestion::select("q", "?", twelve))
-            .expect("12 choices render");
+        let kb = keyboard_for(
+            &ClarificationQuestion::select("q", "?", twelve),
+            Uuid::nil(),
+            3,
+        )
+        .expect("12 choices render");
         assert_eq!(kb.rows.iter().flatten().count(), 12);
+        let last = &kb.rows.last().unwrap().last().unwrap().callback_data;
+        assert!(last.len() <= MAX_CALLBACK_BYTES);
+        assert_eq!(parse_button_callback(last).unwrap().index, 11);
     }
 
     #[test]

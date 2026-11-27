@@ -280,7 +280,10 @@ async fn core_panel_lifecycle_failed_reload_preflight_keeps_old_publication() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(error.contains("previous version is still running"), "{error}");
+    assert!(
+        error.contains("previous version is still running"),
+        "{error}"
+    );
     let current = manager.panel_ui_capability_snapshot_for(&ctx).declarations;
     assert_eq!(current.len(), 1);
     assert_eq!(current[0].source_revision, first.source_revision);

@@ -1120,120 +1120,6 @@ async fn set_default_provider_inner(
     JsonRpcResponse::success(request.id.clone(), json!({ "ok": true }))
 }
 
-#[cfg(test)]
-mod default_promotion_tests {
-    use super::*;
-    use crate::gateway::security::store::SecurityStore;
-    use crate::providers::DefaultProviderHandle;
-
-    tokio::task_local! {
-        static CHECK_PROMOTION_LOCK: ();
-    }
-
-    pub(super) fn assert_promotion_holds_write_lock(config: &RwLock<Config>) {
-        if CHECK_PROMOTION_LOCK.try_with(|_| ()).is_ok() {
-            assert!(
-                config.try_read().is_err(),
-                "transport published outside Config write lock"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn waiting_renewal_observes_promotion_before_installing_new_bearer() {
-        const PROVIDER: &str = "chatgpt";
-        const BEARER_KEY: &str = "ai:chatgpt";
-        const GRANT_KEY: &str = "ai:chatgpt:oauth";
-        let dir = tempfile::tempdir().unwrap();
-        let vault = Arc::new(SharedTokenManager::new(
-            Arc::new(SecurityStore::in_memory().unwrap()),
-            dir.path().join("test.vault"),
-        ));
-        vault.generate_token().unwrap();
-        vault
-            .store_secret_batch([(BEARER_KEY, "old-fixture"), (GRANT_KEY, "old-grant")])
-            .unwrap();
-        let mut provider = crate::config::ProviderConfig::test_config("org/model");
-        provider.api_key = None;
-        provider.protocol = Some("openai".into());
-        provider.base_url = Some("http://127.0.0.1:1/v1".into());
-        provider.verified = true;
-        let transport = |bearer: &str| {
-            let mut pc = provider.clone();
-            pc.api_key = Some(bearer.into());
-            crate::providers::create_provider(PROVIDER, pc).unwrap()
-        };
-        let boot = transport("boot-fixture");
-        let registry = Arc::new(crate::thinker::MultiProviderRegistry::new(
-            PROVIDER.into(),
-            boot.clone(),
-        ));
-        let mut cfg = Config::default();
-        cfg.providers.insert(PROVIDER.into(), provider.clone());
-        let config = Arc::new(RwLock::new(cfg));
-        let bus = Arc::new(GatewayEventBus::new());
-        let request = JsonRpcRequest::new("providers.setDefault", None, Some(json!(1)));
-        let params = SetDefaultParams {
-            name: PROVIDER.into(),
-        };
-        let (persisting, persisted) = tokio::sync::oneshot::channel();
-        let (release, resume) = tokio::sync::oneshot::channel();
-        let promote = set_default_provider_inner(
-            &request,
-            &params,
-            &config,
-            &bus,
-            Some(&registry),
-            Some(&vault),
-            async move |_| {
-                persisting.send(()).unwrap();
-                resume.await.unwrap();
-                Ok(())
-            },
-        );
-        let verify_and_renew = async {
-            persisted.await.unwrap();
-            assert!(config.try_read().is_err());
-            assert!(Arc::ptr_eq(&registry.current(), &boot));
-            release.send(()).unwrap();
-            // With no queued readers or writers, the registration probe
-            // distinguishes the write guard from an unlocked Config.
-            tokio::task::yield_now().await;
-            let config = config.read().await;
-            let mounted = registry.current();
-            assert!(mounted
-                .as_http_provider()
-                .unwrap()
-                .matches_configured_transport(PROVIDER, "openai", "old-fixture", |_| true,));
-            let (_, _, epoch) = vault
-                .oauth_refresh_snapshot(&config, PROVIDER, BEARER_KEY, GRANT_KEY)
-                .unwrap()
-                .unwrap();
-            let renewed = transport("new-fixture");
-            assert_eq!(
-                vault
-                    .refresh_secrets_if_current(
-                        PROVIDER,
-                        epoch,
-                        [(BEARER_KEY, "old-fixture"), (GRANT_KEY, "old-grant")],
-                        [(BEARER_KEY, "new-fixture"), (GRANT_KEY, "new-grant")],
-                        || registry.register(PROVIDER.into(), renewed),
-                    )
-                    .unwrap(),
-                Some(())
-            );
-        };
-        let (response, ()) =
-            tokio::join!(biased; CHECK_PROMOTION_LOCK.scope((), promote), verify_and_renew);
-        assert!(response.error.is_none(), "{:?}", response.error);
-        assert!(registry
-            .current()
-            .as_http_provider()
-            .unwrap()
-            .matches_configured_transport(PROVIDER, "openai", "new-fixture", |_| true,));
-    }
-}
-
 // ============================================================================
 // Catalog (chat-side picker)
 // ============================================================================
@@ -1504,4 +1390,118 @@ pub async fn handle_catalog(
         request.id,
         serde_json::to_value(CatalogResult { items }).unwrap_or_else(|_| json!({ "items": [] })),
     )
+}
+
+#[cfg(test)]
+mod default_promotion_tests {
+    use super::*;
+    use crate::gateway::security::store::SecurityStore;
+    use crate::providers::DefaultProviderHandle;
+
+    tokio::task_local! {
+        static CHECK_PROMOTION_LOCK: ();
+    }
+
+    pub(super) fn assert_promotion_holds_write_lock(config: &RwLock<Config>) {
+        if CHECK_PROMOTION_LOCK.try_with(|_| ()).is_ok() {
+            assert!(
+                config.try_read().is_err(),
+                "transport published outside Config write lock"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn waiting_renewal_observes_promotion_before_installing_new_bearer() {
+        const PROVIDER: &str = "chatgpt";
+        const BEARER_KEY: &str = "ai:chatgpt";
+        const GRANT_KEY: &str = "ai:chatgpt:oauth";
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(SharedTokenManager::new(
+            Arc::new(SecurityStore::in_memory().unwrap()),
+            dir.path().join("test.vault"),
+        ));
+        vault.generate_token().unwrap();
+        vault
+            .store_secret_batch([(BEARER_KEY, "old-fixture"), (GRANT_KEY, "old-grant")])
+            .unwrap();
+        let mut provider = crate::config::ProviderConfig::test_config("org/model");
+        provider.api_key = None;
+        provider.protocol = Some("openai".into());
+        provider.base_url = Some("http://127.0.0.1:1/v1".into());
+        provider.verified = true;
+        let transport = |bearer: &str| {
+            let mut pc = provider.clone();
+            pc.api_key = Some(bearer.into());
+            crate::providers::create_provider(PROVIDER, pc).unwrap()
+        };
+        let boot = transport("boot-fixture");
+        let registry = Arc::new(crate::thinker::MultiProviderRegistry::new(
+            PROVIDER.into(),
+            boot.clone(),
+        ));
+        let mut cfg = Config::default();
+        cfg.providers.insert(PROVIDER.into(), provider.clone());
+        let config = Arc::new(RwLock::new(cfg));
+        let bus = Arc::new(GatewayEventBus::new());
+        let request = JsonRpcRequest::new("providers.setDefault", None, Some(json!(1)));
+        let params = SetDefaultParams {
+            name: PROVIDER.into(),
+        };
+        let (persisting, persisted) = tokio::sync::oneshot::channel();
+        let (release, resume) = tokio::sync::oneshot::channel();
+        let promote = set_default_provider_inner(
+            &request,
+            &params,
+            &config,
+            &bus,
+            Some(&registry),
+            Some(&vault),
+            async move |_| {
+                persisting.send(()).unwrap();
+                resume.await.unwrap();
+                Ok(())
+            },
+        );
+        let verify_and_renew = async {
+            persisted.await.unwrap();
+            assert!(config.try_read().is_err());
+            assert!(Arc::ptr_eq(&registry.current(), &boot));
+            release.send(()).unwrap();
+            // With no queued readers or writers, the registration probe
+            // distinguishes the write guard from an unlocked Config.
+            tokio::task::yield_now().await;
+            let config = config.read().await;
+            let mounted = registry.current();
+            assert!(mounted
+                .as_http_provider()
+                .unwrap()
+                .matches_configured_transport(PROVIDER, "openai", "old-fixture", |_| true,));
+            let (_, _, epoch) = vault
+                .oauth_refresh_snapshot(&config, PROVIDER, BEARER_KEY, GRANT_KEY)
+                .unwrap()
+                .unwrap();
+            let renewed = transport("new-fixture");
+            assert_eq!(
+                vault
+                    .refresh_secrets_if_current(
+                        PROVIDER,
+                        epoch,
+                        [(BEARER_KEY, "old-fixture"), (GRANT_KEY, "old-grant")],
+                        [(BEARER_KEY, "new-fixture"), (GRANT_KEY, "new-grant")],
+                        || registry.register(PROVIDER.into(), renewed),
+                    )
+                    .unwrap(),
+                Some(())
+            );
+        };
+        let (response, ()) =
+            tokio::join!(biased; CHECK_PROMOTION_LOCK.scope((), promote), verify_and_renew);
+        assert!(response.error.is_none(), "{:?}", response.error);
+        assert!(registry
+            .current()
+            .as_http_provider()
+            .unwrap()
+            .matches_configured_transport(PROVIDER, "openai", "new-fixture", |_| true,));
+    }
 }

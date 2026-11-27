@@ -433,17 +433,13 @@ impl KnowledgeNote {
     /// whose two vectors disagree in length; a fact with no row falls back to
     /// `Legacy`, which is what "no marker" already means.
     #[must_use]
-    pub fn facts_with_origin(&self) -> Vec<(String, FactProvenance)> {
-        self.facts
-            .iter()
-            .enumerate()
-            .map(|(i, f)| {
-                (
-                    strip_provenance_marker(f),
-                    self.fact_provenance.get(i).cloned().unwrap_or_default(),
-                )
-            })
-            .collect()
+    pub fn facts_with_origin(&self) -> impl Iterator<Item = (String, FactProvenance)> + '_ {
+        self.facts.iter().enumerate().map(|(i, f)| {
+            (
+                strip_provenance_marker(f),
+                self.fact_provenance.get(i).cloned().unwrap_or_default(),
+            )
+        })
     }
 }
 

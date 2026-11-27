@@ -115,11 +115,10 @@ impl SessionActor {
     }
 
     /// The one store call behind the hot and drain arms. Seqs are `head_seq + 1 ..`;
-    /// on failure (typically a `(session_id, seq)` UNIQUE collision from a
-    /// direct-store writer racing the actor — audit 4.1) resync `head_seq`
-    /// from the store and retry the WHOLE batch once. Bounded: no loop,
-    /// propagate on second failure. `append_batch` is one transaction, so a
-    /// failed attempt wrote nothing and the retry cannot double-write.
+    /// on a definite failure (typically a `(session_id, seq)` collision with
+    /// a direct-store writer), resync `head_seq` and retry the whole batch once.
+    /// An unknown commit outcome is returned unchanged: the batch may already
+    /// be durable, and the current head alone cannot prove which rows landed.
     ///
     /// Returns the first seq of the batch; the caller derives the rest.
     /// `head_seq` is NOT advanced here — `finish_emitted` does that per row.
@@ -134,6 +133,9 @@ impl SessionActor {
             .store
             .append_batch(&self.id, first, events, retire, durability)
             .await;
+        if matches!(&result, Err(SessionError::AppendOutcomeUnknown(_))) {
+            return result.map(|()| first);
+        }
         if result.is_err() {
             if let Ok(stored_head) = self.store.load_head_seq(&self.id).await {
                 self.head_seq = stored_head;
@@ -268,8 +270,7 @@ impl SessionActor {
                     // between the sleep returning and `run()` returning
                     // (a tiny but real window — the mpsc buffer is 64)
                     // has its `oneshot::Sender` dropped with `run()`,
-                    // surfacing as `SessionError::ActorShutdown` to the
-                    // caller with no signal that the event was never
+                    // leaving the caller with no signal that the event was never
                     // appended. Drain until the inbox is empty or the
                     // next recv would block.
                     let mut drained = 0u32;
@@ -560,6 +561,7 @@ mod tests {
         calls: std::sync::Mutex<Vec<(EventSeq, usize)>>,
         head: AtomicU64,
         fail_first: usize,
+        unknown_commit_at: Option<usize>,
     }
 
     impl ScriptedStore {
@@ -568,6 +570,7 @@ mod tests {
                 calls: std::sync::Mutex::new(vec![]),
                 head: AtomicU64::new(0),
                 fail_first,
+                unknown_commit_at: None,
             })
         }
 
@@ -592,6 +595,12 @@ mod tests {
                 calls.push((first_seq, events.len()));
                 calls.len()
             };
+            if self.unknown_commit_at == Some(n) {
+                self.head.fetch_add(events.len() as u64, Ordering::SeqCst);
+                return Err(SessionError::AppendOutcomeUnknown(
+                    "commit reply lost".into(),
+                ));
+            }
             if n <= self.fail_first {
                 self.head.fetch_add(1, Ordering::SeqCst);
                 return Err(SessionError::Storage(format!("scripted failure #{n}")));
@@ -720,6 +729,51 @@ mod tests {
             2,
             "the observer fires once per landed row, never for the failed attempt"
         );
+    }
+
+    #[tokio::test]
+    async fn actor_does_not_retry_an_unknown_append_outcome() {
+        assert_unknown_append_outcome(1, vec![(1, 2)], 2).await;
+    }
+
+    #[tokio::test]
+    async fn actor_preserves_unknown_append_outcome_after_a_definite_collision() {
+        assert_unknown_append_outcome(2, vec![(1, 2), (2, 2)], 3).await;
+    }
+
+    async fn assert_unknown_append_outcome(
+        unknown_at: usize,
+        expected_calls: Vec<(EventSeq, usize)>,
+        expected_head: EventSeq,
+    ) {
+        let mut store = ScriptedStore::new(unknown_at - 1);
+        Arc::get_mut(&mut store).unwrap().unknown_commit_at = Some(unknown_at);
+        let (tx, observed, mut sub) = spawn_scripted(&store);
+
+        let (rtx, rrx) = oneshot::channel();
+        tx.send(ActorCommand::EmitBatch {
+            events: two_turn_starts(),
+            retire: None,
+            reply: rtx,
+        })
+        .await
+        .unwrap();
+
+        let result = rrx.await.unwrap();
+        assert_eq!(
+            store.calls(),
+            expected_calls,
+            "the batch may already be durable"
+        );
+        assert_eq!(store.head.load(Ordering::SeqCst), expected_head);
+        assert!(
+            matches!(result, Err(SessionError::AppendOutcomeUnknown(message)) if message == "commit reply lost")
+        );
+        assert_eq!(observed.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            sub.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
     }
 
     /// The self-heal is bounded: when the retry ALSO fails, the caller gets

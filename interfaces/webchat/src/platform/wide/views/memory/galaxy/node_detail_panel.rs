@@ -61,6 +61,7 @@ pub fn NodeDetailPanel(
 
     let version = RwSignal::new(0u32);
     let detail_error = RwSignal::new(None::<String>);
+    let i18n = use_i18n();
     Effect::new(move |_| {
         let request = version.get_untracked().wrapping_add(1);
         version.set(request);
@@ -81,12 +82,10 @@ pub fn NodeDetailPanel(
         spawn_local(async move {
             let reply = GraphApi::node_detail(&state, &address.agent_id, &address.node_id).await;
             if version.try_get_untracked() != Some(request)
-                || state.connection_epoch.get_untracked() != epoch
-                || mem.agent_id.get_untracked() != selector
-                || mem
-                    .selected_node
-                    .with_untracked(|node| node.as_ref() != Some(&address))
-                || !state.is_connected.get_untracked()
+                || state.connection_epoch.try_get_untracked() != Some(epoch)
+                || mem.agent_id.try_get_untracked().as_deref() != Some(selector.as_str())
+                || mem.selected_node.try_get_untracked().flatten().as_ref() != Some(&address)
+                || state.is_connected.try_get_untracked() != Some(true)
             {
                 return;
             }
@@ -106,7 +105,11 @@ pub fn NodeDetailPanel(
                     });
                 }
                 Err(e) => {
-                    detail_error.set(Some(e.to_string()));
+                    detail_error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        str::to_owned,
+                    )));
                 }
             }
         });

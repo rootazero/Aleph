@@ -28,7 +28,7 @@ mod ipc_status;
 mod menu;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod panel_bridge;
-#[cfg(feature = "tsx-panel")]
+#[cfg(any(test, feature = "tsx-panel"))]
 mod panel_host;
 #[cfg(all(feature = "tsx-panel", target_os = "macos"))]
 mod panel_surface;
@@ -36,6 +36,8 @@ mod panel_surface;
 mod perm_monitor;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod update;
+#[cfg(any(test, all(feature = "tsx-panel", target_os = "macos")))]
+mod voice_playback;
 
 #[cfg(all(feature = "tsx-panel", not(target_os = "macos")))]
 compile_error!(

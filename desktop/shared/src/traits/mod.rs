@@ -15,7 +15,7 @@ pub mod system;
 
 pub use automation::AutomationCapability;
 pub use ax::AccessibilityCapability;
-pub use media::MediaCapability;
+pub use media::{MediaCapability, VoiceCapture};
 pub use permission::PermissionCapability;
 pub use pim::PimCapability;
 pub use power::{InhibitorGuard, PowerCapability};
