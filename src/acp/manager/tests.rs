@@ -383,6 +383,9 @@ async fn test_gateway_change_hook_fires_on_emit() {
     }));
     assert_eq!(counter.load(Ordering::SeqCst), 2);
 }
+
+#[tokio::test]
+#[cfg(unix)]
 async fn disabled_harness_never_starts_native_or_oneshot() {
     use crate::config::types::acp::TrustLevel;
     let directory = tempfile::tempdir().unwrap();
@@ -431,14 +434,14 @@ async fn disabled_harness_never_starts_native_or_oneshot() {
     manager
         .set_persistence_hook(Arc::new(move |event| captured.lock().unwrap().push(event)))
         .await;
-    assert!(manager
-        .restore_sessions(vec![record.clone()])
-        .await
-        .is_empty());
+    assert!(manager.restore_sessions(vec![record]).await.is_empty());
     assert!(
         events.lock().unwrap().is_empty(),
         "restore denial must retain the persisted record"
     );
     assert!(!marker.exists());
-    assert_eq!(record.acp_session_id, "old");
+    let snapshots = manager.list_sessions().await;
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].acp_session_id.as_deref(), Some("old"));
+    assert!(!snapshots[0].alive);
 }

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use alephcore::acp::manager::{load_persisted_sessions, wire_persistence, AcpAdapterManager};
+use alephcore::acp::AcpSessionEvent;
 use alephcore::gateway::handlers::acp_config::{
     handle_sessions_cancel, handle_sessions_list, handle_sessions_shutdown,
 };
@@ -262,6 +263,11 @@ async fn shutdown_supersedes_a_replacement_waiting_for_its_predecessor() {
     let dir = fixture.workspace("superseded");
     let cwd = dir.to_str().unwrap();
     let manager = fixture.manager();
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&events);
+    manager
+        .set_persistence_hook(Arc::new(move |event| recorded.lock().unwrap().push(event)))
+        .await;
     let active = manager.prompt(HARNESS, "stop reading", cwd, None, true, None);
     tokio::pin!(active);
     let pid = tokio::select! {
@@ -283,6 +289,13 @@ async fn shutdown_supersedes_a_replacement_waiting_for_its_predecessor() {
     assert_exited(pid);
     assert_eq!(frames(&dir).matches(" initialize").count(), 1);
     assert!(manager.list_sessions().await.is_empty());
+    assert!(matches!(
+        events.lock().unwrap().as_slice(),
+        [
+            AcpSessionEvent::Created { .. },
+            AcpSessionEvent::Removed { .. }
+        ]
+    ));
 }
 
 #[tokio::test]
