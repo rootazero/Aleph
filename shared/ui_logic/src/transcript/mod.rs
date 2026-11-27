@@ -68,7 +68,8 @@ pub use affordance::{
     collapse_hint, expand_hint, fmt_duration_ms, spinner_frame, verb, worked_for, Locale, Modality,
     SPINNER_FRAMES, SPINNER_PERIOD_MS, VERBS_EN, VERBS_ZH, VERB_REROLL_MS,
 };
-#[cfg(feature = "panel")]
-pub use context::panel_context_view;
-pub use context::{reconcile, ContextRow, ContextRows, PROVIDER_TOLERANCE};
+pub use context::{
+    panel_context_view, project_occupancy, reconcile, ContextOccupancy, ContextRow, ContextRows,
+    PROVIDER_TOLERANCE,
+};
 pub use turn_summary::{summarize_rows, summarize_turn, turn_summary_text, MIN_TOOLS_FOR_SUMMARY};

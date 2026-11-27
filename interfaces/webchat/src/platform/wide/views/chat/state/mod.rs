@@ -97,22 +97,41 @@ pub struct ProviderRetryNotice {
     pub max_attempts: u32,
 }
 
-/// Context-window occupancy snapshot for the composer gauge. All three figures
-/// are computed by core and shipped on the `run_complete` summary — the panel
-/// is a pure renderer (R4): `used_tokens` = current occupancy
-/// (`prompt_tokens_total` + last output), `window_tokens` = the model's
-/// authoritative context window, `total_tokens` = the run's cumulative total.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContextUsage {
-    /// Input/context tokens occupying the window after the latest turn.
-    pub used_tokens: u32,
-    /// Resolved context-window size for the run's model (gauge denominator).
-    pub window_tokens: u32,
-    /// Running total tokens billed for the run (shown in the tooltip).
-    pub total_tokens: u64,
-    /// True when these figures are a pre-run estimate (no real LLM turn yet),
-    /// so the gauge renders `≈N%` instead of `N%`.
-    pub is_estimate: bool,
+/// The provenance of the occupancy displayed for the selected session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextUsage {
+    Current(shared_ui_logic::transcript::ContextOccupancy),
+    Previous(shared_ui_logic::transcript::ContextOccupancy),
+    Estimate(shared_ui_logic::transcript::ContextOccupancy),
+}
+
+impl ContextUsage {
+    #[must_use]
+    pub fn with_latest(
+        latest: shared_ui_logic::transcript::ContextOccupancy,
+        prior: Option<Self>,
+    ) -> Self {
+        use shared_ui_logic::transcript::ContextOccupancy;
+        match (latest, prior) {
+            (
+                ContextOccupancy::Unknown,
+                Some(
+                    Self::Current(previous @ ContextOccupancy::Measured { .. })
+                    | Self::Previous(previous @ ContextOccupancy::Measured { .. }),
+                ),
+            ) => Self::Previous(previous),
+            _ => Self::Current(latest),
+        }
+    }
+
+    #[must_use]
+    pub const fn occupancy(self) -> shared_ui_logic::transcript::ContextOccupancy {
+        match self {
+            Self::Current(occupancy) | Self::Previous(occupancy) | Self::Estimate(occupancy) => {
+                occupancy
+            }
+        }
+    }
 }
 
 /// Model resolution info (mirrors core `ModelInfo`).
@@ -2742,14 +2761,12 @@ mod step_tests {
         let owner = Owner::new();
         owner.set();
         let chat = ChatState::new();
-        let seed = || {
-            chat.context_usage.set(Some(ContextUsage {
-                used_tokens: 10_000,
-                window_tokens: 200_000,
-                total_tokens: 12_000,
-                is_estimate: false,
-            }))
-        };
+        let usage = ContextUsage::Current(shared_ui_logic::transcript::project_occupancy(
+            Some(10_000),
+            Some(200_000),
+            Some(12_000),
+        ));
+        let seed = || chat.context_usage.set(Some(usage));
 
         seed();
         chat.clear();
@@ -2775,12 +2792,7 @@ mod step_tests {
         chat.restore_from(snap);
         assert_eq!(
             chat.context_usage.get_untracked(),
-            Some(ContextUsage {
-                used_tokens: 10_000,
-                window_tokens: 200_000,
-                total_tokens: 12_000,
-                is_estimate: false,
-            }),
+            Some(usage),
             "restore_from() must rehydrate the captured gauge so it survives tab swaps"
         );
 

@@ -570,35 +570,29 @@ fn append_reasoning(chat: ChatState, summary: &str) {
     });
 }
 
-/// Project core-authoritative context occupancy onto the composer gauge.
-/// Reads `context_tokens` / `context_window` / `total_tokens` — the same field
-/// names on both feeds: the terminal `run_complete` summary and the mid-run
-/// `context_gauge` events emitted once per LLM call (so the gauge tracks a
-/// long run live, including the drop right after a mid-run compaction).
-/// Pure rendering (R4): core computes both sides; the panel only displays
-/// them. No-op unless both occupancy and window are present, so legacy
-/// payloads and runs with no LLM call leave the gauge hidden.
-fn apply_context_gauge(chat: ChatState, summary: &serde_json::Value) {
-    let used = summary
-        .get("context_tokens")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0) as u32;
-    let window = summary
-        .get("context_window")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0) as u32;
+/// Project the fields shared by live context events and terminal summaries.
+/// Older terminal senders use zero for a run that made no LLM call.
+fn apply_context_gauge(chat: ChatState, summary: &serde_json::Value, terminal: bool) {
+    use shared_ui_logic::transcript::project_occupancy;
+
+    let token_count = |key| {
+        summary
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+    };
+    let used = token_count("context_tokens").filter(|value| !terminal || *value > 0);
+    let window = token_count("context_window");
+    if used.is_none() && window.unwrap_or(0) == 0 {
+        return;
+    }
     let total = summary
         .get("total_tokens")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    if used > 0 && window > 0 {
-        chat.context_usage.set(Some(ContextUsage {
-            used_tokens: used,
-            window_tokens: window,
-            total_tokens: total,
-            is_estimate: false,
-        }));
-    }
+        .and_then(serde_json::Value::as_u64);
+    let occupancy = project_occupancy(used, window, total);
+    chat.context_usage.update(|prior| {
+        *prior = Some(ContextUsage::with_latest(occupancy, *prior));
+    });
 }
 
 /// T2.13: project one `StreamEvent::Reasoning` into the per-run
@@ -1351,7 +1345,7 @@ pub fn subscribe_run_events(
                 // match the run_complete summary, so the same projector
                 // applies; the terminal summary still lands last and stays
                 // authoritative.
-                apply_context_gauge(chat, data);
+                apply_context_gauge(chat, data, false);
             }
             "reasoning_block" => {
                 // T2.13: structured reasoning chunks have always been emitted
@@ -1394,7 +1388,7 @@ pub fn subscribe_run_events(
                 // (`context_window`); the panel is a pure renderer (R4). The
                 // run-cumulative `total_tokens` rides along for the tooltip.
                 if let Some(summary) = data.get("summary") {
-                    apply_context_gauge(chat, summary);
+                    apply_context_gauge(chat, summary, true);
                     // Why the run stopped, when it did not stop cleanly. The
                     // other four surfaces have rendered this since the field
                     // existed; the panel read neither it nor `hit_limit`, so a
@@ -1812,12 +1806,52 @@ mod projection_tests {
             "context_window": 200_000,
             "total_tokens": 55_000,
         });
-        super::apply_context_gauge(chat, &summary);
+        super::apply_context_gauge(chat, &summary, true);
 
-        let usage = chat.context_usage.get_untracked().expect("gauge published");
-        assert_eq!(usage.used_tokens, 42_000);
-        assert_eq!(usage.window_tokens, 200_000);
-        assert_eq!(usage.total_tokens, 55_000);
+        assert_eq!(
+            chat.context_usage.get_untracked(),
+            Some(super::ContextUsage::Current(
+                shared_ui_logic::transcript::project_occupancy(
+                    Some(42_000),
+                    Some(200_000),
+                    Some(55_000),
+                )
+            ))
+        );
+    }
+
+    #[test]
+    fn context_gauge_updates_after_compaction_and_preserves_previous_on_unknown_window() {
+        use shared_ui_logic::transcript::project_occupancy;
+        let owner = Owner::new();
+        let chat = owner.with(ChatState::new);
+        for used in [410_000, 128_000] {
+            super::apply_context_gauge(
+                chat,
+                &json!({
+                    "context_tokens": used,
+                    "context_window": 512_000,
+                }),
+                false,
+            );
+        }
+        let expected = project_occupancy(Some(128_000), Some(512_000), None);
+        assert_eq!(
+            chat.context_usage.get_untracked(),
+            Some(super::ContextUsage::Current(expected))
+        );
+        super::apply_context_gauge(
+            chat,
+            &json!({
+                "context_tokens": 130_000,
+                "context_window": 4_295_479_296_u64,
+            }),
+            false,
+        );
+        assert_eq!(
+            chat.context_usage.get_untracked(),
+            Some(super::ContextUsage::Previous(expected))
+        );
     }
 
     /// A surface that registers no conversation receives no frame at all.

@@ -5,9 +5,98 @@
 
 use aleph_protocol::context_breakdown::ContextBreakdown;
 
+/// Occupancy for a single prompt and the model window that served it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextOccupancy {
+    Measured {
+        used_tokens: u32,
+        window_tokens: u32,
+        total_tokens: Option<u64>,
+    },
+    CapacityOnly {
+        window_tokens: u32,
+    },
+    Unknown,
+}
+
+impl ContextOccupancy {
+    #[must_use]
+    pub fn fraction(self) -> Option<f64> {
+        match self {
+            Self::Measured {
+                used_tokens,
+                window_tokens,
+                ..
+            } if window_tokens > 0 => {
+                Some((f64::from(used_tokens) / f64::from(window_tokens)).min(1.0))
+            }
+            _ => None,
+        }
+    }
+}
+
+#[must_use]
+pub fn project_occupancy(
+    used_tokens: Option<u32>,
+    window_tokens: Option<u32>,
+    total_tokens: Option<u64>,
+) -> ContextOccupancy {
+    match (used_tokens, window_tokens.filter(|window| *window > 0)) {
+        (Some(used_tokens), Some(window_tokens)) => ContextOccupancy::Measured {
+            used_tokens,
+            window_tokens,
+            total_tokens,
+        },
+        (None, Some(window_tokens)) => ContextOccupancy::CapacityOnly { window_tokens },
+        (_, None) => ContextOccupancy::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod occupancy_tests {
+    use super::{project_occupancy, ContextOccupancy};
+
+    #[test]
+    fn measured_zero_is_valid() {
+        assert_eq!(
+            project_occupancy(Some(0), Some(512_000), None).fraction(),
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn capacity_only_has_no_fraction() {
+        assert_eq!(
+            project_occupancy(None, Some(512_000), Some(128_000)),
+            ContextOccupancy::CapacityOnly {
+                window_tokens: 512_000
+            }
+        );
+        assert_eq!(
+            project_occupancy(Some(128_000), Some(0), None),
+            ContextOccupancy::Unknown
+        );
+        assert_eq!(
+            project_occupancy(None, Some(512_000), None).fraction(),
+            None
+        );
+    }
+
+    #[test]
+    fn fraction_uses_the_measured_model_window() {
+        assert_eq!(
+            project_occupancy(Some(128_000), Some(512_000), Some(150_000)).fraction(),
+            Some(0.25)
+        );
+        assert_eq!(
+            project_occupancy(Some(513_000), Some(512_000), None).fraction(),
+            Some(1.0)
+        );
+    }
+}
+
 /// Selected counts for the Panel's last-request view. Per-layer attribution
 /// precedes trimming, and conversation counts remain local estimates.
-#[cfg(feature = "panel")]
 #[must_use]
 pub fn panel_context_view(report: &ContextBreakdown) -> serde_json::Value {
     let stable_bytes: u64 = report

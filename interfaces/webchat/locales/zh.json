@@ -437,6 +437,8 @@
     "group_chats_count_other": "群聊 {{ count }}",
     "context_usage_estimate_title": "预估上下文占用 {{ pct }}% · {{ used }} / {{ window }} tokens（首次对话后转为实测）",
     "context_usage_title": "上下文占用 {{ pct }}% · {{ used }} / {{ window }} tokens（本轮累计 {{ total }}）",
+    "context_usage_measured_title": "上下文占用 {{ pct }}% · {{ used }} / {{ window }} tokens",
+    "context_usage_previous_title": "上次实测上下文占用 {{ pct }}% · {{ used }} / {{ window }} tokens",
     "cache_hit_title": "上一次调用的提示词缓存命中率 {{ pct }}% · read / (input + read)（与 TUI 状态栏同口径）",
     "starter_search_label": "搜索网络",
     "starter_search_prompt": "帮我搜索今天的科技要闻，并总结 3 个重点",

@@ -40,6 +40,7 @@ async fn await_current_history<T>(
     let active_run = chat.active_run_id.get_untracked();
     let phase = chat.phase.get_untracked();
     let reasoning = chat.reasoning_text.get_untracked();
+    let occupancy = chat.context_usage.get_untracked();
     let limit = chat.history_limit.get_untracked();
     let loaded = load.await;
     (dash.connection_epoch.try_get_untracked() == Some(epoch)
@@ -52,6 +53,7 @@ async fn await_current_history<T>(
         && chat.active_run_id.try_get_untracked() == Some(active_run)
         && chat.phase.try_get_untracked() == Some(phase)
         && chat.reasoning_text.try_get_untracked() == Some(reasoning)
+        && chat.context_usage.try_get_untracked() == Some(occupancy)
         && chat.history_limit.try_get_untracked() == Some(limit))
     .then_some(loaded)
 }
@@ -161,6 +163,28 @@ mod hydration_progress_tests {
     }
 
     #[test]
+    fn late_history_cannot_replace_live_occupancy() {
+        use super::ContextUsage;
+        use shared_ui_logic::transcript::project_occupancy;
+
+        let owner = Owner::new();
+        let (dash, chat) = owner.with(|| (DashboardState::new(), ChatState::new()));
+        chat.session_key.set(Some("agent:main:main:race".into()));
+        let (response_tx, response_rx) = oneshot::channel();
+        let pending = await_current_history(dash, chat, "agent:main:main:race", response_rx);
+        futures::pin_mut!(pending);
+        assert!(pending.as_mut().now_or_never().is_none());
+        chat.context_usage
+            .set(Some(ContextUsage::Current(project_occupancy(
+                Some(128_000),
+                Some(512_000),
+                None,
+            ))));
+        response_tx.send("old snapshot").unwrap();
+        assert!(futures::executor::block_on(pending).is_none());
+    }
+
+    #[test]
     fn a_larger_history_window_supersedes_the_older_request() {
         let owner = Owner::new();
         let (dash, chat) = owner.with(|| (DashboardState::new(), ChatState::new()));
@@ -245,27 +269,34 @@ fn session_update_needs_rehydrate(
     origin_run_id.is_none_or(|run| !started_here(run))
 }
 
-/// Pick the gauge occupancy for a freshly-loaded session: the most recent
-/// assistant turn carrying a persisted occupancy (core only stamps it when a
-/// real LLM call ran). `None` when no turn carries one, which correctly leaves
-/// the gauge hidden. Pure + sync so it is unit-testable without a Leptos owner.
+/// Recover the latest recorded occupancy and keep its original denominator.
 #[must_use]
 pub(crate) fn occupancy_from_history(
     history: &[crate::api::chat::ChatMessage],
 ) -> Option<ContextUsage> {
-    history.iter().rev().find_map(|m| {
-        let used = m.context_tokens?;
-        let window = m.context_window?;
-        if used == 0 || window == 0 {
+    use shared_ui_logic::transcript::{project_occupancy, ContextOccupancy};
+
+    let mut snapshots = history.iter().rev().filter_map(|message| {
+        if message.role != "assistant"
+            || (message.context_tokens.is_none() && message.context_window.is_none())
+        {
             return None;
         }
-        Some(ContextUsage {
-            used_tokens: used,
-            window_tokens: window,
-            total_tokens: m.total_tokens.unwrap_or(0),
-            is_estimate: false,
-        })
-    })
+        Some(project_occupancy(
+            message.context_tokens,
+            message.context_window,
+            message.total_tokens,
+        ))
+    });
+    let latest = snapshots.next()?;
+    let previous = if latest == ContextOccupancy::Unknown {
+        snapshots
+            .find(|snapshot| matches!(snapshot, ContextOccupancy::Measured { .. }))
+            .map(ContextUsage::Current)
+    } else {
+        None
+    };
+    Some(ContextUsage::with_latest(latest, previous))
 }
 
 /// Fetch a session's history (+ persisted run traces) and rebuild the
@@ -503,11 +534,12 @@ pub(crate) async fn hydrate_session_history(
                     return (None, Vec::new());
                 };
                 chat.context_usage
-                    .set(estimate.ok().flatten().map(|e| ContextUsage {
-                        used_tokens: e.used_tokens,
-                        window_tokens: e.window_tokens,
-                        total_tokens: u64::from(e.used_tokens),
-                        is_estimate: true,
+                    .set(estimate.ok().flatten().map(|estimate| {
+                        ContextUsage::Estimate(shared_ui_logic::transcript::project_occupancy(
+                            Some(estimate.used_tokens),
+                            Some(estimate.window_tokens),
+                            None,
+                        ))
                     }));
             }
             (active_run, pending)
@@ -2218,8 +2250,9 @@ fn format_session_subtitle(session: &SessionEntry) -> String {
 
 #[cfg(test)]
 mod gauge_tests {
-    use super::occupancy_from_history;
+    use super::{occupancy_from_history, ContextUsage};
     use crate::api::chat::ChatMessage;
+    use shared_ui_logic::transcript::{project_occupancy, ContextOccupancy};
 
     fn user(content: &str) -> ChatMessage {
         ChatMessage {
@@ -2265,34 +2298,50 @@ mod gauge_tests {
             user("b"),
             assistant(Some(42_000), Some(200_000), Some(55_000)),
         ];
-        let u = occupancy_from_history(&h).expect("gauge");
-        assert_eq!(u.used_tokens, 42_000);
-        assert_eq!(u.window_tokens, 200_000);
-        assert_eq!(u.total_tokens, 55_000);
-    }
-
-    #[test]
-    fn real_occupancy_is_not_marked_estimate() {
-        let h = vec![assistant(Some(10_000), Some(200_000), Some(12_000))];
-        let u = occupancy_from_history(&h).expect("real occupancy present");
-        assert!(
-            !u.is_estimate,
-            "history-persisted occupancy is real, not an estimate"
+        assert_eq!(
+            occupancy_from_history(&h),
+            Some(ContextUsage::Current(project_occupancy(
+                Some(42_000),
+                Some(200_000),
+                Some(55_000),
+            )))
         );
     }
 
     #[test]
-    fn skips_partial_or_zero_rows() {
-        // A trailing row missing the window, or with a zero, falls back to the
-        // last fully-populated turn rather than showing a broken denominator.
+    fn newer_unknown_model_does_not_borrow_old_window() {
         let h = vec![
-            assistant(Some(30_000), Some(200_000), Some(31_000)),
-            assistant(Some(40_000), None, Some(41_000)),
-            assistant(Some(0), Some(200_000), Some(0)),
+            assistant(Some(128_000), Some(512_000), Some(150_000)),
+            assistant(Some(40_000), Some(0), Some(41_000)),
         ];
-        let u = occupancy_from_history(&h).expect("gauge");
-        assert_eq!(u.used_tokens, 30_000);
-        assert_eq!(u.window_tokens, 200_000);
+        assert_eq!(
+            occupancy_from_history(&h),
+            Some(ContextUsage::Previous(project_occupancy(
+                Some(128_000),
+                Some(512_000),
+                Some(150_000),
+            )))
+        );
+        assert_eq!(
+            occupancy_from_history(&h[1..]),
+            Some(ContextUsage::Current(ContextOccupancy::Unknown))
+        );
+    }
+
+    #[test]
+    fn history_distinguishes_zero_usage_from_capacity_only() {
+        let h = vec![assistant(Some(0), Some(512_000), None)];
+        assert_eq!(
+            occupancy_from_history(&h).and_then(|usage| usage.occupancy().fraction()),
+            Some(0.0)
+        );
+        let h = vec![assistant(None, Some(512_000), None)];
+        assert_eq!(
+            occupancy_from_history(&h),
+            Some(ContextUsage::Current(ContextOccupancy::CapacityOnly {
+                window_tokens: 512_000
+            }))
+        );
     }
 }
 

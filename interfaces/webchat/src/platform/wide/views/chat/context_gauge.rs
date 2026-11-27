@@ -8,9 +8,10 @@
 //! both the occupancy and the per-model window are computed by core — and
 //! self-hides until the first usage figure lands.
 
-use super::state::ChatState;
+use super::state::{ChatState, ContextUsage};
 use crate::i18n::{t_string, use_i18n};
 use leptos::prelude::*;
+use shared_ui_logic::transcript::ContextOccupancy;
 
 /// Pick a token-tinted color for the ring by occupancy fraction.
 fn gauge_color(frac: f64) -> &'static str {
@@ -33,39 +34,46 @@ pub fn ContextGauge() -> impl IntoView {
         <Show when=move || chat.context_usage.get().is_some()>
             {move || {
                 let usage = chat.context_usage.get()?;
-                let window = usage.window_tokens.max(1);
-                let frac = (f64::from(usage.used_tokens) / f64::from(window)).clamp(0.0, 1.0);
+                let occupancy = usage.occupancy();
+                let frac = occupancy.fraction()?;
+                let ContextOccupancy::Measured {
+                    used_tokens, window_tokens, total_tokens,
+                } = occupancy else { return None; };
                 let pct = (frac * 100.0).round() as u32;
                 // r = 7 → circumference = 2·π·7 ≈ 43.98
                 let circ = 43.98_f64;
                 let dash = circ * frac;
                 let gap = circ - dash;
                 let color = gauge_color(frac);
-                let (label, title) = if usage.is_estimate {
-                    (
+                let (label, title) = match usage {
+                    ContextUsage::Estimate(_) => (
                         format!("≈{pct}%"),
                         t_string!(
-                            i18n,
-                            chat.context_usage_estimate_title,
-                            pct = pct,
-                            used = usage.used_tokens,
-                            window = usage.window_tokens,
-                        )
-                        .to_string(),
-                    )
-                } else {
-                    (
+                            i18n, chat.context_usage_estimate_title,
+                            pct = pct, used = used_tokens, window = window_tokens,
+                        ).to_string(),
+                    ),
+                    ContextUsage::Previous(_) => (
                         format!("{pct}%"),
                         t_string!(
-                            i18n,
-                            chat.context_usage_title,
-                            pct = pct,
-                            used = usage.used_tokens,
-                            window = usage.window_tokens,
-                            total = usage.total_tokens,
-                        )
-                        .to_string(),
-                    )
+                            i18n, chat.context_usage_previous_title,
+                            pct = pct, used = used_tokens, window = window_tokens,
+                        ).to_string(),
+                    ),
+                    ContextUsage::Current(_) => (
+                        format!("{pct}%"),
+                        if let Some(total) = total_tokens {
+                            t_string!(
+                                i18n, chat.context_usage_title,
+                                pct = pct, used = used_tokens, window = window_tokens, total = total,
+                            ).to_string()
+                        } else {
+                            t_string!(
+                                i18n, chat.context_usage_measured_title,
+                                pct = pct, used = used_tokens, window = window_tokens,
+                            ).to_string()
+                        },
+                    ),
                 };
                 Some(view! {
                     <div

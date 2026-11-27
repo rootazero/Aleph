@@ -437,6 +437,8 @@
     "group_chats_count_other": "Group chats {{ count }}",
     "context_usage_estimate_title": "Estimated context usage {{ pct }}% · {{ used }} / {{ window }} tokens (switches to measured after the first turn)",
     "context_usage_title": "Context usage {{ pct }}% · {{ used }} / {{ window }} tokens (this turn: {{ total }})",
+    "context_usage_measured_title": "Context usage {{ pct }}% · {{ used }} / {{ window }} tokens",
+    "context_usage_previous_title": "Last measured context usage {{ pct }}% · {{ used }} / {{ window }} tokens",
     "cache_hit_title": "Prompt-cache hit rate of the last call {{ pct }}% · read / (input + read) (same formula as the TUI status bar)",
     "starter_search_label": "Search the web",
     "starter_search_prompt": "Search today's tech headlines and summarise the three that matter most.",
