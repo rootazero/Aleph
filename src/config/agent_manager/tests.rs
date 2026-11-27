@@ -223,6 +223,37 @@ fn test_delete_trashes_both_directories() {
     assert!(!mgr.agents_root.join("coder").exists());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn shell_workspace_archive_guard_uses_the_existing_config_lock() {
+    let (_dir, manager) = setup(base_config());
+    let workspace = manager.workspace_root.join("coder");
+    fs::create_dir(&workspace).unwrap();
+    let other = AgentManager::new(
+        manager.config_path.clone(),
+        manager.workspace_root.clone(),
+        manager.agents_root.clone(),
+        manager.trash_root.clone(),
+    );
+
+    manager
+        .with_config_write(|| {
+            let error = match other.try_workspace_archive_guard() {
+                Ok(_) => panic!("workspace guard bypassed the writer's config lock"),
+                Err(error) => error,
+            };
+            assert!(crate::utils::atomic_io::is_lock_contended(&error));
+            Ok(())
+        })
+        .unwrap();
+
+    let guard = other.try_workspace_archive_guard().unwrap();
+    assert!(workspace.is_dir());
+    drop(guard);
+    manager.delete("coder").unwrap();
+    assert!(!workspace.exists());
+}
+
 // =========================================================================
 // Update
 // =========================================================================

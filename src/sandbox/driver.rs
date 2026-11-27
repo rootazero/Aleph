@@ -120,6 +120,25 @@ pub trait OsSandboxDriverTrait: Send + Sync + 'static {
         false
     }
 
+    /// Separate native contract for the fixed record consumer. A driver must
+    /// not emulate this through ordinary stdin or downgrade its process scope.
+    #[cfg(target_os = "linux")]
+    #[doc(hidden)]
+    async fn run_fixed_jsonl(
+        &self,
+        _workspace: &std::fs::File,
+        _profile: &OsSandboxProfile,
+        _timeout: Duration,
+        _max_output_bytes: usize,
+        _lifecycle: &super::shell_lifecycle::ShellLifecycle,
+    ) -> Result<SandboxOutput, SandboxError> {
+        Err(SandboxError::UnsupportedPolicy {
+            platform: self.platform(),
+            feature: "jsonl_inspect".into(),
+            reason: "this driver cannot prove a dedicated consumer and group teardown".into(),
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,

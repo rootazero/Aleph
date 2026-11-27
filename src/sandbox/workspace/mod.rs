@@ -60,6 +60,8 @@ pub struct WorkspaceSandbox {
     default_timeout: Duration,
     max_output_bytes: usize,
     hooks: SandboxHooks,
+    #[cfg(target_os = "linux")]
+    shell_policy: Option<Arc<super::shell_policy::ShellPolicy>>,
 }
 
 /// Per-session workspace state: cwd on disk plus the capability baseline and
@@ -87,7 +89,18 @@ impl WorkspaceSandbox {
             default_timeout: Duration::from_secs(60),
             max_output_bytes: 1024 * 1024, // 1 MB total budget (512 KB per stream)
             hooks,
+            #[cfg(target_os = "linux")]
+            shell_policy: None,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn with_shell_policy(
+        mut self,
+        policy: Option<super::shell_policy::ShellPolicy>,
+    ) -> Self {
+        self.shell_policy = policy.map(Arc::new);
+        self
     }
 
     /// Override the default 60s per-command timeout.
@@ -207,7 +220,8 @@ impl Sandbox for WorkspaceSandbox {
     }
 
     async fn execute(&self, cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
-        self.execute_with_lifecycle(cmd, None).await
+        self.execute_in_mode(cmd, WorkspaceExecution::Foreground)
+            .await
     }
 
     async fn execute_controlled(
@@ -222,7 +236,13 @@ impl Sandbox for WorkspaceSandbox {
                 reason: "this driver cannot supervise a continuable shell command".into(),
             });
         }
-        self.execute_with_lifecycle(cmd, Some(lifecycle)).await
+        self.execute_in_mode(cmd, WorkspaceExecution::Controlled(lifecycle))
+            .await
+    }
+
+    #[cfg(target_os = "linux")]
+    fn as_workspace(&self) -> Option<&Self> {
+        Some(self)
     }
 
     fn managed(&self) -> Option<&dyn crate::sandbox::managed::ManagedSandbox> {
@@ -230,13 +250,69 @@ impl Sandbox for WorkspaceSandbox {
     }
 }
 
+#[derive(Clone, Copy)]
+enum WorkspaceExecution<'a> {
+    Foreground,
+    Controlled(&'a super::shell_lifecycle::ShellLifecycle),
+    #[cfg(target_os = "linux")]
+    FixedJsonl {
+        control: &'a super::shell_lifecycle::ShellLifecycle,
+        workspace: &'a super::shell_workspace::ShellWorkspace,
+    },
+}
+
 impl WorkspaceSandbox {
-    // rust-doctor-disable-next-line high-cyclomatic-complexity
-    async fn execute_with_lifecycle(
+    #[cfg(target_os = "linux")]
+    pub(crate) fn fixed_jsonl_policy(&self) -> Option<&Arc<super::shell_policy::ShellPolicy>> {
+        self.shell_policy.as_ref()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn execute_fixed_jsonl(
         &self,
         cmd: SandboxCommand,
-        lifecycle: Option<&super::shell_lifecycle::ShellLifecycle>,
+        workspace: &super::shell_workspace::ShellWorkspace,
+        control: &super::shell_lifecycle::ShellLifecycle,
     ) -> Result<SandboxOutput, SandboxError> {
+        use super::shell_input::{JSONL_ARGS, JSONL_PROGRAM};
+
+        let workspace_binding = super::context::current_exec_workspace_binding();
+        if self.shell_policy.is_none()
+            || cmd.program != JSONL_PROGRAM
+            || !cmd.args.iter().map(String::as_str).eq(JSONL_ARGS)
+            || cmd.tool_name != "bash"
+            || cmd.stdin.is_some()
+            || !cmd.env.is_empty()
+            || cmd.capabilities.spawn_subprocess
+            || !cmd.capabilities.fs_read.is_empty()
+            || !cmd.capabilities.fs_write.is_empty()
+            || !matches!(cmd.capabilities.network, NetworkPolicy::None)
+            || cmd.cwd.as_deref() != Some(workspace.path())
+            || !workspace_binding.is_some_and(|binding| {
+                !binding.is_owned_worktree()
+                    && workspace.is_current(binding.root()).unwrap_or(false)
+            })
+        {
+            return Err(SandboxError::CapabilityDenied {
+                reason: "not the eligible fixed JSONL launch".into(),
+            });
+        }
+        self.execute_in_mode(cmd, WorkspaceExecution::FixedJsonl { control, workspace })
+            .await
+    }
+
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
+    async fn execute_in_mode(
+        &self,
+        cmd: SandboxCommand,
+        mode: WorkspaceExecution<'_>,
+    ) -> Result<SandboxOutput, SandboxError> {
+        let lifecycle = match mode {
+            WorkspaceExecution::Foreground => None,
+            WorkspaceExecution::Controlled(control) => Some(control),
+            #[cfg(target_os = "linux")]
+            WorkspaceExecution::FixedJsonl { control, .. } => Some(control),
+        };
         self.os_driver.execution_preflight()?;
         // Only admission is safe to drop. Once in `run`, the driver must
         // retain ownership until it can confirm cleanup.
@@ -256,20 +332,40 @@ impl WorkspaceSandbox {
             timeout,
             active_proxy,
         } = prepared;
-        let mut output = self
-            .os_driver
-            .run(
-                &cmd.program,
-                &cmd.args,
-                &cmd.env,
-                cmd.stdin.as_deref(),
-                &cwd,
-                &profile,
-                timeout,
-                self.max_output_bytes,
-                lifecycle,
-            )
-            .await;
+        let mut output = match mode {
+            #[cfg(target_os = "linux")]
+            WorkspaceExecution::FixedJsonl { control, workspace } => {
+                if !workspace.is_current(&cwd).unwrap_or(false) {
+                    return Err(SandboxError::CapabilityDenied {
+                        reason: "fixed JSONL workspace changed during admission".into(),
+                    });
+                }
+                self.os_driver
+                    .run_fixed_jsonl(
+                        workspace.directory(),
+                        &profile,
+                        timeout,
+                        self.max_output_bytes,
+                        control,
+                    )
+                    .await
+            }
+            WorkspaceExecution::Foreground | WorkspaceExecution::Controlled(_) => {
+                self.os_driver
+                    .run(
+                        &cmd.program,
+                        &cmd.args,
+                        &cmd.env,
+                        cmd.stdin.as_deref(),
+                        &cwd,
+                        &profile,
+                        timeout,
+                        self.max_output_bytes,
+                        lifecycle,
+                    )
+                    .await
+            }
+        };
 
         // Keep the managed proxy (and Linux host bridge) alive across the OS
         // driver `run` and only shut it down here (drop = shutdown + UDS dir

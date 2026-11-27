@@ -1129,6 +1129,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let event_bus_chat = event_bus.clone();
         let router_chat = router.clone();
         let agent_registry_chat = agent_registry.clone();
+        let agent_manager_chat = agent_manager.clone();
         let app_config_chat = app_config_arc.clone();
         let wm_chat = workspace_manager.clone();
         let pr_chat = topic_provider_registry.clone();
@@ -1139,6 +1140,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let event_bus = event_bus_chat.clone();
             let router = router_chat.clone();
             let agent_registry = agent_registry_chat.clone();
+            let agent_manager = agent_manager_chat.clone();
             let cfg = app_config_chat.clone();
             let wm = wm_chat.clone();
             let pr = pr_chat.clone();
@@ -1150,6 +1152,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             async move {
                 handle_chat_send_with_engine(
                     req,
+                    Some(agent_manager),
                     engine,
                     event_bus,
                     router,

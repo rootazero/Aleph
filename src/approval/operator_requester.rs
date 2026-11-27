@@ -75,6 +75,8 @@ pub struct OperatorApprovalRequester {
 }
 
 impl OperatorApprovalRequester {
+    pub(crate) const ONCE_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
     /// Owner-scoped: the card is delivered to, and resolvable by, the session
     /// that raised it (plus any admin). This is the leg
     /// [`crate::approval::adapters::FallbackApprovalRequester`] falls back to
@@ -105,9 +107,9 @@ impl OperatorApprovalRequester {
         }
     }
 
-    /// Independent single-use approval for telephone start/answer. The
-    /// lifecycle service checks typed ownership/capability before calling;
-    /// this helper checks only that it was wired to an operator-scoped instance.
+    /// Independent single-use approval. The calling service checks typed
+    /// ownership and Capability; this helper checks only that it was wired
+    /// to an operator-scoped instance.
     ///
     /// `action.summary` must contain the caller's complete bounded, redacted
     /// action body. Store it intact once; events carry only the addressing id,
@@ -127,7 +129,7 @@ impl OperatorApprovalRequester {
         }
 
         let created_now = tokio::time::Instant::now();
-        let deadline = deadline.min(created_now + std::time::Duration::from_secs(60));
+        let deadline = deadline.min(created_now + Self::ONCE_WINDOW);
         if !self.operator_only || cancel.is_cancelled() || created_now >= deadline {
             return deny();
         }

@@ -288,13 +288,28 @@ pub fn revalidate_connect_credential_source(
     params: Option<&serde_json::Value>,
     manager: Option<&crate::gateway::security::DeviceTokenManager>,
 ) -> (bool, Option<String>) {
+    let (ok, credential) = revalidate_connect_credential(outcome, params, manager);
+    (ok, credential.map(|credential| credential.device_id))
+}
+
+pub(super) struct VerifiedDeviceCredential {
+    pub(super) device_id: String,
+    pub(super) token_id: String,
+}
+
+/// Preserve the exact validated row identity without retaining the token secret.
+pub(super) fn revalidate_connect_credential(
+    outcome: &crate::gateway::handlers::connect::ConnectAuthOutcome,
+    params: Option<&serde_json::Value>,
+    manager: Option<&crate::gateway::security::DeviceTokenManager>,
+) -> (bool, Option<VerifiedDeviceCredential>) {
     use crate::gateway::handlers::connect::ConnectAuthOutcome;
 
     fn still_valid(
         manager: Option<&crate::gateway::security::DeviceTokenManager>,
         token: Option<&str>,
         expected: &str,
-    ) -> (bool, Option<String>) {
+    ) -> (bool, Option<VerifiedDeviceCredential>) {
         let Some(token) = token.filter(|t| !t.is_empty()) else {
             return (false, None);
         };
@@ -305,9 +320,13 @@ pub fn revalidate_connect_credential_source(
             return (false, None);
         };
         match mgr.validate_device_token(token) {
-            Ok(Some(row)) if !row.device_id.trim().is_empty() && row.device_id == expected => {
-                (true, Some(row.device_id))
-            }
+            Ok(Some(row)) if row.device_id == expected => (
+                true,
+                Some(VerifiedDeviceCredential {
+                    device_id: row.device_id,
+                    token_id: row.token_id,
+                }),
+            ),
             _ => (false, None),
         }
     }
@@ -871,6 +890,31 @@ mod revalidate_credential_tests {
                 .2
                 .as_deref(),
             Some("u-alice")
+        );
+    }
+
+    #[test]
+    fn final_handshake_preserves_the_exact_token_row() {
+        let (store, mgr) = fixture();
+        let (device_id, token) = pair(&mgr, "dev-exact");
+        let params = json!({ "device_token": token });
+        let expected = mgr.validate_device_token(&token).unwrap().unwrap();
+        let outcome = ConnectAuthOutcome::Authorized {
+            device_id: Some(device_id.clone()),
+        };
+        let (ok, credential) = revalidate_connect_credential(&outcome, Some(&params), Some(&mgr));
+        assert!(ok);
+        let credential = credential.expect("paired handshake must retain the token row ID");
+        assert_eq!(credential.device_id, device_id);
+        assert_eq!(credential.token_id, expected.token_id);
+        assert_ne!(credential.token_id, token);
+
+        assert!(store.revoke_device_token(&expected.token_id).unwrap());
+        assert!(store.is_device_approved(&device_id).unwrap());
+        let (ok, credential) = revalidate_connect_credential(&outcome, Some(&params), Some(&mgr));
+        assert!(
+            !ok && credential.is_none(),
+            "device approval is not token liveness"
         );
     }
 

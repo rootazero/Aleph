@@ -101,6 +101,15 @@ impl CgroupV2Scope {
     }
 }
 
+/// A bounded job in an explicitly delegated cgroup v2 subtree. Unlike the
+/// ordinary per-exec scope, this never falls back to an unsupervised launch.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub(crate) struct StrictShellCgroup {
+    scope: CgroupV2Scope,
+    removed: bool,
+}
+
 /// Configuration passed into `CgroupV2Scope::try_create`. Each `Option`
 /// of `None` means "don't write this controller file" (kernel default
 /// applies — usually `max`).
@@ -115,6 +124,129 @@ pub struct CgroupV2Limits {
     /// `pids.max` ceiling. Defaults to `None` (kernel default = max)
     /// at this layer; callers typically supply a sensible cap like 200.
     pub max_pids: Option<u32>,
+}
+
+#[cfg(target_os = "linux")]
+impl StrictShellCgroup {
+    /// The service must run in `DelegateSubgroup=supervisor`. The unit's
+    /// otherwise empty root owns the controllers; never walk ancestors for
+    /// a writable fallback (which could be a slice shared by other services).
+    pub(crate) fn create(limits: CgroupV2Limits) -> std::io::Result<Self> {
+        use std::{fs, io, path::Path};
+
+        let (Some(memory_mb), Some(cpu_percent), Some(pids)) =
+            (limits.memory_mb, limits.cpu_quota_percent, limits.max_pids)
+        else {
+            return Err(io::Error::other(
+                "strict shell requires memory, CPU and PID limits",
+            ));
+        };
+        if memory_mb == 0 || cpu_percent == 0 || pids == 0 {
+            return Err(io::Error::other("strict shell limits must be positive"));
+        }
+        let membership = fs::read_to_string("/proc/self/cgroup")?;
+        let relative = parse_proc_self_cgroup_path(&membership)
+            .ok_or_else(|| io::Error::other("no unified cgroup membership"))?;
+        let unit = relative
+            .parent()
+            .filter(|parent| *parent != Path::new("/"))
+            .filter(|_| {
+                relative
+                    .file_name()
+                    .is_some_and(|name| name == "supervisor")
+            })
+            .and_then(|parent| parent.strip_prefix("/").ok())
+            .ok_or_else(|| {
+                io::Error::other("strict shell requires a delegated supervisor subgroup")
+            })?;
+        let parent = Path::new(UNIFIED_HIERARCHY).join(unit);
+        if !fs::read_to_string(parent.join("cgroup.procs"))?
+            .trim()
+            .is_empty()
+        {
+            return Err(io::Error::other("delegated cgroup root is not empty"));
+        }
+        fs::write(parent.join("cgroup.subtree_control"), b"+cpu +memory +pids")?;
+        let path = tempfile::Builder::new()
+            .prefix("aleph-jsonl-")
+            .tempdir_in(&parent)?
+            .keep();
+        let group = Self {
+            scope: CgroupV2Scope { path },
+            removed: false,
+        };
+        group.scope.write_limits(&limits)?;
+        fs::write(group.scope.path.join("memory.swap.max"), b"0")?;
+        for (file, expected) in [
+            ("memory.max", memory_max_bytes(memory_mb).to_string()),
+            ("cpu.max", cpu_quota_max_line(cpu_percent)),
+            ("pids.max", pids.to_string()),
+            ("memory.swap.max", String::from("0")),
+        ] {
+            if fs::read_to_string(group.scope.path.join(file))?.trim() != expected.trim() {
+                return Err(io::Error::other(format!(
+                    "strict shell {file} readback differs"
+                )));
+            }
+        }
+        // Exercise the actual kill operation before attaching a child.
+        group.kill()?;
+        if group.populated()? {
+            return Err(io::Error::other("new strict shell scope is populated"));
+        }
+        Ok(group)
+    }
+
+    pub(crate) fn procs_path(&self) -> PathBuf {
+        self.scope.procs_path()
+    }
+
+    pub(crate) fn kill(&self) -> std::io::Result<()> {
+        std::fs::write(self.scope.path.join("cgroup.kill"), b"1")
+    }
+
+    fn populated(&self) -> std::io::Result<bool> {
+        let events = std::fs::read_to_string(self.scope.path.join("cgroup.events"))?;
+        match events
+            .lines()
+            .find_map(|line| line.strip_prefix("populated "))
+        {
+            Some("0") => Ok(false),
+            Some("1") => Ok(true),
+            _ => Err(std::io::Error::other("invalid strict shell cgroup.events")),
+        }
+    }
+
+    /// Call only after the supervisor has waited on its direct child. No
+    /// successful terminal result can precede the group's kernel acknowledgement.
+    pub(crate) async fn finish(mut self) -> std::io::Result<()> {
+        use std::{io, time::Duration};
+
+        if self.populated()? {
+            self.kill()?;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            while self.populated()? {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(io::Error::other("strict shell group did not become empty"));
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+        std::fs::remove_dir(&self.scope.path)?;
+        self.removed = true;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for StrictShellCgroup {
+    fn drop(&mut self) {
+        if !self.removed {
+            // Failure or a dropped supervisor: signal the entire group, not
+            // just the wrapper. Drop cannot prove completion to a caller.
+            let _ = self.kill();
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]

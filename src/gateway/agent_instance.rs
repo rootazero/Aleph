@@ -630,7 +630,32 @@ pub struct AgentRegistry {
         Arc<RwLock<Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>>>,
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) struct ShellAgentGuard<'a> {
+    _agents: tokio::sync::RwLockReadGuard<'a, HashMap<String, AgentEntry>>,
+}
+
 impl AgentRegistry {
+    /// Authorize only the exact running Agent instance. Holding this guard
+    /// orders replacement or removal against the caller's bounded effect.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn try_shell_agent_guard(
+        &self,
+        expected: &Arc<AgentInstance>,
+    ) -> Result<ShellAgentGuard<'_>, crate::sandbox::shell_input::ShellEffectDenied> {
+        use crate::sandbox::shell_input::ShellEffectDenied;
+        let agents = self
+            .agents
+            .try_read()
+            .map_err(|_| ShellEffectDenied::Busy)?;
+        match agents.get(expected.id()) {
+            Some(AgentEntry::Instance(current)) if Arc::ptr_eq(current, expected) => {
+                Ok(ShellAgentGuard { _agents: agents })
+            }
+            _ => Err(ShellEffectDenied::Stale),
+        }
+    }
+
     /// Create a new registry with default "main" agent
     #[must_use]
     pub fn new() -> Self {

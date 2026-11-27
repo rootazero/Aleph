@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use alephcore::sync_primitives::Arc;
 
-use alephcore::gateway::busy_queue::spawn_queued_run;
+use alephcore::gateway::busy_queue::{spawn_panel_queued_run, spawn_queued_run, PanelShellOwners};
 use alephcore::gateway::event_bus::GatewayEventBus;
 use alephcore::gateway::router::AgentRouter;
 use alephcore::gateway::{AgentRegistry, ExecutionEngine, GatewayEventEmitter};
@@ -334,6 +334,7 @@ where
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_chat_send_with_engine<P, R>(
     request: alephcore::gateway::JsonRpcRequest,
+    agent_manager: Option<Arc<alephcore::AgentManager>>,
     engine: Arc<ExecutionEngine<P, R>>,
     event_bus: Arc<GatewayEventBus>,
     router: Arc<AgentRouter>,
@@ -506,7 +507,13 @@ where
 
     // Spawn onto the shared per-session busy wait lane (same queue the inbound
     // router uses for channel messages).
-    spawn_queued_run(
+    let shell_owners = agent_manager.map(|agent_manager| PanelShellOwners {
+        config: app_config,
+        agents: agent_registry,
+        agent_manager,
+        sessions: session_manager,
+    });
+    spawn_panel_queued_run(
         engine.clone(),
         run_request,
         agent,
@@ -514,6 +521,7 @@ where
         busy_cfg,
         locale,
         "Chat run",
+        shell_owners,
     );
 
     // Auto-topic generation is now handled by ExecutionEngine on first message

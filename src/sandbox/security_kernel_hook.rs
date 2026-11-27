@@ -25,6 +25,10 @@ impl SecurityKernelHook {
     pub const fn new(kernel: SecurityKernel) -> Self {
         Self { kernel }
     }
+
+    pub(super) fn assess_view(&self, text: &str) -> Option<(RiskLevel, Option<String>)> {
+        self.kernel.assess_custom_with_reason(text)
+    }
 }
 
 #[async_trait]
@@ -42,7 +46,7 @@ impl SandboxBeforeHook for SecurityKernelHook {
         // same string.
         let text = crate::sandbox::command_policy::command_text(ctx.command);
         let command = crate::sandbox::command_policy::normalize::normalize_for_matching(&text);
-        match self.kernel.assess_custom_with_reason(&command) {
+        match self.assess_view(&command) {
             Some((RiskLevel::Blocked, reason)) => {
                 // Same durable trail as the built-in ruleset next to it: a
                 // refusal the operator configured themselves is exactly as

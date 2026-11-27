@@ -107,6 +107,8 @@ pub struct ConnectionState {
     /// Unlike `caller_user` it never carries the implicit-owner compat identity.
     /// Cleared together with `caller_user` by [`invalidate_device_sessions`].
     pub verified_user: Option<String>,
+    /// Non-secret row ID from the exact credential revalidated at handshake.
+    pub(crate) verified_device_token_id: Option<String>,
 }
 
 impl ConnectionState {
@@ -147,6 +149,7 @@ impl ConnectionState {
             device_id: None,
             caller_user: None,
             verified_user: None,
+            verified_device_token_id: None,
         }
     }
 }
@@ -191,6 +194,7 @@ pub(crate) fn invalidate_device_sessions_locked(
             // The verified identity dies with the role: a revoked/deactivated
             // device must not keep proving a user to per-user capabilities.
             state.verified_user = None;
+            state.verified_device_token_id = None;
             state.permissions.clear();
             hit += 1;
         }

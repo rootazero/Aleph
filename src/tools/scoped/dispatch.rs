@@ -381,6 +381,112 @@ impl ScopedToolService {
         (result, capture)
     }
 
+    fn resolve_canonical_tool(
+        &self,
+        name: &str,
+        captured: CanonicalEntryLease,
+    ) -> Result<BackendLease, ToolError> {
+        let facade = self
+            .canonical_facade
+            .as_ref()
+            .ok_or_else(|| ToolError::PermissionDenied {
+                name: name.into(),
+                reason: "canonical capability facade is not mounted".into(),
+            })?;
+        facade
+            .resolve_with_capture_for_call(
+                Reference {
+                    id: CapabilityId {
+                        namespace: TOOL_NAMESPACE.into(),
+                        name: captured.entry().descriptor.name.clone(),
+                    },
+                    visibility: VisibilityScope::default(),
+                },
+                captured,
+                &Self::capability_call_context(&format!("{name}/resolve")),
+            )
+            .map_err(|error| match error {
+                crate::capability::facade::ResolveError::DependencyUnavailable {
+                    target,
+                    state,
+                } => ToolError::Execution {
+                    name: name.into(),
+                    cause: format!(
+                        "`{}` 当前不可用（状态 {state:?}），稍后重试或请用户启用",
+                        target.name
+                    ),
+                },
+                error => ToolError::PermissionDenied {
+                    name: name.into(),
+                    reason: format!("canonical capability lease cannot be resolved: {error:?}"),
+                },
+            })
+    }
+
+    /// Admit the limited private shell path without feeding record bytes into
+    /// the ordinary tool replay or extension-hook machinery. Unsupported
+    /// extension or Capability policies make this path unavailable.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn capture_paired_shell(
+        &self,
+    ) -> Result<
+        (
+            Arc<crate::capability::zahir_facade::ZahirFacade>,
+            BackendLease,
+        ),
+        crate::sandbox::shell_input::ShellEffectDenied,
+    > {
+        use crate::sandbox::shell_input::ShellEffectDenied;
+        use crate::tools::service::ToolSource;
+
+        const NAME: &str = "bash";
+        if self.unattended
+            || !self.is_allowed(NAME)
+            || self.inner.is_request_local(NAME)
+            || self
+                .hook_executor
+                .as_ref()
+                .is_some_and(|hooks| hooks.has_hooks_for(HookEvent::BeforeToolCall))
+        {
+            return Err(ShellEffectDenied::Stale);
+        }
+        let projected = self
+            .inner
+            .get(NAME)
+            .and_then(LoopTool::capability_descriptor)
+            .ok_or(ShellEffectDenied::Stale)?;
+        let captured = self
+            .canonical_registry
+            .as_ref()
+            .and_then(|registry| registry.capture_entry(NAME))
+            .ok_or(ShellEffectDenied::Stale)?;
+        let entry = captured.entry();
+        if !matches!(projected.source, ToolSource::Builtin)
+            || projected.source != entry.descriptor.source
+            || entry.domain_policy.is_some()
+            || self
+                .deny_rule_for_descriptor(NAME, Some(&entry.descriptor))
+                .is_some()
+        {
+            return Err(ShellEffectDenied::Stale);
+        }
+        let lease = self
+            .resolve_canonical_tool(NAME, captured)
+            .map_err(|_| ShellEffectDenied::Stale)?;
+        let facade = self
+            .canonical_facade
+            .as_ref()
+            .ok_or(ShellEffectDenied::Stale)?;
+        if self
+            .capability_policy
+            .as_ref()
+            .is_some_and(|policy| policy.is_configured(&lease.descriptor.id))
+        {
+            return Err(ShellEffectDenied::UnverifiedPolicy);
+        }
+        Ok((facade.clone(), lease))
+    }
+
     /// Every gate, then the call — the body [`Self::execute_inner`] wraps.
     async fn execute_gated(
         &self,
@@ -451,45 +557,7 @@ impl ScopedToolService {
                         reason: "canonical MCP visibility is not bound".into(),
                     });
                 }
-                let facade =
-                    self.canonical_facade
-                        .as_ref()
-                        .ok_or_else(|| ToolError::PermissionDenied {
-                            name: name.into(),
-                            reason: "canonical capability facade is not mounted".into(),
-                        })?;
-                let backend_lease = facade
-                    .resolve_with_capture_for_call(
-                        Reference {
-                            id: CapabilityId {
-                                namespace: TOOL_NAMESPACE.into(),
-                                name: entry.descriptor.name.clone(),
-                            },
-                            visibility: VisibilityScope::default(),
-                        },
-                        lease,
-                        &Self::capability_call_context(&format!("{name}/resolve")),
-                    )
-                    .map_err(|error| match error {
-                        // Model-visible: the tool stays listed and the model
-                        // learns why this call failed and that it may retry.
-                        crate::capability::facade::ResolveError::DependencyUnavailable {
-                            target,
-                            state,
-                        } => ToolError::Execution {
-                            name: name.into(),
-                            cause: format!(
-                                "`{}` 当前不可用（状态 {state:?}），稍后重试或请用户启用",
-                                target.name
-                            ),
-                        },
-                        error => ToolError::PermissionDenied {
-                            name: name.into(),
-                            reason: format!(
-                                "canonical capability lease cannot be resolved: {error:?}"
-                            ),
-                        },
-                    })?;
+                let backend_lease = self.resolve_canonical_tool(name, lease)?;
                 captured_backend_lease = Some(backend_lease);
                 Some(entry)
             } else {

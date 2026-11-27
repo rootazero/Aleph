@@ -611,6 +611,18 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
         true
     }
 
+    async fn run_fixed_jsonl(
+        &self,
+        workspace: &std::fs::File,
+        profile: &OsSandboxProfile,
+        timeout: Duration,
+        max_output_bytes: usize,
+        lifecycle: &crate::sandbox::shell_lifecycle::ShellLifecycle,
+    ) -> Result<SandboxOutput, SandboxError> {
+        self.run_jsonl_consumer(workspace, profile, timeout, max_output_bytes, lifecycle)
+            .await
+    }
+
     async fn run(
         &self,
         program: &str,
@@ -791,6 +803,8 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
         run_child_with_drain(child, stdin, timeout, max_output_bytes, lifecycle).await
     }
 }
+
+mod jsonl;
 
 impl Default for BubblewrapDriver {
     fn default() -> Self {

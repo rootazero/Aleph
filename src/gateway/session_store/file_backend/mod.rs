@@ -14,6 +14,11 @@ use crate::gateway::session_store::{RunBill, SessionStore, StampOutcome};
 use crate::sync_primitives::Arc;
 
 pub(crate) mod meta;
+#[cfg(target_os = "linux")]
+mod shell_session;
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use shell_session::{ShellSessionGuard, ShellSessionIdentity};
 
 #[cfg(all(test, windows))]
 mod archive_diagnostics_tests;
@@ -661,6 +666,15 @@ fn new_session_meta(
 
 #[async_trait]
 impl SessionStore for FileSessionStore {
+    #[cfg(target_os = "linux")]
+    async fn prepare_shell_session(
+        &self,
+        key: &SessionKey,
+        expected: Option<&ShellSessionIdentity>,
+    ) -> Result<Option<ShellSessionGuard>, SessionStoreError> {
+        self.shell_session_guard(key, expected).await
+    }
+
     fn transcript_file(&self, key: &SessionKey) -> Option<PathBuf> {
         transcript_path_under(&self.config.base_dir, &key.to_key_string())
     }
@@ -805,6 +819,7 @@ impl SessionStore for FileSessionStore {
 
     async fn delete_session(&self, key: &SessionKey) -> Result<DeleteResult, SessionStoreError> {
         let key_str = key.to_key_string();
+        let mut permit = self.metadata_locks.acquire(&key_str).await;
         let dir = self.session_dir(&key_str);
         if !dir.exists() {
             return Ok(DeleteResult { deleted: false });
@@ -833,7 +848,18 @@ impl SessionStore for FileSessionStore {
         // One sharing budget spans suffix changes; collisions cannot renew it.
         let mut sharing_retries = 0usize;
         loop {
-            match tokio::fs::rename(&dir, &archive_dir).await {
+            let source = dir.clone();
+            let target = archive_dir.clone();
+            // A blocking rename can outlive the RPC future. The closure owns
+            // the permit until the filesystem operation has actually returned.
+            let (held, renamed) = tokio::task::spawn_blocking(move || {
+                let renamed = std::fs::rename(source, target);
+                (permit, renamed)
+            })
+            .await
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Archive rename task: {e}")))?;
+            permit = held;
+            match renamed {
                 Ok(()) => break,
                 Err(error) => match archive_rename_failure(&error, archive_dir.exists()) {
                     ArchiveRenameFailure::Collision => {
@@ -873,6 +899,7 @@ impl SessionStore for FileSessionStore {
                 },
             }
         }
+        drop(permit);
         self.emit_session_changed(&key_str, "delete", None);
         Ok(DeleteResult { deleted: true })
     }
@@ -2817,6 +2844,82 @@ mod archive_tests {
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["agent_main_main"]);
+    }
+
+    #[tokio::test]
+    async fn shell_session_guard_orders_archive_and_same_key_recreation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        })
+        .expect("store");
+        let key = SessionKey::main("main");
+        store.get_or_create(&key).await.unwrap();
+
+        let guard = store.lock_metadata(&key.to_key_string()).await.unwrap();
+        let archive = store.delete_session(&key);
+        tokio::pin!(archive);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(500), &mut archive)
+                .await
+                .is_err(),
+            "archive committed while the existing session mutation guard was held"
+        );
+        assert!(guard.existing().is_some());
+        drop(guard);
+
+        assert!(archive.await.unwrap().deleted);
+        let after_archive = store.lock_metadata(&key.to_key_string()).await.unwrap();
+        assert!(after_archive.existing().is_none());
+        drop(after_archive);
+        store.get_or_create(&key).await.unwrap();
+        let recreated = store.lock_metadata(&key.to_key_string()).await.unwrap();
+        assert!(recreated.existing().is_some());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn shell_session_witness_rechecks_metadata_and_rejects_a_recreated_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let key = SessionKey::main("main");
+        store.get_or_create(&key).await.unwrap();
+        let guard = store
+            .prepare_shell_session(&key, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(guard.metadata().unwrap().key, key.to_key_string());
+        let identity = guard.identity().clone();
+        assert!(store
+            .prepare_shell_session(&key, Some(&identity))
+            .await
+            .unwrap()
+            .is_none());
+        drop(guard);
+
+        assert!(store
+            .prepare_shell_session(&key, Some(&identity))
+            .await
+            .unwrap()
+            .is_some());
+        assert!(store.delete_session(&key).await.unwrap().deleted);
+        store.get_or_create(&key).await.unwrap();
+        assert!(store
+            .prepare_shell_session(&key, Some(&identity))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(store
+            .prepare_shell_session(&key, None)
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]

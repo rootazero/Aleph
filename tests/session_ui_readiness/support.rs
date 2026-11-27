@@ -814,7 +814,7 @@ async fn serve_calls(
                     );
                     let result = trusted_caller(&call.user, RPC_HANDLER.scope((), async {
                         if call.method == "chat.send" {
-                            crate::server_init::handle_chat_send_with_engine(request, context.engine.clone(), context.events.clone(), context.router.clone(), context.agents.clone(), context.config.clone(), None, context.providers.clone(), context.store.clone(), None).await
+                            crate::server_init::handle_chat_send_with_engine(request, None, context.engine.clone(), context.events.clone(), context.router.clone(), context.agents.clone(), context.config.clone(), None, context.providers.clone(), context.store.clone(), None).await
                         } else {
                             crate::server_init::handle_run_with_engine(request, context.engine.clone(), context.events.clone(), context.router.clone(), context.agents.clone(), context.config.clone(), None, context.store.clone(), None).await
                         }
