@@ -288,23 +288,11 @@ impl DeltaCollector {
     /// {"reasoning": "...", "action": {"type": "tool", "tool_name": "...", "arguments": {...}}}
     /// ```
     fn parse_json_tool_call(text: &str) -> Option<NativeToolCall> {
-        let trimmed = text.trim();
-        // Strip markdown code fence if present
-        let json_str = if trimmed.starts_with("```") {
-            trimmed
-                .lines()
-                .skip(1)
-                .take_while(|l| !l.trim_start().starts_with("```"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            trimmed.to_string()
-        };
-        let json_trimmed = json_str.trim_start();
-        if !json_trimmed.starts_with('{') && !json_trimmed.starts_with('[') {
+        let body = crate::tools::text_tool_call::json_action_body(text);
+        if !body.starts_with('{') {
             return None;
         }
-        let value: Value = serde_json::from_str(&json_str).ok()?;
+        let value: Value = serde_json::from_str(body).ok()?;
         let action = value.get("action")?;
         if action.get("type").and_then(Value::as_str) != Some("tool") {
             return None;

@@ -16,6 +16,7 @@ use crate::session::service::SessionId;
 use crate::thinker::nudges::{
     compact_growth_nudge, MAX_OUTPUT_TOKENS_RESUME_NUDGE, MAX_STEPS_HINT,
 };
+use crate::tools::text_tool_call::{visible_tool_text, ToolTextPreview};
 use crate::verification::{
     hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict, STOP_REASON_END_TURN,
     TOOL_HISTORY_WINDOW,
@@ -32,7 +33,47 @@ use crate::verification::{
 /// tool-call and bookkeeping deltas are folded by the provider's
 /// `DeltaCollector` and surface through the assembled `ProviderResponse`.
 struct CallbackSink<'c> {
-    callback: crate::sync_primitives::Mutex<&'c mut dyn HarnessCallback>,
+    state: crate::sync_primitives::Mutex<CallbackSinkState<'c>>,
+}
+
+struct CallbackSinkState<'c> {
+    callback: &'c mut dyn HarnessCallback,
+    text: ToolTextPreview,
+    reasoning: ToolTextPreview,
+}
+
+impl<'c> CallbackSink<'c> {
+    fn new(callback: &'c mut dyn HarnessCallback) -> Self {
+        Self {
+            state: crate::sync_primitives::Mutex::new(CallbackSinkState {
+                callback,
+                text: ToolTextPreview::default(),
+                reasoning: ToolTextPreview::default(),
+            }),
+        }
+    }
+
+    fn finish_reasoning(&self, response: &ProviderResponse) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let sent = state.reasoning.emitted();
+        if let Some(rest) = response
+            .thinking
+            .as_deref()
+            .filter(|thinking| visible_tool_text(thinking) == *thinking)
+            .and_then(|thinking| thinking.get(sent..))
+            .filter(|rest| !rest.is_empty())
+        {
+            state.callback.on_reasoning(rest);
+        }
+    }
+
+    fn emitted_text_bytes(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .text
+            .emitted()
+    }
 }
 
 #[async_trait::async_trait]
@@ -40,14 +81,34 @@ impl crate::providers::DeltaSink for CallbackSink<'_> {
     async fn on_delta(&self, delta: &crate::providers::ProviderDelta) {
         // Poison-safe (P7): recover the guard rather than panicking — a delta
         // preview is never worth aborting the turn.
-        let mut cb = self.callback.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         match delta {
-            crate::providers::ProviderDelta::TextDelta(t) if !t.is_empty() => cb.on_delta(t),
-            crate::providers::ProviderDelta::ThinkingDelta(t) if !t.is_empty() => {
-                cb.on_reasoning(t)
+            crate::providers::ProviderDelta::TextDelta(t) => {
+                let visible = state.text.push(t);
+                if !visible.is_empty() {
+                    state.callback.on_delta(&visible);
+                }
+            }
+            crate::providers::ProviderDelta::ThinkingDelta(t) => {
+                let visible = state.reasoning.push(t);
+                if !visible.is_empty() {
+                    state.callback.on_reasoning(&visible);
+                }
             }
             _ => {}
         }
+    }
+}
+
+fn discard_protected_reasoning(response: &mut ProviderResponse) {
+    if response
+        .thinking
+        .as_deref()
+        .is_some_and(|thinking| visible_tool_text(thinking) != thinking)
+    {
+        // A modified thinking block cannot carry the provider's signature.
+        response.thinking = None;
+        response.thinking_signature = None;
     }
 }
 
@@ -755,19 +816,22 @@ impl AgentHarness {
         // streams normally instead of paying a blanket suppression for an
         // unrelated surface — restoring live streaming for the common
         // PII/secrets-input + tool-call-arg-guard deployment. Mock/non-HTTP
-        // providers also fall through. When the gate is open, `stream_llm_call`
-        // forwards text/thinking deltas live and we suppress the once-per-turn
-        // `on_delta` further down.
+        // providers also fall through. The streaming path previews prose up
+        // to a possible tool envelope and leaves the remaining text for the
+        // completed response to project.
         let provider_streams = may_stream_deltas(
             self.deps.guardrails.as_deref(),
             self.deps.llm.supports_streaming(),
         );
-        let primary_call = if provider_streams {
+        let (primary_call, preview_bytes) = if provider_streams {
             self.stream_llm_call(payload, callback, parent_cancel, started)
                 .await?
         } else {
-            self.race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
-                .await?
+            (
+                self.race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
+                    .await?,
+                0,
+            )
         };
         // Whether the SURVIVING `response` was produced by the live streaming
         // call. Every retry/rescue below re-issues the request through the
@@ -874,28 +938,34 @@ impl AgentHarness {
         while response.stop_reason == StopReason::MaxTokens
             && max_tokens_retries < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
         {
-            max_tokens_retries += 1;
-            // Count the partial (max_output_tokens-cut) call before discarding
-            // it: it billed input tokens plus the partial output the model
-            // already emitted. The once-per-turn accounting below only sees
-            // the final response, so without this those tokens are lost.
-            self.account_intermediate_tokens(&response);
-            tracing::warn!(
-                ?session_id,
-                max_tokens_retries,
-                "provider hit max_output_tokens; retrying with resume nudge",
-            );
             let partial = response.text_content();
+            let carried_len = carried.len();
             if !partial.trim().is_empty() {
                 carried.push_str(&partial);
+            }
+            // Check across response boundaries before replay. A prior partial
+            // may have ended inside the opening marker of this envelope.
+            if visible_tool_text(&carried) != carried {
+                carried.truncate(carried_len);
+                break;
+            }
+            max_tokens_retries += 1;
+            // The once-per-turn accounting sees only the surviving response.
+            self.account_intermediate_tokens(&response);
+            if carried.len() != carried_len {
                 messages.push(UnifiedMessage::assistant(partial));
             }
             // Nothing is emitted here — a delta would bypass the Stage-5a output
             // guardrail. A streaming primary call already sent this partial live.
             if response_was_streamed {
-                streamed_prefix_len = carried.len();
+                streamed_prefix_len = preview_bytes;
             }
             response_was_streamed = false;
+            tracing::warn!(
+                ?session_id,
+                max_tokens_retries,
+                "provider hit max_output_tokens; retrying with resume nudge",
+            );
             messages.push(UnifiedMessage::user(MAX_OUTPUT_TOKENS_RESUME_NUDGE));
             let payload = build_request_payload(
                 self.deps.system_prompt.as_deref(),
@@ -975,6 +1045,14 @@ impl AgentHarness {
         // clean finish. No-op on the common native path. Runs after the
         // empty-response and max_output_tokens recovery so it sees the final
         // text the model actually produced.
+        // Keep the original byte prefix for streamed consumers. Validate the
+        // complete text separately from promotion, which can trim it or decline
+        // a tool whose name was outside this turn's tool catalog.
+        if let Some(text) = response.text.as_deref() {
+            carried.push_str(text);
+        }
+        let text = visible_tool_text(&carried).into_owned();
+        discard_protected_reasoning(&mut response);
         let promoted = promote_text_tool_calls(&mut response, &metadata_tools);
         if promoted > 0 {
             tracing::info!(
@@ -1037,15 +1115,6 @@ impl AgentHarness {
 
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
         let turn_id = super::current_turn_id(&events);
-        let text = if carried.is_empty() {
-            response.text.clone().unwrap_or_default()
-        } else {
-            let mut s = carried;
-            if let Some(t) = response.text.as_deref() {
-                s.push_str(t);
-            }
-            s
-        };
 
         // 4a. Stage 5a (#9): Output guardrail. `Block` aborts the turn with a
         // terminal `HarnessError::Llm`. The decision's `class` is preserved
@@ -1066,7 +1135,7 @@ impl AgentHarness {
                 }
                 crate::guardrails::GuardrailDecision::Sanitize(rep) => {
                     callback.on_safety_block(&format!("output sanitized by {}", rep.source));
-                    rep.text
+                    visible_tool_text(&rep.text).into_owned()
                 }
                 crate::guardrails::GuardrailDecision::Block { reason, class } => {
                     callback.on_safety_block(&reason);
@@ -1089,21 +1158,15 @@ impl AgentHarness {
         };
 
         if !text.is_empty() {
-            // For streamed turns the incremental text deltas were already
-            // forwarded live during the LLM call (`stream_llm_call`), so a
-            // second full-text `on_delta` here would double the content in
-            // append-only consumers (BroadcastCallback → FlowStreamEvent::Delta).
-            // Non-streaming turns (mock/non-HTTP providers, or guardrailed turns
-            // where streaming is suppressed so the output guardrail can sanitise
-            // the final text first) keep the one-shot emit — as does a response
-            // that survived from a non-streaming retry/rescue, whose text was
-            // never delta-streamed — minus the `streamed_prefix_len` bytes a
-            // truncated streaming call already sent (`.get()`, not `&text[..]`: a
-            // byte index must not split a codepoint).
-            if !response_was_streamed {
-                if let Some(rest) = text.get(streamed_prefix_len..) {
-                    callback.on_delta(rest);
-                }
+            // A live preview stops before a possible tool envelope. Release
+            // projected trailing prose once, including after a resume retry.
+            let sent = if response_was_streamed {
+                preview_bytes
+            } else {
+                streamed_prefix_len
+            };
+            if let Some(rest) = text.get(sent..).filter(|rest| !rest.is_empty()) {
+                callback.on_delta(rest);
             }
             self.emit(|| crate::harness::trace::LoopTraceEvent::TextEmitted {
                 iteration: iterations,
@@ -1358,31 +1421,34 @@ impl AgentHarness {
     ///
     /// Raced against cancel + turn-timeout exactly like [`Self::race_llm_call`].
     /// Caller gates this behind `provider_streams` (HTTP seam present AND no
-    /// output guardrail wired) and must suppress the once-per-turn `on_delta`
-    /// for streamed turns to avoid double-emitting into append-only consumers.
+    /// output guardrail wired). Return the number of text bytes already sent
+    /// so the final projection can deliver only the remaining prose.
     ///
     /// [`AiProvider::as_http_provider`]: crate::providers::AiProvider::as_http_provider
     /// [`HttpProvider::execute_streaming`]: crate::providers::http_provider::HttpProvider::execute_streaming
-    pub(crate) async fn stream_llm_call(
+    async fn stream_llm_call(
         &self,
         payload: RequestPayload<'_>,
         callback: &mut dyn HarnessCallback,
         parent_cancel: &CancellationToken,
         started: std::time::Instant,
-    ) -> Result<Result<ProviderResponse, crate::error::AlephError>, HarnessError> {
-        let sink = CallbackSink {
-            callback: crate::sync_primitives::Mutex::new(callback),
-        };
+    ) -> Result<(Result<ProviderResponse, crate::error::AlephError>, usize), HarnessError> {
+        let sink = CallbackSink::new(callback);
         // Polymorphic streaming: the decorator stack applies its per-call logic
         // and forwards deltas down to `HttpProvider`; non-HTTP providers fall
         // back to `process` via the trait default (no live deltas). Replaces an
         // `as_http_provider()` downcast that skipped every decorator on streams.
-        self.race_llm_call(
-            self.deps.llm.execute_streaming_dyn(payload, &sink),
-            parent_cancel,
-            started,
-        )
-        .await
+        let response = self
+            .race_llm_call(
+                self.deps.llm.execute_streaming_dyn(payload, &sink),
+                parent_cancel,
+                started,
+            )
+            .await?;
+        if let Ok(response) = &response {
+            sink.finish_reasoning(response);
+        }
+        Ok((response, sink.emitted_text_bytes()))
     }
 
     /// Fire one tool-less LLM call so the user gets a terminal text response on
@@ -1458,7 +1524,7 @@ impl AgentHarness {
         // degraded, so a hung provider here must not hang the whole harness
         // or ignore a user cancel.
         let started = std::time::Instant::now();
-        let resp = match tokio::time::timeout(
+        let mut resp = match tokio::time::timeout(
             super::GRACE_TIMEOUT_BUDGET,
             self.race_llm_call(self.deps.llm.process(grace_payload), parent_cancel, started),
         )
@@ -1503,10 +1569,11 @@ impl AgentHarness {
         // end-of-function accounting entirely, silently dropping a real billed
         // round-trip from `total_tokens` and the per-component breakdown.
         self.account_intermediate_tokens(&resp);
-        if resp.text.as_deref().unwrap_or("").trim().is_empty() {
+        discard_protected_reasoning(&mut resp);
+        let text = visible_tool_text(resp.text.as_deref().unwrap_or_default()).into_owned();
+        if text.trim().is_empty() {
             return;
         }
-        let text = resp.text.clone().unwrap_or_default();
         // Stage 5a parity: the grace turn's text reaches the user through the
         // same callback + session-log channel as a primary turn, so it must
         // pass the same output guardrail. Without this the salvage path was a
@@ -1523,7 +1590,7 @@ impl AgentHarness {
                 }
                 crate::guardrails::GuardrailDecision::Sanitize(rep) => {
                     callback.on_safety_block(&format!("output sanitized by {}", rep.source));
-                    rep.text
+                    visible_tool_text(&rep.text).into_owned()
                 }
                 crate::guardrails::GuardrailDecision::Block { reason, .. } => {
                     callback.on_safety_block(&reason);
@@ -1956,9 +2023,7 @@ mod tests {
 
         let mut cb = RecordingCb::default();
         {
-            let sink = CallbackSink {
-                callback: crate::sync_primitives::Mutex::new(&mut cb),
-            };
+            let sink = CallbackSink::new(&mut cb);
             sink.on_delta(&ProviderDelta::TextDelta("Hello ".into()))
                 .await;
             sink.on_delta(&ProviderDelta::ThinkingDelta("hmm".into()))
@@ -1978,5 +2043,118 @@ mod tests {
         }
         assert_eq!(cb.text, vec!["Hello ".to_string(), "world".to_string()]);
         assert_eq!(cb.reasoning, vec!["hmm".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn callback_sink_never_broadcasts_private_text_envelopes() {
+        use crate::orchestrator::dispatch::FlowStreamEvent;
+        use crate::providers::{DeltaSink, ProviderDelta};
+
+        for (input, live, final_text) in [
+            (
+                r#"前 <ToOL_CaLL>{"name":"bash","arguments":{"process_action":"write_stdin","record":"PRIVATE_CANARY"}}</tool_call> 后"#,
+                "前 ",
+                "前  后",
+            ),
+            (
+                r#"前 <tool_call>{"name":"bash","arguments":{"record":"PRIVATE_CANARY""#,
+                "前 ",
+                "前 ",
+            ),
+            (
+                r#"ahead <tool_call>{"name":"bash","args":{"record":"PRIVATE</tool_call>_CANARY"}}</tool_call> after"#,
+                "ahead ",
+                "ahead ",
+            ),
+            (
+                "before <function=echo><parameter=text>weather</parameter></function> after",
+                "before ",
+                "before  after",
+            ),
+            (
+                r#"before <function=bash><parameter=record>"PRIVATE</parameter></function>_CANARY"</parameter></function> after"#,
+                "before ",
+                "before ",
+            ),
+            (
+                "before <function=bash><parameter=record>PRIVATE</function>_CANARY</parameter>",
+                "before ",
+                "before ",
+            ),
+            (
+                "```json\n{\"action\":{\"type\":\"tool\",\"tool_name\":\"bash\",\"arguments\":{\"record\":\"PRIVATE_CANARY\"}}}\n```",
+                "",
+                "",
+            ),
+            (
+                r#" {"action":{"arguments":{"record":"PRIVATE_CANARY""#,
+                " ",
+                " ",
+            ),
+            (
+                r#"{"\u0061ction":{"type":"tool","arguments":{"record":"PRIVATE_CANARY"}},"action":"text"}"#,
+                "",
+                "",
+            ),
+            (
+                r#"{"answer":{"action":"continue"}}"#,
+                "",
+                r#"{"answer":{"action":"continue"}}"#,
+            ),
+            (
+                "```rust\nfn main() {}\n```",
+                "",
+                "```rust\nfn main() {}\n```",
+            ),
+            ("前 < 结束", "前 < 结束", "前 < 结束"),
+        ] {
+            let (tx, mut rx) = tokio::sync::broadcast::channel(64);
+            let mut callback = crate::orchestrator::harness_bridge::test_broadcast_callback(tx);
+            let sink = CallbackSink::new(&mut callback);
+            // One scalar per delta splits every ASCII marker and exercises
+            // UTF-8 boundaries before and after the held envelope.
+            for ch in input.chars() {
+                sink.on_delta(&ProviderDelta::TextDelta(ch.to_string())).await;
+            }
+            let sent = sink.emitted_text_bytes();
+            drop(sink);
+            let mut received = String::new();
+            while let Ok(event) = rx.try_recv() {
+                if let FlowStreamEvent::Delta(text) = event {
+                    received.push_str(&text);
+                }
+            }
+            assert_eq!(received, live);
+            assert_eq!(sent, live.len());
+            let projected = visible_tool_text(input);
+            assert_eq!(projected, final_text);
+            if let Some(rest) = projected.get(sent..).filter(|rest| !rest.is_empty()) {
+                callback.on_delta(rest);
+                let FlowStreamEvent::Delta(text) = rx.try_recv().unwrap() else {
+                    panic!("expected trailing text broadcast");
+                };
+                received.push_str(&text);
+            }
+            assert_eq!(received, final_text);
+        }
+    }
+
+    #[tokio::test]
+    async fn callback_sink_never_broadcasts_private_text_from_reasoning() {
+        use crate::orchestrator::dispatch::FlowStreamEvent;
+        use crate::providers::{DeltaSink, ProviderDelta};
+
+        let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+        let mut callback = crate::orchestrator::harness_bridge::test_broadcast_callback(tx);
+        let sink = CallbackSink::new(&mut callback);
+        for part in ["analysis <tool_", "call>{\"record\":\"PRIVATE_CANARY\"}"] {
+            sink.on_delta(&ProviderDelta::ThinkingDelta(part.into()))
+                .await;
+        }
+        let FlowStreamEvent::Reasoning(text) = rx.try_recv().unwrap() else {
+            panic!("expected reasoning broadcast");
+        };
+        assert_eq!(text, "analysis ");
+        assert!(rx.try_recv().is_err());
     }
 }
