@@ -155,9 +155,6 @@
     "token_wall_instruction_rejected": "此设备的凭据已被撤销、轮换或过期。请输入新的配对码或 Gateway token 重新连接。",
     "token_wall_placeholder": "aleph-bt-… 或 aleph-…",
     "token_wall_submit": "授权",
-    "native_welcome_title": "欢迎使用 Aleph",
-    "native_welcome_body": "本机 Aleph 已就绪。你可以直接在本机使用，也可以在下方配对此设备，安全保存设备身份并在以后自动连接。",
-    "native_welcome_continue": "继续使用本机",
     "native_pairing_instruction": "如需配对桌面应用，请输入一次性配对码。可在核心的「设置 → 安全」生成，或在核心所在机器运行 aleph-server pair。此处不接受共享 Gateway token。",
     "native_pairing_rejected": "配对码无效或已过期，或此设备的凭据已被撤销。请输入新的一次性配对码重新连接。",
     "native_pairing_label": "配对码",
@@ -790,8 +787,7 @@
         "status_disabled": "已禁用",
         "status_approval": "需要在系统设置中批准",
         "status_unavailable": "状态不可用，并非已确认禁用",
-        "status_failed": "无法读取登录项状态",
-        "read_only": "只读：NSH 暂不支持修改此设置。"
+        "status_failed": "无法读取或修改登录项"
       }
     },
     "behavior": {

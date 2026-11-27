@@ -459,35 +459,12 @@ fn AppContent() -> impl IntoView {
             class:sidebar-collapsed=move || mem_for_shell.sidebar_collapsed.get()
             class:ff-tablet=move || ff_for_shell.form_factor.get() == FormFactor::Tablet
         >
-            // No global title-bar drag strip on the shell root — the macOS
-            // Overlay title bar is carved out from the chrome buttons by
-            // attaching `data-tauri-drag-region=""` to the structural
-            // elements that SHOULD drag: the sidebar brand row (left
-            // column, covers the area under the traffic lights), and a
-            // dedicated `aleph-main-drag-band` parked at the top of the
-            // right `<main>` column (covers every tab uniformly — chat,
-            // dashboard, memory, agents, teams, settings). Each chrome
-            // button explicitly opts out via `-webkit-app-region:
-            // no-drag` (utility class `aleph-no-drag` or via the
-            // button's own CSS rules), so the drag surface yields to
-            // the buttons rather than the other way around.
-
-            // Fixed top-left collapse button — anchored to the window so it
-            // stays clickable when the sidebar slides off-screen. Visibility
-            // (see tailwind.css) is keyed on the SHELL, not on the OS — a
-            // browser on macOS has no overlay traffic lights to sit beside:
-            //   • macOS shell: always visible, vertically centred with the
-            //     overlay traffic lights.
-            //   • Browsers (macOS included) + Tauri Win/Linux: only visible
-            //     when the sidebar is collapsed; while expanded, the inline
-            //     brand-row button in SidebarBrand handles it.
-            // `data-tauri-drag-region="false"` opts out of the parent drag
-            // strip so clicks aren't swallowed by the window-drag handler.
+            // The fixed button reopens a collapsed sidebar. While expanded,
+            // SidebarBrand owns the inline collapse button.
             <Show when=legacy_chrome>
                 <button
                     type="button"
                     class="aleph-sidebar-toggle"
-                    data-tauri-drag-region="false"
                     on:click={
                         let mem = mem_for_shell;
                         move |_| {
@@ -516,30 +493,9 @@ fn AppContent() -> impl IntoView {
                     <ModeSidebar />
                 </Show>
 
-                // Main content area — `relative` is the positioning
-                // ancestor for the absolutely-floating drag band below.
-                // Transparent, so the light-field shows through.
                 <main class="flex-1 relative min-h-0 overflow-y-auto overflow-x-hidden">
-                    // Window-drag band — floats over the top of `<main>`
-                    // WITHOUT taking layout space (CSS `position:
-                    // absolute`, `background: transparent`). On macOS
-                    // it occupies the overlay traffic-light strip
-                    // (height `--aleph-band-h` = 30px) as a window-
-                    // drag handle; on web / Win / Linux it collapses
-                    // to height 0. Because the band is out of flow,
-                    // tab content fills the full `<main>` height —
-                    // no awkward downward shift and no visible white
-                    // strip on tabs with contrasting backgrounds
-                    // (e.g. the memory canvas).
-                    //
-                    // `z-50` keeps the band's chrome chips above
-                    // tab content; the band itself is transparent
-                    // so any text scrolling beneath is fine.
                     <Show when=legacy_chrome>
-                        <div
-                            class="aleph-main-drag-band z-50"
-                            data-tauri-drag-region=""
-                        >
+                        <div class="absolute inset-x-0 top-0 h-0 pointer-events-none z-50">
                             <ChatBandChrome />
                         </div>
                     </Show>
@@ -602,19 +558,8 @@ fn AppContent() -> impl IntoView {
     }
 }
 
-/// Chrome buttons that live INSIDE the `<main>` top drag band so they sit
-/// on the traffic-light y-baseline (window-y ≈ 15 on macOS).
-///
-/// One affordance, chat-tab-only: `LayoutToggle` sits at the chat-surface
-/// top-right. Right offset is `right-[44px]` in `ChatOnly` (4 px left of
-/// the `NotificationCenter` bell) and
-/// `right-[8px]` keeps the chat toggle at the shell edge now that the pane
-/// is an in-flow sibling rather than an overlay whose width must be subtracted.
-/// The width token remains owned by the pane and consumed by its own width.
-///
-/// The child opts out of the drag region (`aleph-no-drag` +
-/// `data-tauri-drag-region="false"`); the surrounding band space still
-/// drags the window on macOS Overlay-titlebar windows.
+/// Anchors the chat layout toggle to the top of the chat surface without
+/// taking space in the scrollable content.
 #[component]
 fn ChatBandChrome() -> impl IntoView {
     let location = use_location();
@@ -635,24 +580,17 @@ fn ChatBandChrome() -> impl IntoView {
 
     view! {
         <Show when=move || mode.get() == PanelMode::Chat>
-            // LayoutToggle — right-edge tracks the chat / workspace
-            // boundary. `pointer-events-auto` re-enables clicks because
-            // the band itself is `pointer-events:none` on web / Win /
-            // Linux (it only captures drag input on macOS). `aleph-no-drag`
-            // is belt-and-braces — Tauri's `data-tauri-drag-region="false"`
-            // already toggles `-webkit-app-region`, but the utility class
-            // makes the opt-out resilient if the child re-parents.
+            // The anchor ignores pointer events; only the button receives them.
             <div
                 class=move || {
                     let base = "absolute aleph-chrome-top z-[45] \
-                                pointer-events-auto aleph-no-drag aleph-ws-toggle";
+                                pointer-events-auto aleph-ws-toggle";
                     if workspace.mode.get() == LayoutMode::Split {
                         format!("{base} right-[8px]")
                     } else {
                         format!("{base} right-[44px]")
                     }
                 }
-                data-tauri-drag-region="false"
             >
                 <crate::components::layout_toggle::LayoutToggle />
             </div>

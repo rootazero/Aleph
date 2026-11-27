@@ -2,7 +2,7 @@
 //!
 //! Backs the cross-platform `<DirectoryBrowser />` component (Panel) so
 //! the directory picker browses **the server's** filesystem regardless of
-//! where the client runs — local Tauri webview, localhost web tab, or
+//! where the client runs — local NSH WebView, localhost web tab, or
 //! remote Tailnet web. See `gateway::handlers::fs` on the server for the
 //! safety surface (`projects.allowed_roots`).
 

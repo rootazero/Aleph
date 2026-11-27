@@ -1415,7 +1415,7 @@ impl DashboardState {
                 return;
             }
             // Keep the pairing form mounted while the native connection is
-            // replaced, including when pairing starts from the welcome screen.
+            // replaced, including when the user starts pairing from Settings.
             let _ = self.needs_token.try_set(true);
             let _ = self.token_was_rejected.try_set(false);
             let state = *self;

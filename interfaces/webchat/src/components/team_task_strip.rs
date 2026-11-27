@@ -106,8 +106,7 @@ pub fn TeamTaskDrawer() -> impl IntoView {
             // Slide-over panel.
             <div class="fixed top-0 right-0 bottom-0 z-[81] w-[320px] max-w-[85vw] \
                         bg-surface-raised/95 backdrop-blur border-l border-border \
-                        shadow-xl flex flex-col aleph-no-drag"
-                 data-tauri-drag-region="false">
+                        shadow-xl flex flex-col">
                 <div class="flex items-center justify-between px-4 py-3 border-b border-border">
                     <span class="text-sm font-semibold">
                         {move || t_string!(i18n, chat.team_tasks_title).to_string()}

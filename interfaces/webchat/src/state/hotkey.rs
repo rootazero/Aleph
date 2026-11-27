@@ -6,7 +6,7 @@
 //! fields onto `HotkeyState`; install more listeners from `install()`).
 //!
 //! The desktop shell already owns a *global* summon hotkey (`CmdOrCtrl`+
-//! Shift+A → show/hide the window, see `desktop/shell/src/hotkey.rs`). This
+//! Shift+A → show/hide the window, see `desktop/nsh-shell/src/app.rs`). This
 //! file is the in-panel sibling — short keystrokes that only fire while the
 //! webview has focus.
 

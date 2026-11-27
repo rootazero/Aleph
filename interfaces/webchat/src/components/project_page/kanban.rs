@@ -41,6 +41,7 @@ use crate::platform::wide::views::chat::state::ChatState;
 use crate::platform::wide::views::teams::components::board_columns::{
     column_label, count_for_column, BOARD_COLUMNS,
 };
+use crate::state::sessions::SessionMap;
 use leptos_i18n::I18nContext;
 
 /// What to show when one of this tab's reads failed.
@@ -198,6 +199,7 @@ fn RoomTeamCard(team: TeamSummary) -> impl IntoView {
     let i18n = use_i18n();
     let dash = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    let sessions = expect_context::<SessionMap>();
 
     let tasks: RwSignal<Vec<CoordTaskDto>> = RwSignal::new(Vec::new());
     let task_error: RwSignal<Option<String>> = RwSignal::new(None);
@@ -232,7 +234,7 @@ fn RoomTeamCard(team: TeamSummary) -> impl IntoView {
             // `None` for the agent roster: this surface never loaded
             // `agents.list`, and a name falling back to its id is a cosmetic
             // loss where an extra round trip on every click is not.
-            enter_team_chat(dash, chat, None, id).await;
+            enter_team_chat(dash, chat, sessions, None, id).await;
         });
     };
 

@@ -3,7 +3,13 @@ name = "aleph-nsh-shell"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "aleph_nsh_shell"
+path = "src/lib.rs"
+
 [features]
+# The nsh runner builds the app crate with its default features only.
+default = ["embedded-core"]
 embedded-core = ["dep:aleph-desktop-host"]
 qa-service = ["aleph-client/qa-service"]
 # Opt-in embedded TSX Panel (macOS only in S2): runs `interfaces/panel` in an
@@ -21,10 +27,19 @@ aleph-client = { path = "../../shared/client" }
 aleph-desktop-host = { path = "../host", features = ["gateway-admission"], optional = true }
 aleph-panel-ui = { path = "../../interfaces/panel", optional = true }
 aleph-protocol = { path = "../../shared/protocol" }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["std"] }
 uuid = { workspace = true }
+url = { workspace = true }
+# The TLS stack aleph-client already builds with; the probe validates the
+# server certificate against the system trust store.
+native-tls = "0.2"
+tokio-native-tls = "0.3"
+# The nsh toolchain's updater: manifest checks, verified download, install.
+# HTTP is the app's own (reqwest, as aleph-desktop-host uses it).
+nsh-updater = "=0.6.0"
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "http2", "system-proxy"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nsh-platform-macos = { version = "=0.6.0", default-features = false }

@@ -48,7 +48,7 @@ def run(exe, receipt):
     binary = bundle / "Contents/MacOS/aleph-nsh-shell"
     shutil.copy2(exe, binary)
     nonce = os.urandom(32).hex()
-    identity = f"com.aleph.nsh-shell.qa.{nonce}"
+    identity = f"ai.aleph.desktop.qa.{nonce}"
     (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps({
         "CFBundleIdentifier": identity, "CFBundleExecutable": binary.name,
         "CFBundleName": "Aleph NSH Isolated Status QA", "CFBundlePackageType": "APPL",

@@ -1,5 +1,8 @@
-//! Read-only login-item status for the current application, not server autostart.
+//! The current application's login item, not server autostart: its status
+//! for the Panel's setting, and the write when the user turns it on or off.
 use aleph_protocol::panel_shell::{AutostartStatus, AutostartUnavailableReason};
+use nsh_core::desktop::LaunchAtLoginError;
+use nsh_core::element::desktop::set_launch_at_login;
 
 #[derive(Clone)]
 pub(crate) struct Reader {
@@ -24,7 +27,52 @@ impl Reader {
         let Ok(permit) = self.permit.clone().try_acquire_owned() else {
             return AutostartStatus::Failed {};
         };
-        let identity = identity.clone();
+        #[cfg(not(target_os = "macos"))]
+        {
+            // Windows and Linux: nsh reads this copy's login item; it has no
+            // pending-approval state to report.
+            let _ = identity;
+            let enabled = nsh_core::element::desktop::launch_at_login().await;
+            drop(permit);
+            if enabled {
+                AutostartStatus::Enabled {}
+            } else {
+                AutostartStatus::Disabled {}
+            }
+        }
+        #[cfg(target_os = "macos")]
+        self.query_macos(identity.clone(), permit).await
+    }
+
+    /// Turn launching at login on or off, then read the status back. A copy
+    /// whose status cannot be read (not an app bundle, another identity)
+    /// is not written to.
+    pub(crate) async fn set(&self, enabled: bool) -> AutostartStatus {
+        let before = self.query().await;
+        if matches!(
+            before,
+            AutostartStatus::Unavailable { .. } | AutostartStatus::Failed {}
+        ) {
+            return before;
+        }
+        match set_launch_at_login(enabled).await {
+            Ok(()) => self.query().await,
+            Err(LaunchAtLoginError::Unavailable) => AutostartStatus::Unavailable {
+                reason: AutostartUnavailableReason::ApiUnavailable,
+            },
+            Err(error) => {
+                eprintln!("NSH login item write failed: {error}");
+                AutostartStatus::Failed {}
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn query_macos(
+        &self,
+        identity: String,
+        permit: tokio::sync::OwnedSemaphorePermit,
+    ) -> AutostartStatus {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let worker = std::thread::Builder::new()
             .name("aleph-login-status".into())
@@ -141,6 +189,8 @@ fn macos_status(raw: isize) -> AutostartStatus {
 mod tests {
     use super::*;
 
+    // Windows and Linux read through nsh, which needs its runtime.
+    #[cfg(target_os = "macos")]
     #[test]
     fn async_status_read_needs_no_entered_tokio_runtime() {
         use std::future::Future;

@@ -6,7 +6,7 @@
 //!
 //! Every leaf passes `wrapped=true`, for the same reason every `PhoneDashboard`
 //! leaf does: its child is a *desktop* page body that brings its own `px-6`
-//! gutters and its own `aleph-content-top` macOS traffic-light inset. Stacked on
+//! gutters and its own `aleph-content-top` inset. Stacked on
 //! the shell's own 16 px that is 40 px of gutter on a 390 px screen, plus an
 //! inset for window controls that do not exist inside this shell.
 //!

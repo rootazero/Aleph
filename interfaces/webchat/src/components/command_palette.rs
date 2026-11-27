@@ -326,14 +326,12 @@ pub fn CommandPalette() -> impl IntoView {
         <Show when=move || open.get() fallback=|| ()>
             <div
                 class="fixed inset-0 z-[60] bg-black/40 aleph-scrim"
-                data-tauri-drag-region="false"
                 on:click=move |_| open.set(false)
             />
             <div
                 class="fixed left-1/2 top-[18vh] -translate-x-1/2 z-[61] w-[min(640px,calc(100vw-32px))] \
                        glass bg-surface-overlay/85 border border-border \
                        rounded-2xl shadow-2xl overflow-hidden animate-pop-in"
-                data-tauri-drag-region="false"
                 role="dialog"
                 aria-label="Command palette"
             >

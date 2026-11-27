@@ -2063,6 +2063,9 @@ impl ChatState {
     pub fn capture_snapshot(&self) -> SessionSnapshot {
         SessionSnapshot {
             messages: self.messages.get_untracked(),
+            history_limit: self.history_limit.get_untracked(),
+            history_has_more: self.history_has_more.get_untracked(),
+            history_above: self.history_above.get_untracked(),
             phase: self.phase.get_untracked(),
             active_run_id: self.active_run_id.get_untracked(),
             session_key: self.session_key.get_untracked(),
@@ -2093,6 +2096,10 @@ impl ChatState {
     /// stale values from the outgoing tab never leak across.
     pub fn restore_from(&self, snap: SessionSnapshot) {
         self.messages.set(snap.messages);
+        self.history_limit
+            .set(snap.history_limit.max(DEFAULT_HISTORY_LIMIT));
+        self.history_has_more.set(snap.history_has_more);
+        self.history_above.set(snap.history_above);
         self.phase.set(snap.phase);
         self.active_run_id.set(snap.active_run_id);
         self.session_key.set(snap.session_key);
@@ -2146,6 +2153,9 @@ impl ChatState {
 #[derive(Debug, Clone, Default)]
 pub struct SessionSnapshot {
     pub messages: Vec<ChatMessage>,
+    history_limit: usize,
+    history_has_more: bool,
+    history_above: Option<usize>,
     pub phase: ChatPhase,
     pub active_run_id: Option<String>,
     pub session_key: Option<String>,

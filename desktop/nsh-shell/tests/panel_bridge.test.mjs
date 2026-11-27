@@ -16,7 +16,7 @@ function host({ element = true, origin = "http://127.0.0.1:18790", subframe = fa
   };
   window.top = subframe ? {} : window;
   const context = {
-    window, location: { origin }, crypto: webcrypto,
+    window, location: { origin, href: origin + "/chat" }, crypto: webcrypto, URL,
     document: { documentElement: element ? { setAttribute() {} } : null, addEventListener: window.addEventListener },
     setTimeout(fn) { timers.set(++timer, fn); return timer; },
     clearTimeout(id) { timers.delete(id); },
@@ -158,4 +158,63 @@ test("status replies require matching native document, request and a closed stat
 test("untrusted origin and iframe have no bridge", () => {
   assert.equal(host({ origin: "https://other" }).bridge, undefined);
   assert.equal(host({ subframe: true }).bridge, undefined);
+});
+
+test("autostartSet sends the wanted state and resolves with the re-read status", async () => {
+  const h = host(); h.ready();
+  const pending = h.bridge.autostartSet(true);
+  await tick();
+  assert.equal(h.sent.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.sent[0])),
+    { kind: "autostart-set", request: h.sent[0].request, document: h.bridge.document, enabled: true });
+  h.receive({ kind: "autostart-reply", document: h.bridge.document, request: h.sent[0].request, status: { status: "enabled" } });
+  assert.deepEqual(JSON.parse(JSON.stringify(await pending)), { status: "enabled" });
+  assert.equal(h.timers.size, 0);
+});
+
+test("autostartSet rejects a non-boolean without sending", async () => {
+  const h = host(); h.ready();
+  for (const value of ["true", 1, null, undefined]) {
+    await assert.rejects(h.bridge.autostartSet(value));
+  }
+  await assert.rejects(h.bridge.autostartSet(true, "extra"));
+  assert.equal(h.sent.length, 0);
+});
+
+function click(h, href) {
+  const event = { defaultPrevented: false, target: { closest: selector => (selector === "a[href]" ? { href } : null) },
+    preventDefault() { this.defaultPrevented = true; } };
+  h.emit("click", event);
+  return event.defaultPrevented;
+}
+
+test("a link off the Panel's origin goes to the host and the page stays", () => {
+  const h = host();
+  assert.equal(click(h, "https://github.com/rootazero/Aleph"), true);
+  assert.deepEqual(h.sent, [{ kind: "open-external", document: h.bridge.document, url: "https://github.com/rootazero/Aleph" }]);
+});
+
+test("the Panel's own links stay in the page; artifact bytes go out", () => {
+  const h = host();
+  assert.equal(click(h, "http://127.0.0.1:18790/settings"), false);
+  assert.equal(click(h, "#section"), false);
+  assert.equal(h.sent.length, 0);
+  assert.equal(click(h, "http://127.0.0.1:18790/artifact/cap/id/report.pdf"), true);
+  assert.equal(h.sent[0].url, "http://127.0.0.1:18790/artifact/cap/id/report.pdf");
+});
+
+test("a script link never runs in the page and the host judges it", () => {
+  const h = host();
+  assert.equal(click(h, "javascript:alert(1)"), true);
+  assert.equal(h.sent[0].kind, "open-external");
+});
+
+test("a click that is no link, or after pagehide, is left alone", () => {
+  const h = host();
+  const event = { defaultPrevented: false, target: { closest: () => null }, preventDefault() { this.defaultPrevented = true; } };
+  h.emit("click", event);
+  assert.equal(event.defaultPrevented, false);
+  h.emit("pagehide", {});
+  assert.equal(click(h, "https://github.com/rootazero/Aleph"), false);
+  assert.equal(h.sent.length, 0);
 });

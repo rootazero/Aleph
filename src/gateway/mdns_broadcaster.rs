@@ -54,7 +54,7 @@ impl MdnsBroadcaster {
         let daemon =
             ServiceDaemon::new().map_err(|e| format!("Failed to create mDNS daemon: {e}"))?;
 
-        let service_type = "_aleph._tcp.local.";
+        let service_type = aleph_protocol::GATEWAY_MDNS_SERVICE;
         let hostname = format!("{instance_name}.local.");
 
         let service_info = ServiceInfo::new(

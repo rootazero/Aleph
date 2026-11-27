@@ -9,7 +9,7 @@ use leptos_router::hooks::use_navigate;
 use std::sync::Arc;
 
 use crate::api::chat::ChatApi;
-use crate::api::teams::{TeamSummary, TeamsApi};
+use crate::api::teams::TeamsApi;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, td_string, use_i18n};
 use crate::state::layout::WorkspaceState;
@@ -18,7 +18,7 @@ use crate::views::chat::agent_identity::agent_color_for_id;
 use crate::views::chat::state::{ChatState, ContextUsage};
 // The topic grammar is the protocol crate's, not a view module's: the server
 // classifies delivery from the same parser (`event_visibility`).
-use aleph_protocol::team_topic::{TeamTopicKind, parse_team_topic};
+use aleph_protocol::team_topic::{parse_team_topic, TeamTopicKind};
 // The wire shape of the wait lane's `pending[]` entries — the same type the
 // server serializes onto `chat.history`, so a field rename there is a
 // compile error here rather than a client that silently reads an empty queue.
@@ -58,8 +58,8 @@ async fn await_current_history<T>(
 
 #[cfg(test)]
 mod hydration_progress_tests {
-    use super::{ChatState, DashboardState, await_current_history};
-    use futures::{FutureExt, channel::oneshot};
+    use super::{await_current_history, ChatState, DashboardState};
+    use futures::{channel::oneshot, FutureExt};
     use leptos::prelude::*;
 
     #[test]
@@ -206,7 +206,7 @@ mod hydration_progress_tests {
 /// carried no dials, so tapping a row there restored the folder and dropped the
 /// tier and the mode while the server kept enforcing them.
 use crate::api::sessions::{SessionListRow as SessionEntry, SessionRowKnobs};
-use crate::components::team_chat_entry::{AgentEntry, enter_team_chat};
+use crate::components::team_chat_entry::{enter_team_chat, AgentEntry};
 
 /// Should a `run.session_updated` frame re-hydrate the open transcript from
 /// `chat.history`?
@@ -795,8 +795,25 @@ pub fn ChatSidebar() -> impl IntoView {
     // Client-side session filter (R4 pure I/O — no backend search).
     let search_query = RwSignal::new(String::new());
 
-    // Groups (teams) the selected agent belongs to — drives the group-chat section.
-    let groups: RwSignal<Vec<TeamSummary>> = RwSignal::new(Vec::new());
+    // The group list follows the selected agent independently of the session
+    // list; switching agents need not reload every conversation.
+    let groups = LocalResource::new(move || {
+        let agent = selected_agent.get();
+        let connected = dashboard.is_connected.get();
+        let epoch = dashboard.connection_epoch.get();
+        async move {
+            let agent = agent.filter(|_| connected)?;
+            match TeamsApi::agent_teams(&dashboard, &agent).await {
+                Ok(teams) => Some((agent, epoch, teams)),
+                Err(error) => {
+                    web_sys::console::warn_1(
+                        &format!("Failed to list agent teams: {error}").into(),
+                    );
+                    None
+                }
+            }
+        }
+    });
     // Collapsible state for the group section (default: expanded).
     let groups_expanded = RwSignal::new(true);
 
@@ -866,21 +883,6 @@ pub fn ChatSidebar() -> impl IntoView {
             // only applies while no live frame has advanced the baseline. The
             // one place that both needs the answer and acts on it
             // (`state::reattach`) now takes it once.
-
-            // Fetch teams for the selected agent (drives the group-chat section).
-
-            // `try_get_untracked`: outer `None` = component disposed, inner
-            // `None` = no agent selected — either way skip.
-            if let Some(Some(agent_id)) = selected_agent.try_get_untracked() {
-                match TeamsApi::agent_teams(&dash, &agent_id).await {
-                    Ok(team_list) => groups.set(team_list),
-                    Err(e) => {
-                        web_sys::console::warn_1(
-                            &format!("Failed to list agent teams: {e}").into(),
-                        );
-                    }
-                }
-            }
 
             is_loading.set(false);
         });
@@ -970,7 +972,7 @@ pub fn ChatSidebar() -> impl IntoView {
             return;
         }
         if event.topic == "team.changed" {
-            reload_for_event(sub_dash);
+            groups.refetch();
             return;
         }
         // A background group spoke — badge its row. Scoped the same way the
@@ -1068,11 +1070,8 @@ pub fn ChatSidebar() -> impl IntoView {
         }
         // Switch tabs first: this snapshots the outgoing conversation and
         // restores the incoming one, so the draft, the prompt queue and the
-        // live `active_run_id` all come back with it. Only the state no
-        // snapshot carries (team roster / tasks) still needs clearing — the
-        // full `clear_session()` used to run here and undid the restore one
-        // line after it happened. The history load below overwrites
-        // `messages` either way.
+        // live `active_run_id` all come back with it. The session map clears
+        // the group context without wiping the restored conversation.
         // Reuse-or-open + activate + register, in one writer shared with the
         // project-room entry and the phone's history list. The label closure
         // only runs when a tab actually has to be opened: the session's topic
@@ -1086,7 +1085,6 @@ pub fn ChatSidebar() -> impl IntoView {
                 .and_then(|s| s.topic.clone())
                 .unwrap_or_else(|| key.clone())
         });
-        chat.clear_team_context();
 
         if let Some(ws) = workspace {
             ws.reset();
@@ -1172,7 +1170,7 @@ pub fn ChatSidebar() -> impl IntoView {
         // the previous inline version read it post-await behind `try_`.
         let known_agents = agents.try_get_untracked();
         leptos::task::spawn_local(async move {
-            enter_team_chat(dash, chat, known_agents, team_id).await;
+            enter_team_chat(dash, chat, session_map, known_agents, team_id).await;
         });
     };
 
@@ -1277,7 +1275,6 @@ pub fn ChatSidebar() -> impl IntoView {
         });
     });
 
-    let reload_for_grename = reload_data.clone();
     let do_rename_group = Arc::new(move |team_id: String, name: String| {
         if is_saving.get_untracked() {
             return;
@@ -1290,12 +1287,11 @@ pub fn ChatSidebar() -> impl IntoView {
         }
         is_saving.set(true);
         let dash = dashboard;
-        let reload = reload_for_grename.clone();
         leptos::task::spawn_local(async move {
             if let Err(e) = TeamsApi::rename(&dash, &team_id, &name).await {
                 web_sys::console::error_1(&format!("Failed to rename team: {e}").into());
             } else {
-                reload(dash);
+                groups.refetch();
             }
             is_saving.set(false);
             group_editing_id.set(None);
@@ -1303,14 +1299,12 @@ pub fn ChatSidebar() -> impl IntoView {
         });
     });
 
-    let reload_for_gdelete = reload_data.clone();
     let do_delete_group = Arc::new(move |team_id: String| {
         if is_saving.get_untracked() {
             return;
         }
         is_saving.set(true);
         let dash = dashboard;
-        let reload = reload_for_gdelete.clone();
         leptos::task::spawn_local(async move {
             if let Err(e) = TeamsApi::disband(&dash, &team_id).await {
                 web_sys::console::error_1(&format!("Failed to delete team: {e}").into());
@@ -1319,7 +1313,7 @@ pub fn ChatSidebar() -> impl IntoView {
                 if chat.team_id.try_get_untracked().flatten().as_deref() == Some(&team_id) {
                     chat.clear_session();
                 }
-                reload(dash);
+                groups.refetch();
             }
             is_saving.set(false);
             group_deleting_id.set(None);
@@ -1626,7 +1620,16 @@ pub fn ChatSidebar() -> impl IntoView {
                     // Only show active teams; disbanded ones disappear immediately.
                     // Newest activity first: most recent message timestamp, falling
                     // back to team creation time when the team has no transcript yet.
-                    let mut group_list: Vec<_> = groups.get().into_iter().filter(|g| g.status == "active").collect();
+                    let selected = selected_agent.get();
+                    let epoch = dashboard.connection_epoch.get();
+                    let Some((_, _, teams)) = groups.get().flatten().filter(|(agent, loaded_epoch, _)| {
+                        dashboard.is_connected.get()
+                            && selected.as_deref() == Some(agent.as_str())
+                            && *loaded_epoch == epoch
+                    }) else {
+                        return view! { <span /> }.into_any();
+                    };
+                    let mut group_list: Vec<_> = teams.into_iter().filter(|g| g.status == "active").collect();
                     group_list.sort_by_key(|g| std::cmp::Reverse(g.last_message_at.unwrap_or(g.created_at)));
                     if group_list.is_empty() {
                         return view! { <span /> }.into_any();
@@ -2360,8 +2363,8 @@ mod rehydrate_tests {
 
 #[cfg(test)]
 mod last_run_face_tests {
-    use super::{RunBadge, SessionEntry, last_run_notice, run_badge};
-    use crate::i18n::{Locale, td_string};
+    use super::{last_run_notice, run_badge, RunBadge, SessionEntry};
+    use crate::i18n::{td_string, Locale};
     use aleph_protocol::{DanglingCallView, LastRunState, RunProgressView};
 
     /// `n` calls that crossed the dispatch line and never came back.
@@ -2599,9 +2602,7 @@ mod last_run_face_tests {
             inspected: true,
             ..LastRunState::default()
         };
-        assert!(
-            last_run_notice(&odd, Locale::default()).is_some_and(|n| n.contains("quarantined"))
-        );
+        assert!(last_run_notice(&odd, Locale::default()).is_some_and(|n| n.contains("quarantined")));
         let row = SessionEntry {
             key: "agent:main:main:s4".into(),
             last_run: Some(odd),

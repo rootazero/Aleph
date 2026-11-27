@@ -202,9 +202,8 @@ pub fn TeamParticipants() -> impl IntoView {
                     type="button"
                     // The roster wrapper is `pointer-events-none` so the drag
                     // band + top chrome stay reachable through it; this button
-                    // opts back in (clickable) and out of the drag region
-                    // (`aleph-no-drag`) so pressing it does not drag the window.
-                    class="aleph-no-drag pointer-events-auto flex items-center gap-1 \
+                    // opts back in so the button remains clickable.
+                    class="pointer-events-auto flex items-center gap-1 \
                            rounded-full px-1.5 py-1 bg-surface-raised/70 backdrop-blur \
                            border border-border/60 hover:bg-surface-raised/90 transition-colors"
                     on:click=move |_| open.update(|o| *o = !*o)

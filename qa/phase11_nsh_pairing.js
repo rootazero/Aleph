@@ -5,7 +5,7 @@ function installAlephPanelPairingQa(settings, deliver) {
   const ticket = JSON.parse(settings.message.slice("phase11-pairing:".length)).ticket;
   const prior = JSON.parse(sessionStorage.getItem(key) || "null");
   const effects = prior?.effects || Object.fromEntries([
-    "initial_empty", "ticket_submitted", "pair_authorized", "save_ack", "reload_stored",
+    "initial_empty", "local_without_prompt", "ticket_submitted", "pair_authorized", "save_ack", "reload_stored",
     "reload_protected", "no_reload_ticket", "cleanup_deleted", "cleanup_empty"
   ].map(name => [name, false]));
   const documents = prior?.documents || [];
@@ -22,6 +22,9 @@ function installAlephPanelPairingQa(settings, deliver) {
   let reloadTicket = false;
   let cleanupStage = "not_started";
   let cleanupError = null;
+  let openedSettingsMenu = false;
+  let localAuthorized = false;
+  let pairingOpened = false;
   window.addEventListener("pagehide", () => { for (const socket of sockets) socket.close(1000, "QA navigation"); });
   const emit = (kind, payload = {}) => deliver({nonce: settings.nonce, qa_run_id: settings.qa_run_id, kind, ...payload});
   window.addEventListener("message", event => {
@@ -53,6 +56,7 @@ function installAlephPanelPairingQa(settings, deliver) {
         if (!request) return;
         pending.delete(frame.id);
         const result = frame.result;
+        if (stage === 0 && request.mode === "none" && result?.authorized === true) localAuthorized = true;
         if (result?.authorized !== true || result.user_id !== "alice" || result.device_id !== request.device) return;
         if (stage === 0 && request.mode === "bootstrap") {
           effects.pair_authorized = typeof result.device_token === "string" && result.device_token.length > 0 && result.device_token !== ticket;
@@ -103,7 +107,34 @@ function installAlephPanelPairingQa(settings, deliver) {
   }
   function inspect() {
     if (finishing || moving) return;
-    if (stage === 0 && effects.initial_empty && !submitted) {
+    if (stage === 0 && effects.initial_empty && localAuthorized && !submitted) {
+      if (!pairingOpened && document.querySelector('[data-testid="token-wall"]')?.getClientRects().length) {
+        void finish();
+        return;
+      }
+      if (location.pathname !== "/settings/general") {
+        const general = document.querySelector('a[href="/settings/general"]');
+        const settings = document.querySelector('[data-panel-nav="/settings"]');
+        const menu = document.querySelector('[data-panel-nav-toggle]');
+        if (general) general.click();
+        else if (settings) settings.click();
+        else if (menu && !openedSettingsMenu) {
+          openedSettingsMenu = true;
+          menu.click();
+        }
+        requestAnimationFrame(inspect);
+        return;
+      }
+      const pair = document.querySelector('[data-testid="pair-this-device"]');
+      if (!pair?.getClientRects().length) {
+        requestAnimationFrame(inspect);
+        return;
+      }
+      if (!pairingOpened) {
+        effects.local_without_prompt = true;
+        pairingOpened = true;
+        pair.click();
+      }
       const input = document.querySelector('[data-testid="token-wall-input"]');
       const button = document.querySelector('[data-testid="token-wall-submit"]');
       if (input?.getClientRects().length && button?.getClientRects().length && typeof ticket === "string" && ticket.length > 0) {

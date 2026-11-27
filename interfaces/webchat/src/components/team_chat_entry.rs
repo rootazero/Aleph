@@ -24,6 +24,7 @@ use crate::context::DashboardState;
 use crate::platform::wide::views::chat::state::{
     ChatMessage, ChatState, MemberStatus, TeamMemberView,
 };
+use crate::state::sessions::SessionMap;
 
 /// An agent entry returned by the backend (`agents.list`).
 #[allow(dead_code)]
@@ -107,9 +108,13 @@ pub(crate) fn team_history_item_to_message(index: usize, item: TeamMessageItem) 
 pub(crate) async fn enter_team_chat(
     dash: DashboardState,
     chat: ChatState,
+    sessions: SessionMap,
     known_agents: Option<Vec<AgentEntry>>,
     team_id: String,
 ) {
+    let epoch = dash.connection_epoch.get_untracked();
+    let from_conversation = sessions.active_conv();
+    let from_team = chat.team_id.get_untracked();
     // 1. Fetch team detail (members list).
     let detail = match TeamsApi::get(&dash, &team_id).await {
         Ok(d) => d,
@@ -118,6 +123,12 @@ pub(crate) async fn enter_team_chat(
             return;
         }
     };
+    if dash.connection_epoch.try_get_untracked() != Some(epoch)
+        || sessions.active_conv() != from_conversation
+        || chat.team_id.try_get_untracked() != Some(from_team)
+    {
+        return;
+    }
     // 2. Build id→AgentEntry map for name/emoji resolution.
     let agent_map: HashMap<String, AgentEntry> = known_agents
         .unwrap_or_default()
@@ -143,12 +154,17 @@ pub(crate) async fn enter_team_chat(
             }
         })
         .collect();
-    // 3. Enter team mode.
-    chat.clear_session();
-    chat.team_id.set(Some(team_id.clone()));
+    // 3. Park any direct conversation before projecting the group.
+    sessions.enter_team(chat, team_id.clone());
     chat.team_members.set(roster);
     // 4. Replay durable chat history as bubbles.
-    match TeamChatApi::history(&dash, &team_id).await {
+    let history = TeamChatApi::history(&dash, &team_id).await;
+    if dash.connection_epoch.try_get_untracked() != Some(epoch)
+        || chat.team_id.try_get_untracked().flatten().as_deref() != Some(team_id.as_str())
+    {
+        return;
+    }
+    match history {
         Ok(items) => {
             let messages: Vec<ChatMessage> = items
                 .into_iter()

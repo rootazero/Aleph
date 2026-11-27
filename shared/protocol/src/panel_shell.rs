@@ -98,10 +98,25 @@ pub enum PanelReply {
         request: u32,
         document: String,
     },
+    /// Turn launching at login on or off; the host answers with
+    /// [`ShellRequest::AutostartReply`] carrying the status read back after
+    /// the write.
+    AutostartSet {
+        request: u32,
+        document: String,
+        enabled: bool,
+    },
     CredentialRequest {
         request: u32,
         document: String,
         call: CredentialCall,
+    },
+    /// A link off the Panel's pages the user followed; the host decides
+    /// again whether it is one and hands it to the system browser or mail
+    /// app. No reply.
+    OpenExternal {
+        document: String,
+        url: String,
     },
 }
 
@@ -121,7 +136,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn autostart_is_a_document_bound_read_not_a_setter_or_target_query() {
+    fn autostart_request_is_a_document_bound_read_not_a_setter_or_target_query() {
         let document = "a".repeat(32);
         let request =
             serde_json::json!({"kind":"autostart-request", "request": 1, "document":document});
@@ -147,6 +162,42 @@ mod tests {
             bad["status"]["extra"] = serde_json::json!(true);
             assert!(serde_json::from_value::<ShellRequest>(bad).is_err());
         }
+    }
+
+    #[test]
+    fn open_external_carries_only_the_document_and_the_url() {
+        let document = "a".repeat(32);
+        let open = serde_json::json!({"kind":"open-external", "document":document, "url":"https://github.com/rootazero/Aleph"});
+        let parsed = serde_json::from_value::<PanelReply>(open.clone()).expect("open-external");
+        assert!(matches!(
+            &parsed,
+            PanelReply::OpenExternal { url, .. } if url == "https://github.com/rootazero/Aleph"
+        ));
+        assert_eq!(serde_json::to_value(&parsed).expect("serializes"), open);
+        let mut bad = open;
+        bad["target"] = serde_json::json!("_self");
+        assert!(serde_json::from_value::<PanelReply>(bad).is_err());
+    }
+
+    #[test]
+    fn autostart_set_carries_only_the_wanted_state() {
+        let document = "a".repeat(32);
+        let set = serde_json::json!({"kind":"autostart-set", "request": 1, "document":document, "enabled": true});
+        assert!(matches!(
+            serde_json::from_value::<PanelReply>(set.clone()),
+            Ok(PanelReply::AutostartSet { enabled: true, .. })
+        ));
+        for (key, value) in [
+            ("application", serde_json::json!("other")),
+            ("path", serde_json::json!("/bin/sh")),
+        ] {
+            let mut bad = set.clone();
+            bad[key] = value;
+            assert!(serde_json::from_value::<PanelReply>(bad).is_err());
+        }
+        let mut not_a_bool = set;
+        not_a_bool["enabled"] = serde_json::json!("yes");
+        assert!(serde_json::from_value::<PanelReply>(not_a_bool).is_err());
     }
 
     #[test]

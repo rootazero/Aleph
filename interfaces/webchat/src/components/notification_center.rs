@@ -96,11 +96,10 @@ pub fn NotificationCenter() -> impl IntoView {
         <Show when=move || bell_visible.get() fallback=|| ()>
             <button
                 type="button"
-                class="aleph-chrome-top aleph-no-drag \
+                class="aleph-chrome-top \
                        fixed right-3 z-[50] flex items-center justify-center \
                        h-7 w-7 rounded-full text-text-secondary hover:text-text-primary \
                        hover:bg-surface-raised transition-colors"
-                data-tauri-drag-region="false"
                 on:click=move |_| is_open.update(|v| *v = !*v)
                 aria-label=move || t_string!(use_i18n(), notifications.open_label).to_string()
                 title=move || t_string!(use_i18n(), notifications.open_label).to_string()
@@ -127,14 +126,12 @@ pub fn NotificationCenter() -> impl IntoView {
             // remains visible; we just want the dismiss affordance.
             <div
                 class="fixed inset-0 z-[54]"
-                data-tauri-drag-region="false"
                 on:click=move |_| is_open.set(false)
             />
             <div
                 class="fixed top-12 right-3 z-[55] w-[min(360px,calc(100vw-32px))] \
                        glass bg-surface-overlay/85 border border-border \
                        rounded-2xl shadow-2xl overflow-hidden animate-pop-in"
-                data-tauri-drag-region="false"
                 role="dialog"
                 aria-label=move || t_string!(use_i18n(), notifications.title).to_string()
             >

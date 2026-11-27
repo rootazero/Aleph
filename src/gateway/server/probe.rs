@@ -7,7 +7,9 @@
 
 use crate::sync_primitives::{Arc, Ordering};
 
-use aleph_protocol::gateway_probe::{Health, HealthStatus, Readiness};
+use aleph_protocol::gateway_probe::{
+    Health, HealthStatus, Readiness, PANEL_SHELL_HEADER, PANEL_SHELL_NSH_V1,
+};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
@@ -41,7 +43,11 @@ pub async fn handle_ready(State(state): State<Arc<GatewaySharedState>>) -> impl 
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    (status, Json(Readiness::new(ready, env!("ALEPH_VERSION"))))
+    (
+        status,
+        [(PANEL_SHELL_HEADER, PANEL_SHELL_NSH_V1)],
+        Json(Readiness::new(ready, env!("ALEPH_VERSION"))),
+    )
 }
 
 #[cfg(test)]
@@ -116,6 +122,7 @@ mod tests {
         let state = make_shared(false);
         let resp = handle_ready(State(state)).await.into_response();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(resp.headers()[PANEL_SHELL_HEADER], PANEL_SHELL_NSH_V1);
     }
 
     #[tokio::test]

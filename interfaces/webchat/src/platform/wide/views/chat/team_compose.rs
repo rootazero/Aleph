@@ -6,6 +6,7 @@ use crate::api::agents::AgentsApi;
 use crate::api::teams::TeamsApi;
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
+use crate::state::sessions::SessionMap;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -51,6 +52,7 @@ fn resolve_team_compose(
 pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    let sessions = expect_context::<SessionMap>();
     let i18n = use_i18n();
     let team_name = RwSignal::new(String::new());
     let selected: RwSignal<Vec<String>> = RwSignal::new(Vec::new());
@@ -108,8 +110,6 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
         spawn_local(async move {
             match TeamsApi::create(&dash, &name, "", &leader, &members, auto_name).await {
                 Ok(team_id) => {
-                    chat.clear_session();
-                    chat.team_id.set(Some(team_id));
                     // Resolve each agent's display name + emoji from the fetched
                     // agents list so a freshly-composed team's roster reads the
                     // same as a re-opened one (`chat_sidebar::on_open_group`
@@ -123,6 +123,7 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
                     let Some(agent_list) = agents.try_get_untracked() else {
                         return;
                     };
+                    sessions.enter_team(chat, team_id);
                     let identity_of = |id: &str| -> (String, Option<String>) {
                         agent_list
                             .iter()
