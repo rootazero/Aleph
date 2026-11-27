@@ -1,0 +1,66 @@
+.panel-thought-reader {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin-block: 6px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.reasoning-card-optic .panel-thought-reader {
+  padding: 0 12px 8px;
+}
+
+.panel-thought-button,
+.panel-thought-tools select {
+  max-width: 100%;
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface-raised);
+  color: var(--color-text-primary);
+}
+
+.panel-thought-button { justify-self: start; cursor: pointer; }
+.panel-thought-button:disabled { cursor: default; opacity: .55; }
+.panel-thought-button:focus-visible,
+.panel-thought-tools select:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
+.panel-thought-block {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface-sunken);
+}
+
+.panel-thought-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.panel-thought-columns h4 { font-weight: 600; }
+.panel-thought-columns p { margin-top: 3px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.panel-thought-tools,
+.panel-thought-tools label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 9px;
+}
+
+.panel-thought-tools span { overflow-wrap: anywhere; }
+
+@media (min-width: 641px) {
+  .panel-thought-bilingual:has(> div + div) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (pointer: coarse) {
+  .panel-thought-button,
+  .panel-thought-tools select { min-height: 40px; }
+}

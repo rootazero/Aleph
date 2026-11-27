@@ -1906,6 +1906,19 @@ impl DashboardState {
         self.send_rpc(method, params).await
     }
 
+    /// Send only on the connection the caller selected, without waiting for a replacement.
+    pub(crate) async fn rpc_call_at_epoch(
+        &self,
+        epoch: u64,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        if self.current_connection_epoch() != Some(epoch) {
+            return Err("Gateway connection changed".into());
+        }
+        self.send_rpc(method, params).await.map_err(|error| error.message)
+    }
+
     #[cfg(feature = "panel-modular")]
     pub fn select_panel_project(
         &self,

@@ -3,6 +3,7 @@ pub mod composer;
 pub mod context_gauge;
 pub(crate) mod context_vial;
 mod pixel_companion;
+mod thought_reader;
 pub mod dial_picker;
 pub mod events;
 pub mod exec_tier_picker;

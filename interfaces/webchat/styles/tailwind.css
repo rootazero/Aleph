@@ -2,6 +2,7 @@
 @import "./ios.css";
 @import "./context-vial.css";
 @import "./pixel-companion.css";
+@import "./thought-reader.css";
 
 /* Scan Leptos Rust source files for class names */
 @source "../src/**/*.rs";

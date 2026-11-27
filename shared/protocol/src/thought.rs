@@ -19,7 +19,7 @@ pub struct ThoughtBlockRef {
     pub block_id: ThoughtBlockId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TranslationEngine {
     Machine,
@@ -32,6 +32,55 @@ pub enum TranslationEngine {
 pub enum TranslationTarget {
     En,
     Zh,
+}
+
+/// An explicit request to translate one already-visible block.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ThoughtTranslationRequest {
+    pub block: ThoughtBlockRef,
+    pub engine: TranslationEngine,
+    pub target: TranslationTarget,
+    pub expected_destination: String,
+    pub request_id: String,
+}
+
+/// Destinations the connected caller can explicitly approve per block.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ThoughtTranslationEngines {
+    pub machine: Option<String>,
+    pub ai: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ThoughtTranslationCancel {
+    pub request_id: String,
+}
+
+pub const THOUGHT_TRANSLATION_TOPIC: &str = "thought.translation.update";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ThoughtTranslationEvent {
+    pub request_id: String,
+    pub update: ThoughtTranslationUpdate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ThoughtTranslationUpdate {
+    Delta { text: String },
+    Completed { text: String },
+    Failed { code: ThoughtTranslationFailure },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ThoughtTranslationFailure {
+    Unavailable,
+    Denied,
+    Cancelled,
+    Timeout,
+    TooLarge,
+    Failed,
 }
 
 #[cfg(test)]

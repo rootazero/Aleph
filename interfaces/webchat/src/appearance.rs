@@ -204,7 +204,7 @@ fn storage() -> Option<Storage> {
 }
 
 /// Persist a key, or remove it when `value` is `None` (i.e. the default).
-fn persist(key: &str, value: Option<&str>) {
+pub(crate) fn persist(key: &str, value: Option<&str>) {
     if let Some(s) = storage() {
         match value {
             Some(v) => {
@@ -221,7 +221,7 @@ fn persist(key: &str, value: Option<&str>) {
 // Reads
 // ---------------------------------------------------------------------------
 
-fn read_key(key: &str) -> Option<String> {
+pub(crate) fn read_key(key: &str) -> Option<String> {
     storage().and_then(|s| s.get_item(key).ok().flatten())
 }
 

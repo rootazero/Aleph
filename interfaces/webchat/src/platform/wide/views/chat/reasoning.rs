@@ -101,6 +101,9 @@ pub(super) fn ReasoningPanel() -> impl IntoView {
                                     max-h-64 overflow-y-auto border-t border-border/60">
                             {move || chat.reasoning_text.get()}
                         </pre>
+                        {move || chat.active_run_id.get().map(|run_id| view! {
+                            <super::thought_reader::ThoughtReader run_id=run_id />
+                        })}
                     </Show>
                     <Show when=move || !expanded.get() && active()>
                         <div class="px-3 pb-2.5 pt-0.5 text-xs leading-relaxed text-text-tertiary

@@ -120,6 +120,9 @@ pub(super) fn ChatHero() -> impl IntoView {
 #[must_use]
 pub(crate) fn MessageList() -> impl IntoView {
     let chat = expect_context::<ChatState>();
+    if let Some(dash) = use_context::<crate::context::DashboardState>() {
+        super::thought_reader::provide_thought_reader(chat, dash);
+    }
     let i18n = use_i18n();
     let scroll_ref = NodeRef::<leptos::html::Div>::new();
 
@@ -878,6 +881,14 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
     let run_for_cost = message_run_id.clone().unwrap_or_default();
     let run_for_halt = message_run_id.clone().unwrap_or_default();
     let run_for_uncertainty = message_run_id.clone().unwrap_or_default();
+    let thought_run = StoredValue::new(message.with_untracked(|message| {
+        Some(message.as_ref()?.id.strip_prefix("assistant-")?.to_owned())
+    }));
+    let thought_reader = move || (!is_streaming() && !is_intermediate()).then(|| {
+        thought_run.get_value().map(|run_id| view! {
+            <super::thought_reader::ThoughtReader run_id=run_id />
+        })
+    }).flatten();
 
     // Reactive: a message that streams into an assistant final-answer bubble
     // can gain tool calls after this row first mounts (the pre-Task-4 code
@@ -1264,6 +1275,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                                 {cost_view}
                                 {halt_view}
                                 {uncertainty_view}
+                                {thought_reader}
                             </div>
                         </div>
                     </div>
@@ -1345,6 +1357,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                             {cost_view}
                             {halt_view}
                             {uncertainty_view}
+                            {thought_reader}
                         </div>
                     </div>
                 }.into_any()
