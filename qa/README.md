@@ -1849,6 +1849,10 @@ widened a narrowly-scoped change into that question. Tracked in
   / Gateway QA checks actual provider tool results, not only RPC acknowledgements: atomic typed submission,
   cancellation without partial answers, and stale rejection. It also covers sequential webhook text and immediate
   refusal in unattended runs. It does not exercise a browser, TUI, or third-party channel adapter.
+- **TSX Panel `ask_user`** — `just panel-tsx-test` 覆盖预览独立于选择、原样自填、敏感答案遮蔽、请求推进、取消及重连。用 `just panel-tsx-bundle` 和 `just panel-tsx-web` 构建两端。Web 验收将 `panel_web_dir` 指向 `out-web/Aleph Panel`（含 `index.html`），用隔离 Gateway 的 HTTPS `/v1/panel/` 打开问卷，以 mock provider 实际收到的工具结果核对选项下标和字面文本；断连期间从另一个客户端结束问卷，恢复连接后检查旧卡是否清除。
+  / Run `just panel-tsx-test` for preview, exact custom text, secret review, cursor advancement, cancellation, and reconnect. Build both packages with `just panel-tsx-bundle` and `just panel-tsx-web`. Serve `out-web/Aleph Panel` (which contains `index.html`) through an isolated Gateway's HTTPS `/v1/panel/` and compare the selected indices and literal text in the mock provider's tool result. End a second questionnaire from another client while the browser is disconnected and confirm that reconnect clears the card.
+  **2026-11-27 验收 / Verification:** NSH 桌面 bundle 与 Web 包均构建成功。Chrome 经真实 HTTPS Gateway 验证了宽屏提交与 390 px 视口预览、取消。工具收到 `[1, 0]` 和独立的文本 `1`，断线后重连读到空待答列表，未重发提交。
+  / Both packages built. Chrome exercised submission at desktop width and preview and cancellation at a 390 px viewport against an HTTPS Gateway. The tool received `[1, 0]` and literal `1`. After reconnect the pending list was empty, with one resolve call from the original tab.
 - **`browser_managed`** — 改 `src/browser/` 或 `src/builtin_tools/browser_tools/` 前跑。
   `{open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload,attach}`——**每个动词都有效果断言**。
   **两条 driver 轴，别混淆**：① 场景本身覆盖 `managed`（playwright-cli）与 `existing_session`

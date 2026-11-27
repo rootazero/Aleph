@@ -560,6 +560,10 @@ Rule of thumb: `ctx_search` = "what did that tool print?", `recall_events` =
 
 `ask_user` uses the existing scoped tool registration, not a separate interaction capability. It waits for an answer, not execution authorization. Do not mix the flat and grouped arguments. Empty prompts, duplicate question IDs, and ambiguous option labels fail before the call parks. The current Panel and TUI can review and submit outstanding answers together or explicitly cancel and discard recorded answers. Channel replies stay sequential. Answering does not grant execution or widen tool scope. See [FEATURE_LOCATOR §5.3](FEATURE_LOCATOR.md#53-llm-与用户互动-llm-user-interaction) for the response and compatibility contract.
 
+选项可传字符串，或传带 `label`、可选 `description` 和可选 `preview` 的对象。TSX Panel 按需展开 Markdown 预览。每次调用的预览合计最多占 16 KiB UTF-8，纯空白预览视为省略。
+
+Each choice accepts a string or an object with `label`, optional `description`, and optional `preview`. The TSX Panel expands Markdown previews on demand. Nonblank previews share a 16 KiB UTF-8 limit per call. Whitespace-only previews are omitted.
+
 ---
 
 ## Tool Definition
