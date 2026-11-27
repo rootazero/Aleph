@@ -1,8 +1,7 @@
 """Packages the app with scripts/nsh_package.sh and checks what ships.
 
-macOS only: the bundle must carry aleph-server, still verify after the
-re-sign, and archive without AppleDouble files. Packaging takes minutes the
-first time (the nsh runner is compiled); later runs reuse its build.
+The macOS integration tests inspect the signed bundle and archive. The
+Windows regression uses stub tools to exercise installer replacement.
 """
 
 import json
@@ -29,6 +28,44 @@ def tiny_executable(path: Path) -> None:
         input=b"int main(void) { return 0; }\n",
         check=True,
     )
+
+
+@unittest.skipIf(sys.platform == "win32", "the fixture supplies Unix executable stubs")
+class WindowsInstaller(unittest.TestCase):
+    def test_only_rebuilt_installer_is_left_at_the_release_path(self):
+        with tempfile.TemporaryDirectory(prefix="aleph-inno-") as work:
+            root = Path(work)
+            tools = root / "tools"
+            tools.mkdir()
+            system = root / "System32"
+            system.mkdir()
+            out = root / "release output"
+            server = root / "aleph-server.exe"
+            server.write_text("server")
+            stubs = {
+                tools / "nsh": 'out=${@: -1}\nmkdir -p "$out/Aleph"\ntouch "$out/Aleph.iss"\necho stale > "$out/Aleph-setup.exe"',
+                tools / "cygpath": 'printf "%s\\n" "$2"',
+                system / "tar.exe": 'test -f Aleph/aleph-server.exe',
+                tools / "ISCC.exe": '\n'.join([
+                    'test "$MSYS2_ARG_CONV_EXCL" = /O',
+                    'test "$1" = "/O$PWD"',
+                    'test "$2" = Aleph.iss',
+                    'test ! -e Aleph-setup.exe',
+                    'cp Aleph/aleph-server.exe Aleph-setup.exe',
+                ]),
+            }
+            for path, script in stubs.items():
+                path.write_text(f"#!/usr/bin/env bash\nset -eu\n{script}\n")
+                path.chmod(0o755)
+            result = subprocess.run(
+                ["bash", str(SCRIPT), "--target", "windows", "--out", str(out),
+                 "--server", str(server)],
+                env={**os.environ, "PATH": f"{tools}:{os.environ['PATH']}",
+                     "SYSTEMROOT": str(root)},
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((out / "Aleph-setup.exe").read_bytes(), server.read_bytes())
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the macOS package is checked on macOS")

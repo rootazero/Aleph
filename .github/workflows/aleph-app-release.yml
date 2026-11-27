@@ -118,6 +118,23 @@ jobs:
           fi
           cp "$server" "target/release-assets/aleph-server-$TRIPLE$SUFFIX"
 
+      - name: Verify the Windows installer payload
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = 'target/release-assets/Aleph-setup.exe'
+          if (Test-Path $setup) {
+            $install = Join-Path $env:RUNNER_TEMP 'aleph-installer-smoke'
+            $process = Start-Process $setup -ArgumentList @(
+              '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOCLOSEAPPLICATIONS',
+              "/DIR=`"$install`""
+            ) -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "Aleph setup failed ($($process.ExitCode))" }
+            $expected = (Get-FileHash 'target/release-assets/aleph-server-x86_64-pc-windows-msvc.exe').Hash
+            $actual = (Get-FileHash (Join-Path $install 'aleph-server.exe')).Hash
+            if ($actual -ne $expected) { throw 'Aleph setup installed a different server binary' }
+          }
+
       - uses: actions/upload-artifact@v7
         with:
           name: aleph-${{ matrix.platform }}
