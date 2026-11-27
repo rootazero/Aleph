@@ -1,7 +1,7 @@
 //! The bundled local server, started in the background so the window can
 //! show progress, and a failure the user can retry instead of an exit.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use tokio::sync::watch;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -14,8 +14,8 @@ pub(crate) enum ServerPhase {
 /// Brings the local server up; blocks until it is ready or refused.
 pub(crate) type Launcher = Box<dyn Fn() -> Result<(), String> + Send + Sync>;
 
-/// Stops the local server; blocks until its port is closed.
-pub(crate) type Stopper = Box<dyn Fn() + Send + Sync>;
+/// Stops the owned child and reports whether there was one.
+pub(crate) type Stopper = Box<dyn Fn() -> Result<bool, String> + Send + Sync>;
 
 #[derive(Clone)]
 pub(crate) struct LocalService {
@@ -24,7 +24,7 @@ pub(crate) struct LocalService {
     phase: Arc<watch::Sender<ServerPhase>>,
     /// Whether an attempt is in flight. Held while the phase changes, so an
     /// attempt that settles cannot overwrite the start of a newer one.
-    running: Arc<Mutex<bool>>,
+    running: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl LocalService {
@@ -33,42 +33,67 @@ impl LocalService {
             launcher: Arc::new(launcher),
             stopper: Arc::new(stopper),
             phase: Arc::new(watch::Sender::new(ServerPhase::Starting)),
-            running: Arc::new(Mutex::new(false)),
+            running: Arc::new((Mutex::new(false), Condvar::new())),
         }
     }
 
     /// The `aleph-server` next to this executable, as the packaged app
     /// ships it; a compatible server already listening is used as it is.
     pub(crate) fn bundled() -> Self {
+        use aleph_desktop_host::local_server::{ensure_compatible_ready, BundledServer};
+
+        let owned = Arc::new(Mutex::new(None::<BundledServer>));
+        let child = owned.clone();
         Self::new(
-            Box::new(|| {
+            Box::new(move || {
                 tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
                     .map_err(|_| "could not initialize the local service runtime".to_owned())?
-                    .block_on(aleph_desktop_host::local_server::ensure_compatible_ready())
+                    .block_on(ensure_compatible_ready(&mut child.lock().unwrap()))
             }),
-            Box::new(stop_bundled),
+            Box::new(move || {
+                let mut owned = owned.lock().unwrap();
+                let Some(server) = owned.as_mut() else {
+                    return Ok(false);
+                };
+                server.stop()?;
+                *owned = None;
+                Ok(true)
+            }),
         )
     }
 
-    /// Stops a local server this shell admitted. This must not turn an
-    /// incompatible listener or a rejected startup into permission to stop it.
-    /// Call off the engine thread because the stop waits for the port to close.
-    pub(crate) fn stop(&self) -> bool {
-        if self.phase() != ServerPhase::Ready {
-            return false;
+    /// Waits for any in-flight startup before stopping the child. Call off the
+    /// UI thread. A reused listener has no child handle and is left running.
+    pub(crate) fn stop(&self) -> Result<bool, String> {
+        self.stop_or_restart(false)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn restart_owned(&self) -> Result<bool, String> {
+        self.stop_or_restart(true)
+    }
+
+    fn stop_or_restart(&self, restart: bool) -> Result<bool, String> {
+        let (attempt, settled) = &*self.running;
+        let active = attempt.lock().unwrap();
+        let _active = settled.wait_while(active, |active| *active).unwrap();
+        let stopped = (self.stopper)()?;
+        if stopped && restart {
+            self.phase.send_replace(ServerPhase::Starting);
+            let result = (self.launcher)();
+            self.publish_outcome(&result);
+            result?;
         }
-        (self.stopper)();
-        true
+        Ok(stopped)
     }
 
     /// Starts an attempt in the background, unless one is in flight.
     pub(crate) fn start(&self) {
-        let mut running = self
-            .running
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+        let Ok(mut running) = self.running.0.try_lock() else {
+            return;
+        };
         if *running {
             return;
         }
@@ -79,10 +104,11 @@ impl LocalService {
             .name("aleph-local-service".into())
             .spawn(move || {
                 let outcome = (service.launcher)();
-                service.settle(match outcome {
-                    Ok(()) => ServerPhase::Ready,
-                    Err(error) => ServerPhase::Failed(error),
-                });
+                let (attempt, settled) = &*service.running;
+                let mut active = attempt.lock().unwrap();
+                service.publish_outcome(&outcome);
+                *active = false;
+                settled.notify_all();
             });
         if attempt.is_err() {
             *running = false;
@@ -92,13 +118,11 @@ impl LocalService {
         }
     }
 
-    fn settle(&self, phase: ServerPhase) {
-        let mut running = self
-            .running
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        *running = false;
-        self.phase.send_replace(phase);
+    fn publish_outcome(&self, outcome: &Result<(), String>) {
+        self.phase.send_replace(match outcome {
+            Ok(()) => ServerPhase::Ready,
+            Err(error) => ServerPhase::Failed(error.clone()),
+        });
     }
 
     pub(crate) fn phase(&self) -> ServerPhase {
@@ -108,32 +132,6 @@ impl LocalService {
     /// Every phase change from now on, starting with the current phase.
     pub(crate) fn subscribe(&self) -> watch::Receiver<ServerPhase> {
         self.phase.subscribe()
-    }
-}
-
-/// `aleph-server stop` for the server next to this executable, then waits
-/// for the port to close so a later start does not find the old server.
-fn stop_bundled() {
-    use aleph_desktop_host::local_server::{resolve_daemon_binary, wait_until_port_closed};
-    let Some(server) = resolve_daemon_binary() else {
-        eprintln!("cannot stop the local server: aleph-server not found");
-        return;
-    };
-    match std::process::Command::new(&server).arg("stop").output() {
-        Ok(output) if output.status.success() => {}
-        Ok(output) => eprintln!(
-            "aleph-server stop exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ),
-        Err(error) => eprintln!("aleph-server stop failed: {error}"),
-    }
-    match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime.block_on(wait_until_port_closed()),
-        Err(error) => eprintln!("could not wait for the local server to stop: {error}"),
     }
 }
 
@@ -168,7 +166,7 @@ mod tests {
                 let _ = gate.lock().unwrap().recv();
                 result.clone()
             }),
-            Box::new(|| {}),
+            Box::new(|| Ok(false)),
         );
         (service, release, calls)
     }
@@ -184,8 +182,10 @@ mod tests {
 
     #[test]
     fn failure_is_reported_not_exited() {
-        let service =
-            LocalService::new(Box::new(|| Err("port 18790 busy".into())), Box::new(|| {}));
+        let service = LocalService::new(
+            Box::new(|| Err("port 18790 busy".into())),
+            Box::new(|| Ok(false)),
+        );
         service.start();
         assert_eq!(
             settled(&service),
@@ -202,7 +202,7 @@ mod tests {
                 counted.fetch_add(1, Ordering::SeqCst);
                 Err("port 18790 busy".into())
             }),
-            Box::new(|| {}),
+            Box::new(|| Ok(false)),
         );
         service.start();
         assert!(matches!(settled(&service), ServerPhase::Failed(_)));
@@ -223,15 +223,36 @@ mod tests {
     }
 
     #[test]
-    fn an_unadmitted_listener_is_never_stopped() {
-        let service = LocalService::new(
-            Box::new(|| Err("incompatible local Panel".into())),
-            Box::new(|| panic!("an unadmitted listener must not be stopped")),
-        );
-        service.stop();
+    fn reused_ready_listener_does_not_grant_stop() {
+        let (service, release, _) = gated(Ok(()));
         service.start();
-        assert!(matches!(settled(&service), ServerPhase::Failed(_)));
-        service.stop();
+        release.send(()).unwrap();
+        assert_eq!(settled(&service), ServerPhase::Ready);
+        assert!(!service.stop().unwrap());
+    }
+
+    #[test]
+    fn stop_waits_for_startup_and_propagates_stop_failure() {
+        let (release, gate) = mpsc::channel();
+        let gate = Mutex::new(gate);
+        let service = LocalService::new(
+            Box::new(move || {
+                gate.lock()
+                    .unwrap()
+                    .recv()
+                    .map_err(|error| error.to_string())
+            }),
+            Box::new(|| Err("shutdown failed".into())),
+        );
+        service.start();
+        let (done, outcome) = mpsc::channel();
+        std::thread::spawn(move || done.send(service.stop()).unwrap());
+        assert!(outcome.recv_timeout(Duration::from_millis(30)).is_err());
+        release.send(()).unwrap();
+        assert_eq!(
+            outcome.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Err("shutdown failed".into())
+        );
     }
 
     #[test]
@@ -242,11 +263,12 @@ mod tests {
             Box::new(|| Ok(())),
             Box::new(move || {
                 counted.fetch_add(1, Ordering::SeqCst);
+                Ok(true)
             }),
         );
         service.start();
         assert_eq!(settled(&service), ServerPhase::Ready);
-        service.stop();
+        assert!(service.stop().unwrap());
         assert_eq!(stops.load(Ordering::SeqCst), 1);
         service.start();
         assert_eq!(settled(&service), ServerPhase::Ready);

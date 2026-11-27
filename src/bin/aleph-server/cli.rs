@@ -31,6 +31,10 @@ pub struct Args {
     #[arg(long)]
     pub bundled_content_only: bool,
 
+    /// Accept an explicit shutdown request on the desktop host’s private stdin pipe.
+    #[arg(long, hide = true, conflicts_with = "daemon")]
+    pub desktop_shutdown_stdin: bool,
+
     /// PID file path (for daemon mode)
     #[arg(long, default_value = DEFAULT_PID_FILE)]
     pub pid_file: String,

@@ -625,50 +625,33 @@ def collect_process(argv, cwd, env, qa_run_id, nonce, surface, gateway, prefix, 
 
 def ensure_launchservices_bundle(repo_root, surface, target=None):
     launcher_root = Path.home() / ".phase9-native-launchers"
-    if surface == "tauri":
-        if target is None:
-            raise ValueError("tauri_bundle_requires_target")
-        target = Path(target)
-        source_bundle = target if target.suffix == ".app" else target.parent / "bundle/macos/Aleph.app"
-        source_executable = source_bundle / "Contents" / "MacOS" / "Aleph"
-        if not source_bundle.is_dir() or not source_executable.is_file():
-            raise ValueError(f"tauri_bundle_missing_executable:{source_bundle}")
-        binary = source_executable if target.suffix == ".app" else target
-        identity = file_sha256(binary)[:12]
-        bundle = launcher_root / f"phase9-tauri-{identity}.app"
-        if not bundle.exists():
-            shutil.copytree(source_bundle, bundle)
-        executable = bundle / "Contents" / "MacOS" / "Aleph"
-        shutil.copy2(binary, executable)
-    else:
-        bundle = launcher_root / "phase9-nsh-probe.app"
-        executable = bundle / "Contents" / "MacOS" / "Phase9Launcher"
-        executable.parent.mkdir(parents=True, exist_ok=True)
-        compiled = subprocess.run(["/usr/bin/clang", "-O2", "-Wall", "-Wextra", "-Werror",
-                                  str(repo_root / "qa/phase9_app_launch_wrapper.c"), "-o", str(executable)],
-                                 capture_output=True, text=True, timeout=30)
-        if compiled.returncode:
-            raise ValueError(f"phase9_wrapper_compile_failed:{compiled.stderr.strip()}")
+    bundle = launcher_root / "phase9-nsh-probe.app"
+    executable = bundle / "Contents" / "MacOS" / "Phase9Launcher"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    compiled = subprocess.run(["/usr/bin/clang", "-O2", "-Wall", "-Wextra", "-Werror",
+                              str(repo_root / "qa/phase9_app_launch_wrapper.c"), "-o", str(executable)],
+                             capture_output=True, text=True, timeout=30)
+    if compiled.returncode:
+        raise ValueError(f"phase9_wrapper_compile_failed:{compiled.stderr.strip()}")
     contents = bundle / "Contents"
-    if surface == "nsh":
-        if target is None:
-            raise ValueError("nsh_bundle_requires_target")
-        shutil.copy2(target, contents / "MacOS" / "NativeShell")
-        contents.mkdir(parents=True, exist_ok=True)
-        name = "Aleph NSH Phase9 Probe"
-        with (contents / "Info.plist").open("wb") as stream:
-            plistlib.dump({"CFBundleExecutable": executable.name, "CFBundleIdentifier": f"org.aleph.phase9.{surface}.probe",
-                           "CFBundleName": name, "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "0.1",
-                           "CFBundleVersion": "0.1", "LSMinimumSystemVersion": "13.3", "NSHighResolutionCapable": True,
-                           "NSMicrophoneUsageDescription": "Controlled Phase9 Panel runtime probe.",
-                           "NSLocalNetworkUsageDescription": "Controlled Phase9 Panel runtime probe.",
-                           "NSAppTransportSecurity": {"NSAllowsArbitraryLoads": True}}, stream, sort_keys=True)
+    if target is None:
+        raise ValueError("nsh_bundle_requires_target")
+    shutil.copy2(target, contents / "MacOS" / "NativeShell")
+    contents.mkdir(parents=True, exist_ok=True)
+    name = "Aleph NSH Phase9 Probe"
+    with (contents / "Info.plist").open("wb") as stream:
+        plistlib.dump({"CFBundleExecutable": executable.name, "CFBundleIdentifier": f"org.aleph.phase9.{surface}.probe",
+                       "CFBundleName": name, "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "0.1",
+                       "CFBundleVersion": "0.1", "LSMinimumSystemVersion": "13.3", "NSHighResolutionCapable": True,
+                       "NSMicrophoneUsageDescription": "Controlled Phase9 Panel runtime probe.",
+                       "NSLocalNetworkUsageDescription": "Controlled Phase9 Panel runtime probe.",
+                       "NSAppTransportSecurity": {"NSAllowsArbitraryLoads": True}}, stream, sort_keys=True)
     signed = subprocess.run(["/usr/bin/codesign", "--force", "--deep", "--sign", "-", str(bundle)],
                             capture_output=True, text=True, timeout=30)
     if signed.returncode:
         raise ValueError(f"phase9_wrapper_sign_failed:{signed.stderr.strip()}")
     provenance = {"source": str(target), "source_sha256": file_sha256(target),
-                  "executable": str(bundle / "Contents/MacOS" / ("Aleph" if surface == "tauri" else "NativeShell")),
+                  "executable": str(bundle / "Contents/MacOS" / "NativeShell"),
                   "signing": "codesign --force --deep --sign -"}
     provenance["executable_sha256"] = file_sha256(provenance["executable"])
     bundle.with_suffix(".source.json").write_text(json.dumps(provenance, indent=2) + "\n")
@@ -1134,8 +1117,8 @@ def export_parity(tauri, nsh, output, run_id, allow_protocol_fixture=False):
     return {"exit_code": result.returncode, "receipt": str(receipt), "result": json.loads(receipt.read_text())}
 
 
-def launch_native_surfaces(repo_root, target_dir, fixture_root, receipt, gateway_receipt, timeout, runs, selected_surface=None):
-    """Launch Tauri first, then NSH against one explicitly isolated Gateway."""
+def launch_native_surfaces(repo_root, target_dir, fixture_root, receipt, gateway_receipt, timeout, runs):
+    """Launch NSH against an explicitly isolated Gateway."""
     gateway_path = gateway_receipt or fixture_root / "gateway.json"
     if not gateway_path.is_file():
         return {"status": "BLOCKED", "reason": "isolated_gateway_receipt_missing", "path": str(gateway_path)}
@@ -1151,48 +1134,35 @@ def launch_native_surfaces(repo_root, target_dir, fixture_root, receipt, gateway
     results = []
     output = receipt.parent / (receipt.stem + "-output")
     output.mkdir(parents=True, exist_ok=True)
-    surfaces = [(surface, binary) for surface, binary in [("tauri", "aleph-desktop-shell"), ("nsh", "aleph-nsh-shell")]
-                if selected_surface is None or surface == selected_surface]
-    for surface, binary in surfaces:
-        executable = target_dir / "debug" / binary
-        if not executable.is_file():
-            return {"status": "BLOCKED", "reason": "native_binary_missing", "path": str(executable), "runs": results}
-        bundle = ensure_launchservices_bundle(repo_root, surface, executable)
-        for index in range(runs):
-            qa_id, nonce = uuid.uuid4().hex, os.urandom(32).hex()
-            with tempfile.TemporaryDirectory(prefix="aleph-shell-qa-", dir=Path(tempfile.gettempdir()).resolve()) as directory:
-                root = Path(directory).resolve()
-                (root / ".qa-owned").write_text(nonce + "\n")
-                env = {"ALEPH_PANEL_QA_RUN_ID": qa_id, "ALEPH_PANEL_QA_MESSAGE": scenario["message"]}
-                argv = [str(executable)]
-                if surface == "tauri":
-                    (root / ".aleph").mkdir()
-                    (root / ".aleph/.desktop-shell-panel-target").write_text(gateway["url"])
-                    argv += ["--qa-root", str(root), "--qa-nonce", nonce]
-                else:
-                    env |= {"ALEPH_NSH_QA_URL": gateway["url"], "ALEPH_NSH_QA_NONCE": nonce}
-                document = collect_launchservices_process(argv, repo_root / "desktop" / ("shell" if surface == "tauri" else "nsh-shell"),
-                                                          env, qa_id, nonce, surface, gateway,
-                                                          output / f"{surface}-{index}", timeout, bundle)
-            document["fixture_cleanup"] = not root.exists()
-            document_path = output / f"{surface}-{index}.json"
-            document_path.write_text(json.dumps(document, indent=2) + "\n")
-            try:
-                result = evaluate_runtime(document)
-            except ValueError as error:
-                result = {"status": "FAIL", "reason": str(error)}
-            result["runtime_document"] = str(document_path)
-            results.append(result)
-            if result["status"] != "PASS":
-                break
-    status = "PASS" if len(results) == runs * len(surfaces) and all(r["status"] == "PASS" for r in results) else "NOT_CLOSED"
-    parity = {"status": "OPEN"}
-    if status == "PASS" and runs == 40 and selected_surface is None:
+    surface = "nsh"
+    executable = target_dir / "debug" / "aleph-nsh-shell"
+    if not executable.is_file():
+        return {"status": "BLOCKED", "reason": "native_binary_missing", "path": str(executable), "runs": results}
+    bundle = ensure_launchservices_bundle(repo_root, surface, executable)
+    for index in range(runs):
+        qa_id, nonce = uuid.uuid4().hex, os.urandom(32).hex()
+        with tempfile.TemporaryDirectory(prefix="aleph-shell-qa-", dir=Path(tempfile.gettempdir()).resolve()) as directory:
+            root = Path(directory).resolve()
+            (root / ".qa-owned").write_text(nonce + "\n")
+            env = {"ALEPH_PANEL_QA_RUN_ID": qa_id, "ALEPH_PANEL_QA_MESSAGE": scenario["message"]}
+            argv = [str(executable)]
+            env |= {"ALEPH_NSH_QA_URL": gateway["url"], "ALEPH_NSH_QA_NONCE": nonce}
+            document = collect_launchservices_process(argv, repo_root / "desktop/nsh-shell",
+                                                      env, qa_id, nonce, surface, gateway,
+                                                      output / f"{surface}-{index}", timeout, bundle)
+        document["fixture_cleanup"] = not root.exists()
+        document_path = output / f"{surface}-{index}.json"
+        document_path.write_text(json.dumps(document, indent=2) + "\n")
         try:
-            parity = export_parity(results[:40], results[40:], output, receipt.stem)
+            result = evaluate_runtime(document)
         except ValueError as error:
-            parity = {"status": "BLOCKED", "reason": str(error)}
-    return {"status": status, "runs": results, "performance": parity}
+            result = {"status": "FAIL", "reason": str(error)}
+        result["runtime_document"] = str(document_path)
+        results.append(result)
+        if result["status"] != "PASS":
+            break
+    status = "PASS" if len(results) == runs and all(r["status"] == "PASS" for r in results) else "NOT_CLOSED"
+    return {"status": status, "runs": results, "performance": {"status": "OPEN"}}
 
 
 def main():
@@ -1204,7 +1174,7 @@ def main():
     parser.add_argument("--gateway-receipt", type=Path)
     parser.add_argument("--gateway-binary", type=Path, help="Own an isolated production Gateway for this invocation")
     parser.add_argument("--timeout-seconds", type=float, default=60)
-    parser.add_argument("--surface", choices=["tauri", "nsh"], help="Collect one surface against a fresh isolated Gateway")
+    parser.add_argument("--surface", choices=["nsh"], help="Collect one surface against a fresh isolated Gateway")
     parser.add_argument("--runs", type=int, choices=[1, 40], default=1)
     parser.add_argument("--receipt", type=Path, required=True)
     args = parser.parse_args()
@@ -1219,7 +1189,7 @@ def main():
             gateway_output = (args.receipt.parent / (args.receipt.stem + "-gateway")).resolve()
             with isolated_gateway(args.gateway_binary.resolve(), gateway_output) as gateway_receipt:
                 result = launch_native_surfaces(args.repo_root.resolve(), args.target_dir.resolve(), args.fixture_root.resolve(), args.receipt,
-                                               gateway_receipt, args.timeout_seconds, args.runs, args.surface)
+                                               gateway_receipt, args.timeout_seconds, args.runs)
             cleanup = json.loads((gateway_output / "gateway-cleanup.json").read_text())
             result["gateway_cleanup"] = cleanup
             if not cleanup["fixture_removed"] or any(child["forced"] for child in cleanup["children"]):
@@ -1227,7 +1197,7 @@ def main():
         else:
             result = evaluate_runtime(json.loads(args.runtime_json.read_text())) if args.runtime_json else launch_native_surfaces(
                 args.repo_root.resolve(), args.target_dir.resolve(), args.fixture_root.resolve(), args.receipt,
-                args.gateway_receipt, args.timeout_seconds, args.runs, args.surface)
+                args.gateway_receipt, args.timeout_seconds, args.runs)
     except (ValueError, OSError, RuntimeError) as error:
         result = {"status": "FAIL", "reason": str(error)}
     finally:

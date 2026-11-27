@@ -25,7 +25,7 @@ use nsh_core::prelude::{
     WebNavigation,
 };
 #[cfg(feature = "embedded-core")]
-use nsh_core::prelude::{when, Interactive};
+use nsh_core::prelude::{when, Interactive, Signal};
 use nsh_updater::Available;
 use std::cell::{Cell, RefCell};
 use std::io::Write;
@@ -71,7 +71,12 @@ fn injected_script(launch: &launch::Launch, bridge_prefix: &str) -> String {
 pub fn App() -> impl IntoElement {
     let launch = launch::current();
     let switch = Switch {
-        view: signal(connect_form::initial_view(&launch.settings.target)),
+        view: signal(connect_form::initial_view(
+            &launch.settings.target,
+            launch.rejected_address.clone(),
+        )),
+        request: signal(0),
+        operation: signal(false),
         home: std::env::home_dir(),
         #[cfg(feature = "embedded-core")]
         service: LocalService::bundled(),
@@ -204,8 +209,13 @@ pub fn App() -> impl IntoElement {
     if launch.qa.is_some() {
         return panel(&launch, bridge_window);
     }
-    if let target @ aleph_client::ConnectionTarget::Remote(_) = &launch.settings.target {
-        switch.probe_startup(target.clone());
+    match switch.view.get_untracked() {
+        View::Starting => {
+            #[cfg(feature = "embedded-core")]
+            switch.service.start();
+        }
+        View::Checking => switch.probe_startup(launch.settings.target.clone()),
+        _ => {}
     }
     let shown = switch.view;
     view()
@@ -215,15 +225,21 @@ pub fn App() -> impl IntoElement {
             View::Checking => status_screen()
                 .child(muted("正在连接服务器…"))
                 .into_element(),
-            View::Connect { error, back } => {
-                connect_form::form(error, back.map(|view| *view), switch.clone())
-            }
+            View::Connect {
+                address,
+                error,
+                back,
+            } => connect_form::form(address, error, back.map(|view| *view), switch.clone()),
             View::Panel { target } => match HostSettings::for_target(target, None) {
                 Ok(settings) => panel(
-                    &launch::Launch { settings, qa: None },
+                    &launch::Launch {
+                        settings,
+                        qa: None,
+                        rejected_address: None,
+                    },
                     bridge_window.clone(),
                 ),
-                Err(error) => connect_form::form(Some(error), None, switch.clone()),
+                Err(error) => connect_form::form(String::new(), Some(error), None, switch.clone()),
             },
         }))
         .into_element()
@@ -232,19 +248,29 @@ pub fn App() -> impl IntoElement {
 /// Quits; when the window shows this computer's server, stops it first. A
 /// QA run's server is not the bundled one, so a QA run only quits.
 fn quit_and_stop(switch: &Switch, qa: bool) {
-    #[cfg(all(feature = "tsx-panel", target_os = "macos"))]
-    crate::panel_surface::set_voice_visible(false);
-    #[cfg(feature = "embedded-core")]
-    if !qa && switch.current_target() == ConnectionTarget::Local {
-        let service = switch.service.clone();
-        spawn(async move {
-            let _ = blocking(move || service.stop()).await;
-            quit();
-        });
+    if !switch.begin_operation() {
         return;
     }
-    let _ = (switch, qa);
-    quit();
+    let switch = switch.clone();
+    spawn(async move {
+        #[cfg(feature = "embedded-core")]
+        let stopped = if qa {
+            Ok(())
+        } else {
+            switch.stop_local().await
+        };
+        #[cfg(feature = "embedded-core")]
+        if let Err(error) = stopped {
+            switch.operation.set(false);
+            eprintln!("cannot quit and stop Aleph: {error}");
+            notify("aleph.local-stop", "本机服务未停止".into(), error);
+            return;
+        }
+        let _ = (switch, qa);
+        #[cfg(all(feature = "tsx-panel", target_os = "macos"))]
+        crate::panel_surface::set_voice_visible(false);
+        quit();
+    });
 }
 
 /// The links and notification presses the app receives. nsh holds one
@@ -397,15 +423,24 @@ impl Updates {
                 .await
                 .map_err(|_| "the update download stopped".to_owned())??,
         );
+        if !self.switch.begin_operation() {
+            return Err("连接正在切换，请稍后重试更新。".into());
+        }
+        let result = self.install_staged(&mut staged).await;
+        self.switch.operation.set(false);
+        result
+    }
+
+    async fn install_staged(
+        &self,
+        staged: &mut Option<nsh_updater::install::Staged>,
+    ) -> Result<(), String> {
         let target = self.switch.current_target();
         for step in update::install_plan(&target) {
             match step {
                 InstallStep::StopLocalServer => {
                     #[cfg(feature = "embedded-core")]
-                    {
-                        let service = self.switch.service.clone();
-                        let _ = blocking(move || service.stop()).await;
-                    }
+                    self.switch.stop_local().await?;
                 }
                 InstallStep::Install => {
                     let staged = staged.take().expect("one install step");
@@ -451,9 +486,13 @@ fn notify(id: &str, title: String, body: String) {
 fn local(switch: &Switch, window: WindowRef) -> AnyElement {
     let settings = HostSettings::for_target(aleph_client::ConnectionTarget::Local, None)
         .expect("the local target is a loopback HTTP origin");
-    let launch = launch::Launch { settings, qa: None };
+    let launch = launch::Launch {
+        settings,
+        qa: None,
+        rejected_address: None,
+    };
     #[cfg(feature = "embedded-core")]
-    return local_panel(launch, switch.service.clone(), window);
+    return local_panel(launch, switch.service.clone(), switch.operation, window);
     #[cfg(not(feature = "embedded-core"))]
     {
         let _ = switch;
@@ -478,10 +517,12 @@ fn muted(message: impl Into<String>) -> impl IntoElement {
 /// The Panel once the bundled server is ready; until then, its progress or
 /// its failure with a retry.
 #[cfg(feature = "embedded-core")]
-fn local_panel(launch: launch::Launch, service: LocalService, window: WindowRef) -> AnyElement {
-    // Start first, so the phase read below is this attempt's, not the
-    // Ready left over from before a switch to a remote server.
-    service.start();
+fn local_panel(
+    launch: launch::Launch,
+    service: LocalService,
+    operation: Signal<bool>,
+    window: WindowRef,
+) -> AnyElement {
     let phase = signal(service.phase());
     let mut changes = service.subscribe();
     spawn(async move {
@@ -504,14 +545,14 @@ fn local_panel(launch: launch::Launch, service: LocalService, window: WindowRef)
             )
             .otherwise(move || {
                 let service = service.clone();
-                dynamic(move || local_status(phase.get(), &service))
+                dynamic(move || local_status(phase.get(), &service, operation))
             }),
         )
         .into_element()
 }
 
 #[cfg(feature = "embedded-core")]
-fn local_status(phase: ServerPhase, service: &LocalService) -> AnyElement {
+fn local_status(phase: ServerPhase, service: &LocalService, operation: Signal<bool>) -> AnyElement {
     let screen = status_screen();
     let ServerPhase::Failed(error) = phase else {
         return screen.child(muted("正在启动本地服务…")).into_element();
@@ -526,7 +567,11 @@ fn local_status(phase: ServerPhase, service: &LocalService) -> AnyElement {
                 .py(px(8.0))
                 .rounded(move || theme().radius)
                 .bg(move || theme().primary)
-                .on_press(move || retry.start())
+                .on_press(move || {
+                    if !operation.get_untracked() {
+                        retry.start();
+                    }
+                })
                 .child(text("重试").text_color(move || theme().primary_foreground)),
         )
         .into_element()

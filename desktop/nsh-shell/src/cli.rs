@@ -119,7 +119,11 @@ pub fn run() -> ExitCode {
     placement.attributes.close_on_press = Some(false);
     let window_data_dir = qa.as_ref().and_then(|qa| qa.window_data_dir.clone());
     placement.restore_bounds = qa.is_none() || window_data_dir.is_some();
-    launch::preset(Launch { settings, qa });
+    launch::preset(Launch {
+        settings,
+        qa,
+        rejected_address: None,
+    });
     let root = Root::of::<App>()
         .app_id(APP_ID)
         .url_schemes(["aleph"])

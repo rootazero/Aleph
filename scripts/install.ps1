@@ -12,7 +12,7 @@ $repo = if ($env:ALEPH_REPO) { $env:ALEPH_REPO } else { 'rootazero/Aleph' }
 $version = if ($env:ALEPH_VERSION) { $env:ALEPH_VERSION } else { 'latest' }
 
 # Asset names mirror the host triples the release workflow uploads
-# (desktop/shell/binaries/aleph-server-<triple>.exe). Only x86_64 ships a
+# (aleph-server-<triple>.exe). Only x86_64 ships a
 # Windows server binary today; arm64 must build from source.
 $arch = $env:PROCESSOR_ARCHITECTURE
 if ($arch -ne 'AMD64') {

@@ -7,7 +7,7 @@ REPO="${ALEPH_REPO:-rootazero/Aleph}"
 VERSION="${ALEPH_VERSION:-latest}"
 
 # Asset names mirror the GNU host triples the release workflow uploads
-# (desktop/shell/binaries/aleph-server-<triple>). Only macOS arm64 and
+# (aleph-server-<triple>). Only macOS arm64 and
 # Linux x86_64 ship a server binary here; Windows users run install.ps1.
 os="$(uname -s)"; arch="$(uname -m)"
 case "$os-$arch" in

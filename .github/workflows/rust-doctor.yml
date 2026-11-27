@@ -95,25 +95,12 @@ jobs:
             libx11-dev libxrandr-dev libxi-dev libxtst-dev \
             libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
             libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev \
-            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
-            libayatana-appindicator3-dev
-
-      # `aleph-desktop-shell` is a workspace member, so any workspace-wide
-      # clippy compiles it — and `tauri-build` fails outright when a file named
-      # in `externalBin` is missing. One of several reasons this job reported
-      # "Clippy exited with status 101" a minute in — do not read this comment
-      # as the complete list; the diagnostic step below is what enumerates them,
-      # and it earned its keep by finding the glib one after this was written.
-      # The placeholders are empty files it never executes.
-      - name: Stage externalBin placeholders
-        shell: bash
-        run: bash scripts/stage_shell_placeholders.sh
+            libgtk-4-dev libwebkitgtk-6.0-dev
 
       # rust-doctor runs clippy itself and reports only "Clippy exited with
       # status 101" — the compiler's own stderr never reaches the log. Three
       # rounds were spent guessing what that 101 was (wrong toolchain, missing
-      # protoc/X11 headers, missing externalBin placeholders — all three were
-      # real, none of them was the last one). Running the same command here
+      # and missing protoc/X11 headers). Running the same command here
       # first puts the actual error in the log, and warms the cache the scan
       # then reuses, so it is not pure cost. Non-gating: this step's job is to
       # narrate, the scan's job is to judge.

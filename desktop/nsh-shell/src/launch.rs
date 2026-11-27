@@ -26,6 +26,7 @@ pub(crate) struct QaLaunch {
 pub(crate) struct Launch {
     pub(crate) settings: HostSettings,
     pub(crate) qa: Option<QaLaunch>,
+    pub(crate) rejected_address: Option<String>,
 }
 
 static PRESET: OnceLock<Launch> = OnceLock::new();
@@ -56,14 +57,19 @@ fn current_in(cell: &OnceLock<Launch>, home: Option<&Path>) -> Launch {
 /// rather than half-honored.
 fn production(home: Option<&Path>) -> Launch {
     let saved = home.map_or(ConnectionTarget::Local, crate::target_store::load_target);
-    let settings = HostSettings::for_target(saved, None).unwrap_or_else(|error| {
-        // A saved target that cannot carry native credentials (plain HTTP
-        // to another host) is treated like an unreadable file.
-        eprintln!("ignoring the saved connection target: {error}");
-        HostSettings::for_target(ConnectionTarget::Local, None)
-            .expect("the local target is a loopback HTTP origin")
-    });
-    Launch { settings, qa: None }
+    let (settings, rejected_address) = match HostSettings::for_target(saved.clone(), None) {
+        Ok(settings) => (settings, None),
+        Err(_) => (
+            HostSettings::for_target(ConnectionTarget::Local, None)
+                .expect("the local target is a loopback HTTP origin"),
+            Some(saved.panel_url()),
+        ),
+    };
+    Launch {
+        settings,
+        qa: None,
+        rejected_address,
+    }
 }
 
 #[cfg(test)]
@@ -101,13 +107,20 @@ mod tests {
     }
 
     #[test]
-    fn saved_plain_http_remote_falls_back_to_local() {
+    fn saved_plain_http_remote_is_recoverable_in_the_connect_form() {
         let home = scratch_home("plain-http");
         let remote = ConnectionTarget::parse("http://box.lan:18790").unwrap();
         crate::target_store::save_target(&home, &remote).unwrap();
         let launch = current_in(&OnceLock::new(), Some(&home));
         let _ = std::fs::remove_dir_all(&home);
-        assert_eq!(launch.settings.url, "http://127.0.0.1:18790/");
+        assert_eq!(
+            launch.rejected_address.as_deref(),
+            Some("http://box.lan:18790/")
+        );
+        assert!(matches!(
+            crate::connect_form::initial_view(&launch.settings.target, launch.rejected_address),
+            crate::connect_form::View::Connect { back: None, .. }
+        ));
     }
 
     #[test]
@@ -119,7 +132,14 @@ mod tests {
             None,
         )
         .unwrap();
-        preset_in(&cell, Launch { settings, qa: None });
+        preset_in(
+            &cell,
+            Launch {
+                settings,
+                qa: None,
+                rejected_address: None,
+            },
+        );
         let home = scratch_home("preset");
         crate::target_store::save_target(
             &home,
@@ -136,6 +156,7 @@ mod tests {
     fn second_preset_panics() {
         let cell = OnceLock::new();
         let local = || Launch {
+            rejected_address: None,
             settings: HostSettings::from_inputs(None, None).unwrap(),
             qa: None,
         };

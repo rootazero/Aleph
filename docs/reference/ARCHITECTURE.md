@@ -650,22 +650,11 @@ test-helpers = []          # 集成测试工具
 
 ## Platform Architecture
 
-### Desktop Hosts (dual-track)
+### Desktop host / 桌面宿主
 
-The Panel is one codebase (`interfaces/webchat` → `aleph-panel`, Leptos/WASM) served by
-`aleph-server` itself on `http://127.0.0.1:18790`. The desktop host is only the WebView
-around it, and the host is mid-migration:
+The NSH 0.6.0 host (`desktop/nsh-shell`, crate `aleph-nsh-shell`) opens the Leptos/WASM Panel served by `aleph-server`. Local mode manages the packaged server on loopback, while Remote mode connects to an existing Gateway. The browser opens the same Panel. / 桌面与浏览器共用同一份 Panel，Core 持有业务事实和授权。
 
-| Host | Location | State (2026-11) |
-|---|---|---|
-| Legacy Tauri host | `desktop/shell` (`aleph-desktop-shell`) | **Still the released build** — the release workflow and `just shell-build` target it; carries the updater, `aleph://` deeplink, macOS menu and service management |
-| NSH host | `desktop/nsh-shell` (`aleph-nsh-shell`) | **Forward form** — window, tray, global shortcut, notification permission and the typed Panel bridge; no updater, deeplink, macOS menu or service control yet, and no release pipeline or build `just` target (only the development entry `just shell-tsx-dev`) |
-
-The host↔Panel contract is typed, not ad-hoc: `shared/protocol/src/panel_shell.rs`
-(the host sends `ShellRequest` and receives `PanelReply`; credential and autostart payloads ride inside them), implemented host-side in
-`desktop/nsh-shell/src/panel_bridge.rs` and consumed Panel-side in
-`interfaces/webchat/src/app/shell_bridge.rs`. The switch is gated by the Phase 11 plan
-([docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md](../superpowers/plans/2026-11-21-phase11-nsh-cutover.md)).
+`shared/protocol/src/panel_shell.rs` defines the typed `ShellRequest` and `PanelReply` envelopes. `desktop/nsh-shell/src/panel_bridge.rs` and `interfaces/webchat/src/app/shell_bridge.rs` connect the two ends. The host owns window, tray, OS integration and the bundled-server lifecycle. [Desktop shell](DESKTOP_SHELL.md) · [Release](RELEASE.md)
 
 ### Desktop Bridge
 

@@ -77,7 +77,7 @@ async fn dispatch_snapshot(
         caller_is_loopback,
         caller_conn_id,
         snapshot.verified_user.clone(),
-        process_request_with_context(text, mc, context, voice_context, Some(&snapshot)),
+        process_request_with_context(text, mc, context, voice_context),
     )
     .await
 }
@@ -801,7 +801,7 @@ pub fn idempotency_principal(method: &str, snapshot: &CallerSnapshot) -> String 
 
 /// Process a JSON-RPC request string
 pub async fn process_request(text: &str, middleware_chain: &MiddlewareChain) -> String {
-    process_request_with_context(text, middleware_chain, None, None, None).await
+    process_request_with_context(text, middleware_chain, None, None).await
 }
 
 async fn process_request_with_context(
@@ -809,7 +809,6 @@ async fn process_request_with_context(
     middleware_chain: &MiddlewareChain,
     panel_context: Option<PanelRequestContext>,
     mut voice_context: Option<VoiceRequestContext>,
-    caller: Option<&CallerSnapshot>,
 ) -> String {
     // Parse the request
     let request: JsonRpcRequest = match serde_json::from_str(text) {
@@ -866,8 +865,6 @@ async fn process_request_with_context(
         context.reserve_response_bytes(field.to_string().len() - 1);
     }
 
-    #[cfg(feature = "native-qa")]
-    let request_for_observer = request.clone();
     let response = {
         use tracing::Instrument;
         middleware_chain
@@ -875,19 +872,6 @@ async fn process_request_with_context(
             .instrument(span)
             .await
     };
-
-    #[cfg(not(feature = "native-qa"))]
-    let _ = caller;
-
-    #[cfg(feature = "native-qa")]
-    if let Some(caller) = caller {
-        crate::gateway::native_qa::observe_rpc(
-            &middleware_chain.native_qa_observer(),
-            caller,
-            &request_for_observer,
-            &response,
-        );
-    }
 
     // Echo the trace context back so the caller / a downstream hop can continue
     // the trace (naming our span as the parent). `traceparent` is a non-standard

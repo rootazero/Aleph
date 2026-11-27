@@ -16,7 +16,7 @@
 
 ## What is Aleph?
 
-Aleph is a self-hosted personal AI assistant that lives on **your** machine. It ships as a **native desktop app** for macOS, Windows, and Linux — install the `.dmg` / `.msi` / `.deb`, launch it, and you have a conversational, multi-modal assistant in your tray within a minute.
+Aleph is a self-hosted personal AI assistant that lives on **your** machine. It ships as a **native desktop app** for macOS, Windows, and Linux — download the desktop package, launch it, and you have a conversational, multi-modal assistant in your tray within a minute.
 
 The same app quietly hosts `aleph-server`, your private AI brain. Because the brain is always running, Aleph can also reach you on the channels you already use — Telegram, Discord, Slack, WhatsApp, iMessage, Matrix, IRC, email, and a dozen more — so you can keep talking to your assistant from your phone, your watch, or any browser.
 
@@ -98,7 +98,7 @@ Every tool runs inside an OS-native sandbox (Seatbelt / Landlock / AppContainer)
 ```
                 ┌─────────────────────────────────────────┐
                 │      🖥  Desktop host (WebView shell)    │
-                │   legacy Tauri · forward NSH             │
+                │   NSH WebView host                     │
                 │   chat panel · tray · hotkey · notify    │
                 └──────────────────┬──────────────────────┘
                                    │  JSON-RPC (local)
@@ -126,48 +126,25 @@ Every tool runs inside an OS-native sandbox (Seatbelt / Landlock / AppContainer)
 
 Full design: [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) · [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md)
 
-> **Two desktop hosts, one Panel.** The Panel UI is a single codebase
-> (`interfaces/webchat` → Leptos + WASM) served by `aleph-server` itself. The
-> desktop host is only the WebView around it, and it is mid-migration: the
-> released installers are still built from the legacy Tauri host
-> (`desktop/shell`), while the forward form is the NSH host
-> (`desktop/nsh-shell`). The switch is gated — see
-> [Phase 11 cutover](docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md).
+> The NSH desktop host (`desktop/nsh-shell`) opens the same Leptos/WASM Panel that `aleph-server` serves to browsers. [Desktop shell](docs/reference/DESKTOP_SHELL.md)
 
 ---
 
 ## Install
 
-Each release ships **three** flavours — pick one. All are on the
-[latest release](https://github.com/rootazero/Aleph/releases/latest) page.
+### 1. Desktop app
 
-### 1. Full desktop app (recommended)
+On NSH releases, download the package for your platform from [GitHub Releases](https://github.com/rootazero/Aleph/releases). The app bundles its server. In the connection menu, choose Local to start that server or Remote to use an existing Gateway.
 
-The complete app with `aleph-server` bundled inside — zero configuration,
-runs entirely on one machine. Download the installer and launch it:
+| Platform | NSH package |
+|---|---|
+| macOS 14+, Apple Silicon | `Aleph-<version>-macos-aarch64.tar.gz` |
+| Windows x64 | `Aleph-<version>-windows-x86_64.zip` |
+| Linux x64 | `Aleph-<version>-linux-x86_64.tar.gz` |
 
-| Platform | Installer |
-|----------|-----------|
-| macOS    | `.dmg` (Apple Silicon + Intel) |
-| Windows  | `.msi` |
-| Linux    | `.deb` · `.AppImage` |
+Extract the full archive and open Aleph. Linux requirements and instructions for moving from v26.9.1 are in the release guide. [Desktop cutover and rollback](docs/reference/RELEASE.md)
 
-On first launch it starts the daemon, registers launch-at-login, and lives
-in the system tray. Open the chat panel from the tray icon or the global
-hotkey.
-
-> The installers above are still produced by the legacy Tauri host
-> (`desktop/shell`). The NSH host (`desktop/nsh-shell`) is the forward form
-> and ships once the Phase 11 gates clear.
-
-### 2. Aleph Panel — thin-shell app
-
-A UI-only desktop app with **no** bundled server. Use it to connect to an
-`aleph-server` already running elsewhere on your LAN — point it at the
-server's IP, or let mDNS discover it. Same three installers (`Aleph
-Panel.dmg` / `.msi` / `.deb`).
-
-### 3. Standalone `aleph-server` (servers / NAS)
+### 2. Standalone `aleph-server` (servers / NAS)
 
 Install just the daemon, no GUI:
 
@@ -224,7 +201,7 @@ and run by hand on a Windows host.
 | Command | Description |
 |---------|-------------|
 | `just shell-dev` | Run the desktop app in dev mode |
-| `just shell-build` | Build signed desktop installers (`.dmg` / `.msi` / `.deb`) |
+| `just shell-build` | Build the local NSH desktop package |
 | `just dev` | Run `aleph-server` headlessly (debug) |
 | `just build` | Release build (WASM + server) |
 | `just test-all` | Run all tests (core + desktop + proptest) |
@@ -259,7 +236,6 @@ Aleph/
 │   ├── extension/       # WASM + Node.js plugin system
 │   └── ...              # session · approval · scheduler · daemon · ...
 ├── desktop/
-│   ├── shell/           # Legacy Tauri desktop host (tray, hotkey, notifications, ...)
 │   ├── nsh-shell/       # Forward NSH desktop host (window, tray, hotkey, panel bridge)
 │   ├── shared/          # DesktopCapability trait + IPC protocol
 │   ├── macos/ + bridge/ # macOS native (AppKit, Vision, Swift bridge)

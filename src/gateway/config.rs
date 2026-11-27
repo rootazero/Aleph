@@ -134,7 +134,7 @@ pub struct GatewayServerConfig {
     /// Protocol version
     pub protocol_version: u32,
     /// Extra browser origins allowed on the `/ws` upgrade — additional to the
-    /// built-in same-origin / loopback / `tauri:` rules. Lives under
+    /// built-in same-origin rules. Lives under
     /// `[gateway]`; the legacy `[gateway.auth]` table that once held it is
     /// ignored on load (see `from_toml` legacy-config test).
     #[serde(default)]
