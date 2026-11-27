@@ -16,7 +16,7 @@
 
 **切换到 NSH / Move to NSH:** 在 Tauri 中选择 **Quit & Stop Aleph**，确认旧本地 Gateway 已退出，再备份 Aleph 数据目录（默认 `~/.aleph`，包括配置和会话库）。手动安装新版 NSH 完整包。两版共用数据目录；已获准的回环连接不需要启动配对。旧版自动更新不会跨到 NSH。 / Quit and stop Tauri, back up Aleph data, then install the NSH desktop package manually. NSH reuses the data directory; an authorized loopback connection does not show startup pairing. The Tauri updater does not perform this migration.
 
-**装回 Tauri / Reinstall Tauri:** 在 NSH 中选择 **Quit Aleph and Stop Server**，确认本地 Gateway 已退出。macOS 解开旧归档，用其中的 `Aleph.app` 替换 NSH 应用；Windows 用已验签的旧安装程序重装；Linux 给旧 AppImage 加执行权限后使用它。保留现有数据，不要把卸载当作清库步骤。如果旧版无法读取升级后的数据，先另存现状，再从切换前的备份恢复；不要直接覆盖唯一一份会话库。 / Quit NSH and stop its local Gateway before reinstalling the verified old package. Keep the current data. If the old version cannot read it, preserve a copy and restore the pre-cutover backup rather than overwriting the only session database.
+**装回 Tauri / Reinstall Tauri:** 在 NSH 中选择 **Quit Aleph and Stop Server**，确认本地 Gateway 已退出。若 Gateway 由另一进程管理，按其启动方式停止服务，再替换应用。macOS 解开旧归档，用其中的 `Aleph.app` 替换 NSH 应用；Windows 用已验签的旧安装程序重装；Linux 给旧 AppImage 加执行权限后使用它。保留现有数据，不要把卸载当作清库步骤。如果旧版无法读取升级后的数据，先另存现状，再从切换前的备份恢复；不要直接覆盖唯一一份会话库。 / Quit NSH, stop any separately managed local Gateway through its service manager, and verify the local port has closed before reinstalling the verified old package. Keep the current data. If the old version cannot read it, preserve a copy and restore the pre-cutover backup rather than overwriting the only session database.
 
 ## 构建与发布 / Build and publish
 
@@ -29,5 +29,7 @@
 | macOS 14+ arm64 | `Aleph-<version>-macos-aarch64.tar.gz` | `aleph-server-aarch64-apple-darwin` |
 | Windows x64 | `Aleph-<version>-windows-x86_64.zip` | `aleph-server-x86_64-pc-windows-msvc.exe` |
 | Linux x64 | `Aleph-<version>-linux-x86_64.tar.gz` | `aleph-server-x86_64-unknown-linux-gnu` |
+
+如 Windows 构建生成 `Aleph-setup.exe`，发布 job 会先安装到 runner 的临时目录，核对安装后的服务与同次构建的独立服务摘要。 / When Windows Setup is available, the release job installs it into a temporary directory on the runner and matches the installed server against the standalone server from the same build.
 
 `aleph-app-release.yml` 使用固定 NSH 0.6.0。配置 `NSH_UPDATE_SECRET_KEY` 后，发布任务为最终归档生成 `aleph-update.json` 和 `latest.json.sig`。未配置密钥时发布手动下载包。 / The release also includes the standalone install scripts. Monitor platform jobs with `python3 scripts/poll_release_run.py`. [Build workflow](../../.github/workflows/aleph-app-release.yml)

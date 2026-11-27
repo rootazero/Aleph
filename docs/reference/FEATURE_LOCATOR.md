@@ -4996,13 +4996,12 @@ The single `--execute` under the explicit 120-second authorization ran as `dd6f8
 
 ## 7. Desktop（桌面端）
 
-> **NSH macOS Phase10（2026-11-21）**：入口 `desktop/nsh-shell/src/main.rs`
+> **NSH macOS Phase10 历史验收（2026-11-21）**：入口 `desktop/nsh-shell/src/main.rs`
 > 渲染同一 Panel；文档握手、URL/通知由 `desktop/nsh-shell/src/panel_bridge.rs` 承接。
 > [收尾与限界](../superpowers/runs/2026-11-21-phase10-closeout.md) 和
 > [退出门槛修订](../superpowers/runs/2026-11-21-phase10-acceptance-amendment.md)
-> 是当前本机验收入口：仅 Quit median/p95 改为 ≤1.30×，原失败回执保留，
-> 多屏物理拓扑仍 NOT TESTED；未切默认桌面、未移除 Tauri、未迁移 Swift Bridge。
-> / Shared Panel, official NSH 0.6.0, scoped amended acceptance only.
+> 记录当时的本机验收。当前切换结果见 [R7 回执](../superpowers/runs/2026-11-27-nsh-r7-cutover-receipt.md)。
+> / The scoped Phase 10 acceptance records predate the R7 cutover.
 
 > **NSH Panel 迁移 / Migration (S1-B Unix, S1-C Web, the S2 opt-in TSX shell and the S3 chat slice):** [当前挂载与目标](DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移)。
 > [生产 WebView](../../desktop/nsh-shell/src/main.rs) 仍渲染 Leptos/WASM；非默认的
@@ -5171,6 +5170,7 @@ The single `--execute` under the explicit 120-second authorization ran as `dd6f8
 
 - **口语关键词 / Keywords**：桌面 App、NSH、托盘、系统通知、服务生命周期、更新、`aleph://`、全局热键、Local/Remote Gateway。
 - **代码锚点 / Code**：`desktop/nsh-shell/src/app.rs`（窗口与命令）、`local_service.rs`（本机服务）、`connect_form.rs` / `target_store.rs`（连接）、`deep_link.rs` / `external_link.rs`（链接）、`perm_monitor.rs`（macOS 授权）、`update.rs`（签名更新）。`desktop/host/src/local_server/admission.rs` 校验已就绪的 Gateway 和 Panel 协议。
+- **本机服务归属 / Local service ownership**：[宿主子进程](../../desktop/host/src/local_server.rs)通过私有管道请求有序停机。复用的兼容 Gateway 保留原启动者的生命周期。/ The host waits for its bundled child to exit before switching to Remote, quitting with stop, or installing an update.
 - **Panel 与发版 / Panel and release**：`shared/protocol/src/panel_shell.rs` 定义桥契约。`just shell-build` 和 `.github/workflows/aleph-app-release.yml` 调用 NSH 打包，同一份 Leptos/WASM 由随包或远端 Core 提供。改 Panel 后依次重建 WASM 和嵌入资源的 server。 [Desktop shell](DESKTOP_SHELL.md) · [Release and rollback](RELEASE.md)
 
 ### 7.6 核心侧连线与 daemon 消费者 (Core Wiring & Daemon Consumers)

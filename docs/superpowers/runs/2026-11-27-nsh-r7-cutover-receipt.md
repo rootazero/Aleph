@@ -11,3 +11,9 @@
 macOS 候选包的原生菜单、托盘和图标、热键、深链接、打开系统浏览器、远程切换、受保护配对、登录启动和签名更新均有单独的运行证据。会话夹具同时验证了群聊、原个人会话的历史恢复和实时运行数 `0 → 1 → 0`。TCC 新授权触发仅有状态转换测试，系统授权状态在验收时保留。/ macOS runtime checks covered shell controls, pairing, login launch and a signed update. The fixture witnessed group chat, direct history restoration and live run counts together. A fresh TCC grant transition has unit coverage.
 
 三平台 v26.9.1 回退包已核对 SHA-256，并用该标签中的旧更新公钥通过 minisign 验签。本地保留包、原始签名、解码后的签名和校验清单。切换和恢复按同一份操作说明执行。/ All three original v26.9.1 rollback assets passed SHA-256 and minisign verification against the tagged updater key. [回退步骤与资产哈希 / Rollback steps and asset hashes](../../reference/RELEASE.md#桌面切换与回退--desktop-cutover-and-rollback)
+
+## 独立审阅后的复验 / Verification after independent review
+
+独立审阅对 `f84dffa26` 给出 BLOCK，指出 Windows 安装器可能缺少服务，以及本机服务归属、停机确认与远端连接恢复问题。修复后重新用官方 NSH 0.6.0 打出 macOS 整包，搭配本轮调试构建的 Core，严格 `codesign` 验证通过。归档 SHA-256 为 `5b250c15a08c152349b3b484dc94df84c22f36efcf4ff56ba75131dc1e372518`。隔离运行确认 **Quit Aleph and Stop Server** 会等待宿主启动的子进程退出，也确认它会保留单独启动的兼容 Gateway。旧版 LAN HTTP 地址在原生连接页预填，显示 HTTPS 恢复提示。/ The independent review blocked `f84dffa26`. The follow-up macOS package used a debug Core to verify child shutdown, external Gateway reuse, and recovery of a saved LAN HTTP address in the native form.
+
+Rust 测试覆盖启动中请求停机、停机失败传递，以及过期探测结果到达后保留用户的 Local 选择。Windows 打包回归测试覆盖重编译输出目录；发布 job 会试装并核对安装后的服务二进制摘要。本轮修订的 Windows 和 Linux 整包沿用上方候选验收记录，修订后的这两个平台整包尚未复验。/ Regression tests cover startup and shutdown ordering, shutdown error propagation, stale connection probes, and the Windows installer output path. The Windows workflow verifies the installed server hash before upload. The Windows and Linux package acceptance above covers the candidate revision.

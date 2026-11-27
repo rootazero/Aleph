@@ -5,8 +5,9 @@
 ## 连接与服务 / Connection and service
 
 - **Local** 默认使用 `http://127.0.0.1:18790`。宿主在后台启动随包 `aleph-server`，检查 `/ready` 和 `x-aleph-panel-shell: nsh-v1`，再挂载 Panel。遇到旧版或其他进程占用端口时保留监听者，并显示恢复指引。/ The readiness check admits a compatible Panel before opening the WebView. Startup failures offer a retry.
-- **Remote** 经原生连接页配置。连接保存到 `~/.aleph/.desktop-shell-target`，切回 Local 时移除该文件。HTTPS 使用系统信任库。/ Remote uses an existing Gateway and system TLS trust.
-- 普通退出保留服务供其他客户端使用。**Quit Aleph and Stop Server** 停止获准的本机服务；远端连接退出时保留远端服务。/ Closing the window hides it. The tray and summon shortcut restore it.
+- **Remote** 经原生连接页配置，远端 HTTPS 使用系统信任库。旧版保存的明文局域网 URL 会预填在连接页，可改用受信任的 HTTPS 地址或主动切回 Local。桌面端手动填写地址，iOS 继续使用 Gateway 的 mDNS 广播。/ Remote uses system TLS trust. A saved legacy LAN HTTP origin reopens the form with its previous address. The desktop uses manual entry, while iOS retains mDNS discovery.
+- 普通退出保留服务供其他客户端使用。**Quit Aleph and Stop Server**、切换到 Remote 及安装更新只停止当前宿主启动的随包服务，并等待该进程结束。已运行的兼容 Gateway 可由 Panel 复用，其生命周期由原启动者管理。/ Ordinary Quit leaves the server available. Quit and Stop, switching to Remote and installing updates wait for the bundled child owned by this host to exit. A reused Gateway remains under its original lifecycle manager.
+- 连接保存到 `~/.aleph/.desktop-shell-target`，切回 Local 时移除该文件。关闭窗口会隐藏窗口，托盘和快捷键可恢复。/ The saved connection is removed when switching to Local. Closing the window hides it until the tray or summon shortcut restores it.
 - [启动与切换 / Startup and switching](../../desktop/nsh-shell/src/local_service.rs) · [准入 / Admission](../../desktop/host/src/local_server/admission.rs) · [目标持久化 / Target storage](../../desktop/nsh-shell/src/target_store.rs)
 
 ## 系统集成 / Native integration
@@ -16,7 +17,7 @@
 | 窗口、托盘、菜单 / Window, tray, menus | `app.rs` 注册热键，默认 `mod+shift+a`，环境变量 `ALEPH_SHELL_HOTKEY=disabled` 可关闭。`menu.rs` 提供显示、连接、刷新与退出动作。 / Tray and application commands share the same handlers. |
 | 深链接与外链 / Links | `aleph://open` 唤起窗口。外链由宿主按当前连接重新校验后交给系统；产物链接在浏览器打开。 / The host handles deep links and validates external navigation. |
 | 通知与登录启动 / Notifications and login launch | Panel 经类型化桥转发通知及登录启动请求，NSH 调用平台接口。 / The bridge also carries document-scoped credential calls; paired credentials live in OS secure storage. |
-| macOS 隐私授权 / macOS privacy grants | `perm_monitor.rs` 观察屏幕录制和输入监控授权，新授权时仅对当前 Local 目标刷新服务。 / The monitor watches for newly granted screen and input permissions. |
+| macOS 隐私授权 / macOS privacy grants | `perm_monitor.rs` 观察屏幕录制和输入监控授权，新授权时仅重启当前宿主为 Local 启动的随包子进程。 / The monitor watches for newly granted screen and input permissions and restarts the owned Local child. |
 
 共享契约在 [panel_shell.rs](../../shared/protocol/src/panel_shell.rs)，两端分别为 [NSH bridge](../../desktop/nsh-shell/src/panel_bridge.rs) 和 [Panel bridge](../../interfaces/webchat/src/app/shell_bridge.rs)。
 

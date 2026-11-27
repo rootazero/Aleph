@@ -3,6 +3,9 @@
 use crate::native_credentials::{DeviceConnectCredential, PanelCredentialLease};
 use serde::{Deserialize, Serialize};
 
+/// Explicit stop request on the bundled server’s private stdin pipe.
+pub const DESKTOP_SHUTDOWN_BYTE: u8 = b'\n';
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum CredentialCall {

@@ -1,5 +1,6 @@
 //! Shared local-server startup I/O, with no runtime or process at import.
 //! HTTP readiness is not binary identity or permission to stop a service.
+#[cfg(feature = "gateway-admission")]
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -25,28 +26,26 @@ const CONNECT_TIMEOUT: Duration = if cfg!(windows) {
 #[cfg(feature = "gateway-admission")]
 mod admission;
 
-/// Strict NSH startup. A listener must serve compatible Gateway documents;
-/// only a refused connection can authorize a launch, and only of the sibling binary.
+/// Admit an existing listener or start the sibling binary on a refused port.
+/// Keep the child handle even if the subsequent readiness check fails.
 #[cfg(feature = "gateway-admission")]
-pub async fn ensure_compatible_ready() -> Result<(), String> {
+pub async fn ensure_compatible_ready(owned: &mut Option<BundledServer>) -> Result<(), String> {
     admission::ensure(DAEMON_PORT, async || {
+        if let Some(previous) = owned {
+            match previous.0.try_wait() {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    return Err("bundled Aleph is still running without a ready listener".into())
+                }
+                Err(error) => return Err(format!("could not check bundled Aleph: {error}")),
+            }
+        }
         let bin = bundled_daemon_binary()
             .ok_or_else(|| "could not locate the bundled aleph-server binary".to_string())?;
-        spawn_detached(&bin, &["--bundled-content-only"]).await
+        *owned = Some(BundledServer::spawn(&bin)?);
+        Ok(())
     })
     .await
-}
-
-/// Give the detached server time to release its listener after a stop request.
-pub async fn wait_until_port_closed() {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(6);
-    while port_open(DAEMON_PORT).await != Some(false) {
-        if tokio::time::Instant::now() >= deadline {
-            tracing::warn!("daemon port still open after stop; continuing anyway");
-            return;
-        }
-        tokio::time::sleep(POLL_INTERVAL).await;
-    }
 }
 
 // Some(false) proves refusal; None is unknown and must not grant a launch.
@@ -66,6 +65,7 @@ async fn port_open(port: u16) -> Option<bool> {
 }
 
 /// Platform-specific daemon binary file name.
+#[cfg(feature = "gateway-admission")]
 const fn daemon_bin_name() -> &'static str {
     if cfg!(windows) {
         "aleph-server.exe"
@@ -74,89 +74,80 @@ const fn daemon_bin_name() -> &'static str {
     }
 }
 
-/// Resolve the `aleph-server` binary: the copy bundled next to the shell
-/// executable, falling back to `PATH` for development service commands.
-pub fn resolve_daemon_binary() -> Option<PathBuf> {
-    let name = daemon_bin_name();
-
-    if let Some(candidate) = bundled_daemon_binary() {
-        return Some(candidate);
-    }
-    // 2. Anything on `PATH` (covers unusual dev setups).
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
-        .find(|p| p.is_file())
-}
-
+#[cfg(feature = "gateway-admission")]
 fn bundled_daemon_binary() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let candidate = exe.parent()?.join(daemon_bin_name());
     candidate.is_file().then_some(candidate)
 }
 
-#[cfg(unix)]
-async fn settle_launcher(
-    launcher: &mut tokio::process::Child,
-    deadline: Duration,
-) -> Result<(), String> {
-    match tokio::time::timeout(deadline, launcher.wait()).await {
-        Ok(Ok(status)) if status.success() => Ok(()),
-        Ok(Ok(_)) => Err("daemon launcher exited unsuccessfully".to_string()),
-        Ok(Err(_)) => Err("could not wait for daemon launcher".to_string()),
-        Err(_) => {
-            // Tokio kill awaits wait/reap, unlike std::process::Child::kill.
-            launcher
-                .kill()
-                .await
-                .map_err(|_| "daemon launcher timed out and cleanup failed".to_string())?;
-            Err("daemon launcher timed out".to_string())
+/// The child and the write end of its private stop pipe belong to the host
+/// that spawned it. Ordinary Quit closes the pipe without requesting stop.
+#[cfg(feature = "gateway-admission")]
+pub struct BundledServer(std::process::Child);
+
+#[cfg(feature = "gateway-admission")]
+impl BundledServer {
+    fn spawn(bin: &Path) -> Result<Self, String> {
+        use std::process::{Command, Stdio};
+
+        let mut command = Command::new(bin);
+        command
+            .args([
+                "--bundled-content-only",
+                "--desktop-shutdown-stdin",
+                "start",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const DETACHED_PROCESS: u32 = 0x0000_0008;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        }
+        command.spawn().map(Self).map_err(|error| {
+            format!(
+                "could not start bundled Aleph at {}: {error}",
+                bin.display()
+            )
+        })
+    }
+
+    /// Requests orderly shutdown and waits for the actual child to exit.
+    pub fn stop(&mut self) -> Result<(), String> {
+        use std::io::Write;
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let mut pipe_error = None;
+        if let Some(mut stdin) = self.0.stdin.take() {
+            let request = [aleph_protocol::panel_shell::DESKTOP_SHUTDOWN_BYTE];
+            if let Err(error) = stdin.write_all(&request) {
+                pipe_error = Some(error);
+                self.0.stdin = Some(stdin);
+            }
+        }
+        loop {
+            match self.0.try_wait() {
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) => {}
+                Err(error) => return Err(format!("could not wait for bundled Aleph: {error}")),
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(match pipe_error {
+                    Some(error) => format!("could not request bundled Aleph shutdown: {error}"),
+                    None => "bundled Aleph did not exit after the shutdown request".to_owned(),
+                });
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
-}
-
-/// Spawn the daemon detached on Unix. `--daemon` makes `aleph-server`
-/// double-fork and `setsid` itself, so the real daemon detaches; the
-/// short-lived launcher is bounded and reaped without blocking the executor.
-#[cfg(unix)]
-async fn spawn_detached(bin: &Path, startup_options: &[&str]) -> Result<(), String> {
-    use std::process::Stdio;
-
-    let mut launcher = tokio::process::Command::new(bin)
-        .arg("--daemon")
-        .args(startup_options)
-        .arg("start")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| format!("failed to spawn {}: {e}", bin.display()))?;
-    settle_launcher(&mut launcher, READY_TIMEOUT).await
-}
-
-/// Spawn the daemon detached on Windows. There is no fork-based
-/// daemonization, so we detach the process and a new process group and
-/// never wait on it, letting it outlive the shell.
-#[cfg(windows)]
-async fn spawn_detached(bin: &Path, startup_options: &[&str]) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    use std::process::{Command, Stdio};
-
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-    Command::new(bin)
-        .args(startup_options)
-        .arg("start")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
-        .spawn()
-        .map_err(|e| format!("failed to spawn {}: {e}", bin.display()))?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -215,65 +206,21 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
-    fn owned_launcher(script: &str) -> tokio::process::Child {
-        use std::process::Stdio;
+    #[cfg(all(unix, feature = "gateway-admission"))]
+    #[test]
+    fn stop_waits_for_the_child_receiving_the_private_request() {
+        use std::process::{Command, Stdio};
 
-        tokio::process::Command::new("/bin/sh")
-            .args(["-c", script])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
+        let child = Command::new("/bin/sh")
+            .args([
+                "-c",
+                r#"IFS= read -r request || exit 7; test -z "$request""#,
+            ])
+            .stdin(Stdio::piped())
             .spawn()
-            .unwrap()
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn launcher_success_requires_actual_exit() {
-        let mut launcher = owned_launcher("exit 0");
-        let result = settle_launcher(&mut launcher, Duration::from_secs(5)).await;
-        let exited = launcher.try_wait().unwrap().is_some();
-        if !exited {
-            launcher.kill().await.unwrap();
-        }
-        assert!(result.is_ok(), "{result:?}");
-        assert!(exited, "success cannot precede real child exit");
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn launcher_failure_is_reaped_not_reported_as_ready() {
-        let mut launcher = owned_launcher("exit 7");
-        let result = settle_launcher(&mut launcher, Duration::from_secs(5)).await;
-        let exited = launcher.try_wait().unwrap().is_some();
-        if !exited {
-            launcher.kill().await.unwrap();
-        }
-        assert!(result.is_err());
-        assert!(exited, "failure must also settle its owned child");
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn launcher_timeout_kills_and_reaps_before_returning() {
-        let mut launcher = owned_launcher("exec /bin/sleep 30");
-        let result = tokio::time::timeout(
-            Duration::from_secs(5),
-            settle_launcher(&mut launcher, Duration::from_millis(20)),
-        )
-        .await;
-        let exited = launcher.try_wait().unwrap().is_some();
-        // This owner also cleans up when the implementation is RED or cancelled.
-        if !exited {
-            launcher.kill().await.unwrap();
-        }
-        assert!(
-            result.is_ok(),
-            "launcher settlement exceeded the test bound"
-        );
-        assert!(result.unwrap().unwrap_err().contains("timed out"));
-        assert!(exited, "timeout returned before the real child was reaped");
+            .unwrap();
+        let mut server = BundledServer(child);
+        server.stop().unwrap();
+        assert!(server.0.try_wait().unwrap().unwrap().success());
     }
 }

@@ -481,6 +481,27 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let pid_file = args.pid_file.clone();
     let daemon_mode = args.daemon;
+    let (desktop_tx, desktop_rx) = tokio::sync::oneshot::channel();
+    if args.desktop_shutdown_stdin {
+        // A blocking read on a private pipe must not prevent Tokio shutdown.
+        let _ = std::thread::Builder::new()
+            .name("aleph-desktop-shutdown".into())
+            .spawn(move || {
+                use std::io::Read;
+                let mut request = [0];
+                if std::io::stdin().read_exact(&mut request).is_ok()
+                    && request[0] == aleph_protocol::panel_shell::DESKTOP_SHUTDOWN_BYTE
+                {
+                    let _ = desktop_tx.send(());
+                }
+            });
+    }
+    let desktop_stop = async {
+        // EOF only means the desktop host left. Ordinary Quit keeps the server.
+        if desktop_rx.await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    };
     tokio::spawn(async move {
         let ctrl_c = async {
             if let Err(e) = tokio::signal::ctrl_c().await {
@@ -510,6 +531,10 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
         let sigterm = std::future::pending::<()>();
 
         tokio::select! {
+            () = desktop_stop => {
+                let ctx = snapshot_shutdown_context("desktop_host", None, true);
+                tracing::warn!("{}", ctx.as_log_line());
+            }
             () = ctrl_c => {
                 // Forensics: capture context before tearing anything down. Skip
                 // `with_parent_command` here — the Ctrl-C path is the interactive
