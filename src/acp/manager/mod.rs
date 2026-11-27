@@ -79,6 +79,7 @@ fn session_closed() -> AlephError {
 #[derive(Default)]
 struct SessionSlot {
     transition: Arc<AsyncMutex<()>>,
+    reservations: usize,
     epoch: Arc<CancellationToken>,
     retiring: bool,
     live: Option<Arc<SessionEntry>>,
@@ -136,12 +137,9 @@ struct SlotReservation {
 impl Drop for SlotReservation {
     fn drop(&mut self) {
         let mut state = self.manager.state();
-        let unused = state.slots.get(&self.key).is_some_and(|slot| {
-            Arc::strong_count(&self.transition) == 2
-                && slot.live.is_none()
-                && slot.saved_id.is_none()
-        });
-        if unused {
+        let slot = state.slots.get_mut(&self.key).expect("reserved slot");
+        slot.reservations -= 1;
+        if slot.reservations == 0 && slot.live.is_none() && slot.saved_id.is_none() {
             state.slots.remove(&self.key);
         }
     }
@@ -160,7 +158,8 @@ impl AcpAdapterManager {
         self.state.lock().unwrap_or_else(|error| error.into_inner())
     }
 
-    fn reservation(&self, key: &SessionKey, slot: &SessionSlot) -> SlotReservation {
+    fn reservation(&self, key: &SessionKey, slot: &mut SessionSlot) -> SlotReservation {
+        slot.reservations += 1;
         SlotReservation {
             manager: self.clone(),
             key: key.clone(),
