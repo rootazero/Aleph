@@ -77,6 +77,8 @@ pub mod workspace;
 // Re-export commonly used types at crate root
 pub use auth::{GuestScope, IdentityContext, Role};
 pub use clarification::{
+    ClarificationAction, ClarificationActionParams, ClarificationActionResponse,
+    ClarificationActionStatus, ClarificationAnswerInput, ClarificationInput,
     ClarificationResolveParams, ClarificationResolveResponse, PendingClarification,
     PendingListResponse,
 };
