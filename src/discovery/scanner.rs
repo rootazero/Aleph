@@ -475,7 +475,7 @@ impl DirectoryScanner {
 ///
 /// An entry that exists but cannot be listed is named in `unreadable`: its
 /// plugins are unknown this pass, not absent.
-fn plugin_candidates(path: &Path, unreadable: &mut Vec<PathBuf>) -> Vec<PathBuf> {
+pub(crate) fn plugin_candidates(path: &Path, unreadable: &mut Vec<PathBuf>) -> Vec<PathBuf> {
     if has_plugin_manifest(path) {
         return vec![path.to_path_buf()];
     }
@@ -722,7 +722,7 @@ fn component_marker_file(component_name: &str) -> Option<&'static str> {
 /// layout pointing at a shared file) still qualifies its own directory.
 /// Screening it as well would silently drop such a plugin, which is a
 /// behaviour change this module has no reason to make.
-fn has_plugin_manifest(path: &Path) -> bool {
+pub(crate) fn has_plugin_manifest(path: &Path) -> bool {
     const MANIFEST_REL_PATHS: &[&str] = &[
         ".claude-plugin/plugin.toml",
         ".claude-plugin/plugin.json",

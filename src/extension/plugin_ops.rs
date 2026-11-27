@@ -717,14 +717,31 @@ impl ExtensionManager {
                 .map(|record| record.root_dir.clone())
         };
         if let Some(root_dir) = schema {
-            let manifest =
-                crate::extension::manifest::parse_manifest_from_dir_cached_global(&root_dir)
-                    .map_err(|e| {
-                        vec![format!(
-                            "Cannot validate configuration: plugin manifest parse failed: {e}"
-                        )]
-                    })?;
-            if let Some(ref schema) = manifest.config_schema {
+            let adapters = Arc::clone(&self.adapter_registry);
+            let output = crate::skill::run_blocking_fs(
+                "ExtensionManager::set_plugin_settings.parse",
+                move || adapters.parse_dir_fresh(&root_dir),
+            )
+            .await
+            .ok_or_else(
+                || vec!["Cannot validate configuration: plugin parse cancelled".to_owned()],
+            )?
+            .map_err(|e| {
+                vec![format!(
+                    "Cannot validate configuration: plugin manifest parse failed: {e}"
+                )]
+            })?;
+            if output.plugin_id != plugin_id {
+                return Err(vec![
+                    "Cannot validate configuration: the installed plugin identity changed"
+                        .to_owned(),
+                ]);
+            }
+            if let Some(schema) = output
+                .runtime_manifest
+                .as_ref()
+                .and_then(|manifest| manifest.config_schema.as_ref())
+            {
                 let value = serde_json::Value::Object(map.clone());
                 let errors =
                     crate::extension::manifest::validate_config_against_schema(schema, &value);

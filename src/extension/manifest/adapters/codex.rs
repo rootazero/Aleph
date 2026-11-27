@@ -3,6 +3,8 @@
 
 use std::path::Path;
 
+use crate::extension::manifest::inputs;
+
 use anyhow::Result;
 
 use crate::extension::capability::{CapabilityDeclaration, CapabilitySource, SourceFormat};
@@ -15,12 +17,12 @@ pub struct CodexAdapter;
 
 impl ManifestAdapter for CodexAdapter {
     fn detect(&self, dir: &Path) -> bool {
-        dir.join(".codex-plugin/plugin.json").exists()
+        inputs::exists(dir.join(".codex-plugin/plugin.json"))
     }
 
     fn parse(&self, dir: &Path) -> Result<AdapterOutput> {
         let manifest_path = dir.join(".codex-plugin/plugin.json");
-        let content = std::fs::read_to_string(&manifest_path)?;
+        let content = inputs::read_to_string(&manifest_path)?;
         let json: serde_json::Value = serde_json::from_str(&content)?;
 
         // Sanitize the declared name into a valid plugin id so a third-party
@@ -81,7 +83,7 @@ impl ManifestAdapter for CodexAdapter {
         }
 
         // Scan default directories when manifest fields are absent
-        if json.get("skills").is_none() && dir.join("skills").is_dir() {
+        if json.get("skills").is_none() && inputs::is_dir(dir.join("skills")) {
             parsers::extend_scanned(
                 &mut caps,
                 "skills",
@@ -91,7 +93,7 @@ impl ManifestAdapter for CodexAdapter {
         }
         if json.get("hooks").is_none() {
             let hooks_json = dir.join("hooks").join("hooks.json");
-            if hooks_json.exists() {
+            if inputs::exists(&hooks_json) {
                 parsers::extend_scanned(
                     &mut caps,
                     "hooks",
@@ -100,7 +102,7 @@ impl ManifestAdapter for CodexAdapter {
                 );
             }
         }
-        if json.get("mcpServers").is_none() && dir.join(".mcp.json").exists() {
+        if json.get("mcpServers").is_none() && inputs::exists(dir.join(".mcp.json")) {
             parsers::extend_scanned(
                 &mut caps,
                 "mcp",
@@ -114,6 +116,13 @@ impl ManifestAdapter for CodexAdapter {
             tracing::debug!(plugin_id = %plugin_id, "Codex plugin has 'apps' field: {:?}", apps);
         }
 
+        let runtime_manifest =
+            super::super::auto_discover_manifest(dir)
+                .ok()
+                .map(|mut manifest| {
+                    manifest.id = plugin_id.clone();
+                    manifest
+                });
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),
             name: json.get("name").and_then(|v| v.as_str()).map(String::from),
@@ -135,6 +144,8 @@ impl ManifestAdapter for CodexAdapter {
                 format: SourceFormat::Codex,
             },
             permissions: vec![],
+            runtime_manifest,
+            diagnostics: Vec::new(),
         })
     }
 

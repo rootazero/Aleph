@@ -265,9 +265,9 @@ fn is_bare(command: &str) -> bool {
 /// error is not a verdict, and there is nothing to run there anyway — and so
 /// is a directory, which is not a program.
 fn inside_root(candidate: &Path, root: &Path) -> Result<PathBuf, String> {
-    let root = std::fs::canonicalize(root)
+    let root = crate::extension::manifest::inputs::canonicalize(root)
         .map_err(|e| format!("cannot be checked: the plugin root does not resolve ({e})"))?;
-    let resolved = std::fs::canonicalize(candidate).map_err(|e| {
+    let resolved = crate::extension::manifest::inputs::canonicalize(candidate).map_err(|e| {
         format!(
             "does not resolve to a file inside the plugin root ({}: {e})",
             candidate.display()
@@ -280,7 +280,7 @@ fn inside_root(candidate: &Path, root: &Path) -> Result<PathBuf, String> {
             root.display()
         ));
     }
-    if !resolved.is_file() {
+    if !crate::extension::manifest::inputs::is_file(&resolved) {
         return Err(format!(
             "resolves to {}, which is not a file",
             resolved.display()

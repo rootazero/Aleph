@@ -40,7 +40,7 @@ use super::registry::{DiagnosticLevel, PluginDiagnostic};
 use super::runtime_owner::RuntimeOwner;
 use super::types::{LoadSummary, PluginKind, PluginOrigin, PluginRecord, PluginStatus};
 use super::visibility::ScopeKey;
-use super::{loader, manifest, mcp_config, readiness, registrar, slash_effect, ExtensionManager};
+use super::{loader, mcp_config, readiness, registrar, slash_effect, ExtensionManager};
 use crate::extension::capability::CapabilityDeclaration;
 use crate::sync_primitives::Arc;
 
@@ -158,10 +158,6 @@ impl Identified {
 struct ScannedDir {
     found: super::DiscoveredExtensionDir,
     identified: Identified,
-    /// `parse_manifest_from_dir_cached_global` of the root, only for a
-    /// `Parsed` dir and only when it parses — the one manifest both
-    /// `build_record` (kind) and `mount_parsed` (wasm / mcp steps) read.
-    manifest: Option<PluginManifest>,
     /// A legacy `.disabled` marker exists (never checked under Claude
     /// Code's cache, which is never written).
     legacy_marker: bool,
@@ -553,11 +549,10 @@ impl ExtensionManager {
             let ScannedDir {
                 found,
                 identified,
-                manifest,
                 legacy_marker,
             } = scanned;
             let dir_path = &found.path;
-            let output = match identified {
+            let mut output = match identified {
                 Identified::Parsed(output) => output,
                 Identified::Unparsed {
                     id: fallback_id,
@@ -641,6 +636,7 @@ impl ExtensionManager {
                     .await;
             }
 
+            let manifest = output.runtime_manifest.take();
             let record = Self::build_record(
                 &output,
                 dir_path.clone(),
@@ -804,7 +800,7 @@ impl ExtensionManager {
         adapters: &AdapterRegistry,
         found: &super::DiscoveredExtensionDir,
     ) -> Identified {
-        match adapters.parse_dir(&found.path) {
+        match adapters.parse_declarations(&found.path) {
             Ok(output) => Identified::Parsed(output),
             Err(e) => Identified::Unparsed {
                 id: Self::unparsed_plugin_id(&found.path, found.origin),
@@ -815,13 +811,11 @@ impl ExtensionManager {
 
     /// The synchronous half of one discovery pass, over owned inputs and no
     /// `&self`: walk (`collect_plugin_dirs_with`), identify every dir
-    /// (adapter parse — including shadowed dirs, as before), parse the
-    /// manifest of every parsed dir, and stat the legacy `.disabled` marker.
+    /// (adapter parse — including shadowed dirs, as before), and stat the
+    /// legacy `.disabled` marker.
     /// Blocking; runs on the blocking pool via `crate::skill::run_blocking_fs`
-    /// from [`Self::discover_and_mount`]. Writes nothing the async walk did
-    /// not already write (adapter `ensure_data_dir_if_referenced`, manifest
-    /// cache fill), so a scan whose awaiting future was dropped finishing
-    /// detached is harmless.
+    /// from [`Self::discover_and_mount`]. Reads package inputs without
+    /// provisioning plugin data directories.
     fn scan_plugins_blocking(
         discovery: &crate::discovery::DiscoveryManager,
         adapters: &AdapterRegistry,
@@ -833,18 +827,11 @@ impl ExtensionManager {
             .into_iter()
             .map(|found| {
                 let identified = Self::identify_with(adapters, &found);
-                let manifest = match identified {
-                    Identified::Parsed(_) => {
-                        manifest::parse_manifest_from_dir_cached_global(&found.path).ok()
-                    }
-                    Identified::Unparsed { .. } => None,
-                };
                 let legacy_marker = found.origin != PluginOrigin::ClaudeCache
                     && found.path.join(".disabled").exists();
                 ScannedDir {
                     found,
                     identified,
-                    manifest,
                     legacy_marker,
                 }
             })
@@ -1073,17 +1060,13 @@ impl ExtensionManager {
             .await
             .map_err(|error| PrepareError::Refused { origin, error })?;
 
-        // Adapter parse + manifest parse are synchronous filesystem work:
-        // blocking pool, owned inputs. Cancellation (runtime shutdown) is a
-        // `Parse` error that writes nothing onto the row.
+        // Package parsing is synchronous filesystem work. Use the blocking
+        // pool with owned inputs. Cancellation writes nothing onto the row.
         let parsed = {
             let adapters = Arc::clone(&self.adapter_registry);
             let dir = root_dir.clone();
             crate::skill::run_blocking_fs("ExtensionManager::mount_inner.parse", move || {
-                adapters.parse_dir(&dir).map(|output| {
-                    let manifest = manifest::parse_manifest_from_dir_cached_global(&dir).ok();
-                    (output, manifest)
-                })
+                adapters.parse_dir_fresh(&dir)
             })
             .await
         };
@@ -1093,7 +1076,8 @@ impl ExtensionManager {
                 reason: "manifest parse was cancelled (runtime shutting down)".to_string(),
             }));
         };
-        let (output, manifest) = parsed.map_err(|e| PrepareError::Defect(e.to_string()))?;
+        let mut output = parsed.map_err(|e| PrepareError::Defect(e.to_string()))?;
+        let manifest = output.runtime_manifest.take();
         // The id that was authorised is the id that must run.
         //
         // The trust decision and the operator's preference were made for the
@@ -1149,7 +1133,7 @@ impl ExtensionManager {
     /// after the effects (see [`Self::mount`]).
     pub(super) async fn mount_parsed(
         &self,
-        output: AdapterOutput,
+        mut output: AdapterOutput,
         record: PluginRecord,
         // Parsed once off the runtime by the caller (the same value
         // `build_record` took `record.kind` from), not re-parsed here.
@@ -1160,6 +1144,11 @@ impl ExtensionManager {
         // The kind `build_record` derived — and counted the row's servers by —
         // not a second derivation that could disagree with it.
         let kind = record.kind;
+        if let Some(data_dir) = AdapterRegistry::expand_plugin_variables(&mut output, &root_dir) {
+            if let Err(error) = tokio::fs::create_dir_all(&data_dir).await {
+                tracing::warn!(path = %data_dir.display(), %error, "failed to create plugin data directory");
+            }
+        }
 
         // Read what later steps need out of the capabilities BEFORE they move
         // into the registry.

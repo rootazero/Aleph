@@ -3,6 +3,8 @@
 
 use std::path::Path;
 
+use crate::extension::manifest::inputs;
+
 use anyhow::Result;
 
 use crate::extension::capability::{CapabilityDeclaration, CapabilitySource, SourceFormat};
@@ -15,9 +17,9 @@ pub struct CursorAdapter;
 
 impl ManifestAdapter for CursorAdapter {
     fn detect(&self, dir: &Path) -> bool {
-        dir.join(".cursor-plugin/plugin.json").exists()
-            || dir.join(".cursorrules").exists()
-            || dir.join(".cursor/rules").is_dir()
+        inputs::exists(dir.join(".cursor-plugin/plugin.json"))
+            || inputs::exists(dir.join(".cursorrules"))
+            || inputs::is_dir(dir.join(".cursor/rules"))
     }
 
     fn parse(&self, dir: &Path) -> Result<AdapterOutput> {
@@ -34,102 +36,94 @@ impl ManifestAdapter for CursorAdapter {
         let mut version = None;
         let mut description = None;
 
-        // Try .cursor-plugin/plugin.json first
-        if let Ok(content) = std::fs::read_to_string(dir.join(".cursor-plugin/plugin.json")) {
-            match serde_json::from_str::<serde_json::Value>(&content) {
-                Err(e) => tracing::warn!(
-                    "Malformed .cursor-plugin/plugin.json in {}: {}",
-                    dir.display(),
-                    e
-                ),
-                Ok(json) => {
-                    if let Some(n) = json.get("name").and_then(|v| v.as_str()) {
-                        // Sanitize so a third-party manifest cannot claim an
-                        // arbitrary/colliding capability-registry id.
-                        let sanitized = crate::extension::manifest::sanitize_plugin_id(n);
-                        if !sanitized.is_empty() {
-                            plugin_id = sanitized;
-                        }
-                    }
-                    name = json.get("name").and_then(|v| v.as_str()).map(String::from);
-                    version = json
-                        .get("version")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                    description = json
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-
-                    // Parse standard components
-                    if let Some(skills) = json.get("skills").and_then(|v| v.as_str()) {
-                        parsers::extend_scanned(
-                            &mut caps,
-                            "skills",
-                            dir,
-                            parsers::parse_skills_dir(dir, skills, &plugin_id),
-                        );
-                    }
-                    // Commands are merged into skills following OpenClaw convention
-                    if let Some(commands) = json.get("commands").and_then(|v| v.as_str()) {
-                        parsers::extend_scanned(
-                            &mut caps,
-                            "commands",
-                            dir,
-                            parsers::parse_commands_dir(dir, commands, &plugin_id),
-                        );
-                    }
-                    if let Some(agents) = json.get("agents").and_then(|v| v.as_str()) {
-                        parsers::extend_scanned(
-                            &mut caps,
-                            "agents",
-                            dir,
-                            parsers::parse_agents_dir(dir, agents, &plugin_id),
-                        );
-                    }
-                    if let Some(hooks) = json.get("hooks").and_then(|v| v.as_str()) {
-                        parsers::extend_scanned(
-                            &mut caps,
-                            "hooks",
-                            dir,
-                            parsers::parse_hooks_file(dir, hooks, &plugin_id),
-                        );
-                    }
-                    if let Some(mcp) = json.get("mcpServers").and_then(|v| v.as_str()) {
-                        parsers::extend_scanned(
-                            &mut caps,
-                            "mcp",
-                            dir,
-                            parsers::parse_mcp_config_file(dir, mcp, &plugin_id),
-                        );
-                    }
-
-                    // Cursor-specific: rules → skills
-                    if let Some(rules_path) = json.get("rules").and_then(|v| v.as_str()) {
-                        parsers::extend_scanned(
-                            &mut caps,
-                            "skills",
-                            dir,
-                            parsers::parse_skills_dir(dir, rules_path, &plugin_id),
-                        );
-                    }
+        let manifest_path = dir.join(".cursor-plugin/plugin.json");
+        let manifest = inputs::read_to_string(&manifest_path)
+            .ok()
+            .and_then(|content| match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(json) => Some(json),
+                Err(error) => {
+                    tracing::warn!(path = %manifest_path.display(), %error, "Malformed Cursor manifest");
+                    None
                 }
+            });
+        if let Some(json) = &manifest {
+            if let Some(n) = json.get("name").and_then(|v| v.as_str()) {
+                // Sanitize so a third-party manifest cannot claim an
+                // arbitrary/colliding capability-registry id.
+                let sanitized = crate::extension::manifest::sanitize_plugin_id(n);
+                if !sanitized.is_empty() {
+                    plugin_id = sanitized;
+                }
+            }
+            name = json.get("name").and_then(|v| v.as_str()).map(String::from);
+            version = json
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            description = json
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
+            // Parse standard components
+            if let Some(skills) = json.get("skills").and_then(|v| v.as_str()) {
+                parsers::extend_scanned(
+                    &mut caps,
+                    "skills",
+                    dir,
+                    parsers::parse_skills_dir(dir, skills, &plugin_id),
+                );
+            }
+            // Commands are merged into skills following OpenClaw convention
+            if let Some(commands) = json.get("commands").and_then(|v| v.as_str()) {
+                parsers::extend_scanned(
+                    &mut caps,
+                    "commands",
+                    dir,
+                    parsers::parse_commands_dir(dir, commands, &plugin_id),
+                );
+            }
+            if let Some(agents) = json.get("agents").and_then(|v| v.as_str()) {
+                parsers::extend_scanned(
+                    &mut caps,
+                    "agents",
+                    dir,
+                    parsers::parse_agents_dir(dir, agents, &plugin_id),
+                );
+            }
+            if let Some(hooks) = json.get("hooks").and_then(|v| v.as_str()) {
+                parsers::extend_scanned(
+                    &mut caps,
+                    "hooks",
+                    dir,
+                    parsers::parse_hooks_file(dir, hooks, &plugin_id),
+                );
+            }
+            if let Some(mcp) = json.get("mcpServers").and_then(|v| v.as_str()) {
+                parsers::extend_scanned(
+                    &mut caps,
+                    "mcp",
+                    dir,
+                    parsers::parse_mcp_config_file(dir, mcp, &plugin_id),
+                );
+            }
+
+            // Cursor-specific: rules → skills
+            if let Some(rules_path) = json.get("rules").and_then(|v| v.as_str()) {
+                parsers::extend_scanned(
+                    &mut caps,
+                    "skills",
+                    dir,
+                    parsers::parse_skills_dir(dir, rules_path, &plugin_id),
+                );
             }
         }
 
-        // Scan default directories only when NOT already specified in manifest
-        let has_manifest = dir.join(".cursor-plugin/plugin.json").exists();
-        let json_ref = if has_manifest {
-            std::fs::read_to_string(dir.join(".cursor-plugin/plugin.json"))
-                .ok()
-                .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
-        } else {
-            None
-        };
+        // Scan default directories only when not already specified in the manifest.
         let json_has =
-            |field: &str| -> bool { json_ref.as_ref().and_then(|j| j.get(field)).is_some() };
+            |field: &str| -> bool { manifest.as_ref().and_then(|j| j.get(field)).is_some() };
 
-        if !json_has("skills") && dir.join("skills").is_dir() {
+        if !json_has("skills") && inputs::is_dir(dir.join("skills")) {
             parsers::extend_scanned(
                 &mut caps,
                 "skills",
@@ -138,7 +132,7 @@ impl ManifestAdapter for CursorAdapter {
             );
         }
         // .cursor/commands/ → skills (commands as skills)
-        if !json_has("commands") && dir.join(".cursor/commands").is_dir() {
+        if !json_has("commands") && inputs::is_dir(dir.join(".cursor/commands")) {
             parsers::extend_scanned(
                 &mut caps,
                 "commands",
@@ -147,7 +141,10 @@ impl ManifestAdapter for CursorAdapter {
             );
         }
         // .cursor/agents/ → agents
-        if !json_has("agents") && !json_has("subagents") && dir.join(".cursor/agents").is_dir() {
+        if !json_has("agents")
+            && !json_has("subagents")
+            && inputs::is_dir(dir.join(".cursor/agents"))
+        {
             parsers::extend_scanned(
                 &mut caps,
                 "agents",
@@ -156,7 +153,7 @@ impl ManifestAdapter for CursorAdapter {
             );
         }
         // .cursor/hooks.json → hooks
-        if !json_has("hooks") && dir.join(".cursor/hooks.json").exists() {
+        if !json_has("hooks") && inputs::exists(dir.join(".cursor/hooks.json")) {
             parsers::extend_scanned(
                 &mut caps,
                 "hooks",
@@ -165,7 +162,7 @@ impl ManifestAdapter for CursorAdapter {
             );
         }
         // .mcp.json → MCP servers
-        if !json_has("mcpServers") && dir.join(".mcp.json").exists() {
+        if !json_has("mcpServers") && inputs::exists(dir.join(".mcp.json")) {
             parsers::extend_scanned(
                 &mut caps,
                 "mcp",
@@ -176,7 +173,7 @@ impl ManifestAdapter for CursorAdapter {
 
         // .cursorrules file → single skill
         let cursorrules_path = dir.join(".cursorrules");
-        if cursorrules_path.exists() {
+        if inputs::exists(&cursorrules_path) {
             // A symlink out of the plugin root would turn this read into a
             // file disclosure; the same containment rule the other component
             // parsers use decides it.
@@ -186,7 +183,7 @@ impl ManifestAdapter for CursorAdapter {
                     cursorrules_path,
                     dir
                 );
-            } else if let Ok(content) = std::fs::read_to_string(&cursorrules_path) {
+            } else if let Ok(content) = inputs::read_to_string(&cursorrules_path) {
                 caps.push(CapabilityDeclaration::Skill(SkillRegistration {
                     name: "cursorrules".to_string(),
                     description: "Cursor rules imported as skill".to_string(),
@@ -201,7 +198,7 @@ impl ManifestAdapter for CursorAdapter {
 
         // .cursor/rules/ directory → scan for rule files as skills
         let cursor_rules_dir = dir.join(".cursor/rules");
-        if cursor_rules_dir.is_dir() {
+        if inputs::is_dir(&cursor_rules_dir) {
             // The rules directory itself may point out of the plugin root.
             if !parsers::is_path_inside(dir, &cursor_rules_dir) {
                 tracing::warn!(
@@ -209,7 +206,7 @@ impl ManifestAdapter for CursorAdapter {
                     cursor_rules_dir,
                     dir
                 );
-            } else if let Ok(entries) = std::fs::read_dir(&cursor_rules_dir) {
+            } else if let Ok(entries) = inputs::read_dir(&cursor_rules_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     let ext = path.extension().and_then(|e| e.to_str());
@@ -223,7 +220,7 @@ impl ManifestAdapter for CursorAdapter {
                             );
                             continue;
                         }
-                        if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Ok(content) = inputs::read_to_string(&path) {
                             let rule_name = path
                                 .file_stem()
                                 .and_then(|s| s.to_str())
@@ -244,6 +241,13 @@ impl ManifestAdapter for CursorAdapter {
             }
         }
 
+        let runtime_manifest =
+            super::super::auto_discover_manifest(dir)
+                .ok()
+                .map(|mut manifest| {
+                    manifest.id = plugin_id.clone();
+                    manifest
+                });
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),
             name,
@@ -256,6 +260,8 @@ impl ManifestAdapter for CursorAdapter {
                 format: SourceFormat::Cursor,
             },
             permissions: vec![],
+            runtime_manifest,
+            diagnostics: Vec::new(),
         })
     }
 

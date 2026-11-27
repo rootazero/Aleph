@@ -1,10 +1,15 @@
+use std::path::{Path, PathBuf};
+
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde_json::json;
 
 use aleph_protocol::plugins::{PluginRow, PluginRuntimeStatus};
 
 use super::super::types::{InstallFromZipParams, InstallParams};
-use crate::extension::manifest::adapter::AdapterRegistry;
+use crate::extension::marketplace::installer::{
+    copy_dir_recursive, new_install_staging, publish_install,
+};
+use crate::extension::validation::validate_install_candidate;
 use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::plugins::handlers::get_extension_manager;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
@@ -66,45 +71,32 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
     // filesystem — both block, so they run off the async runtime's threads.
     // Every failure below was an `INTERNAL_ERROR` already, so the error
     // channel is unchanged.
-    let url = params.url.clone();
+    let url = params.url;
     let dest = dest_path.clone();
     let plugins = plugins_dir.clone();
-    let installed = tokio::task::spawn_blocking(move || {
-        git2::Repository::clone(&url, &dest)
-            .map_err(|e| format!("Failed to clone repository: {e}"))?;
-        // Catch clones whose destination resolved outside the
-        // authoritative plugins root (e.g. via a symlinked parent that
-        // was missed at install time).
-        if let Err(reason) =
-            crate::extension::ensure_plugin_root_within_authoritative(&plugins, &dest)
-        {
-            let _ = std::fs::remove_dir_all(&dest);
-            return Err(reason);
+    let installed = crate::skill::run_blocking_fs("plugins.install", move || {
+        let staging = new_install_staging(&plugins)?;
+        let candidate = staging
+            .path()
+            .join(dest.file_name().expect("validated plugin name"));
+        let local = Path::new(&url);
+        if local.is_dir() && git2::Repository::open(local).is_err() {
+            copy_dir_recursive(local, &candidate)?;
+        } else {
+            git2::Repository::clone(&url, &candidate)
+                .map_err(|e| format!("Failed to clone repository: {e}"))?;
         }
-        // Validate the installed plugin via AdapterRegistry
-        let registry = AdapterRegistry::with_defaults();
-        match registry.parse_dir(&dest) {
-            Ok(output) => Ok(output),
-            Err(e) => {
-                // Cleanup on failure
-                let _ = std::fs::remove_dir_all(&dest);
-                Err(format!("Failed to load installed plugin: {e}"))
-            }
-        }
+        let output = validate_install_candidate(&candidate)?;
+        publish_install(&plugins, &candidate, &dest)?;
+        Ok::<_, String>(output)
     })
     .await;
 
     let output = match installed {
-        Ok(Ok(output)) => output,
-        Ok(Err(reason)) => {
-            return JsonRpcResponse::error(request.id, INTERNAL_ERROR, reason);
-        }
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to install plugin: {e}"),
-            );
+        Some(Ok(output)) => output,
+        Some(Err(reason)) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, reason),
+        None => {
+            return JsonRpcResponse::error(request.id, INTERNAL_ERROR, "Plugin install cancelled")
         }
     };
 
@@ -123,14 +115,10 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
             .filter(|c| c.kind_name() == kind)
             .count() as u32
     };
-    // `AdapterOutput` carries capabilities, not the runtime
-    // kind — that lives in the manifest, which is where
-    // `load_all` reads it from too. An unparseable manifest
-    // here would already have failed `parse_dir`, so the
-    // fallback is only for a manifest-less auto-discovered
-    // plugin, which is `Static` by definition.
-    let kind = crate::extension::manifest::parse_manifest_from_dir_sync(&dest_path)
-        .map(|m| m.kind)
+    let kind = output
+        .runtime_manifest
+        .as_ref()
+        .map(|manifest| manifest.kind)
         .unwrap_or(crate::extension::PluginKind::Static);
     let info = PluginRow {
         name: output.name.unwrap_or_else(|| output.plugin_id.clone()),
@@ -248,72 +236,130 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
         }
     };
 
-    // Extract and install
     let plugins_dir = crate::extension::default_plugins_dir();
-    let temp_path = std::env::temp_dir().join(format!("aleph-plugin-{}.zip", uuid::Uuid::new_v4()));
-
-    // Write temp file
-    if let Err(e) = tokio::fs::write(&temp_path, &zip_data).await {
-        return JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to write temp file: {e}"),
-        );
-    }
-
-    // Extract zip
-    let zip_bytes = match tokio::fs::read(&temp_path).await {
-        Ok(b) => b,
-        Err(e) => {
-            let _ = tokio::fs::remove_file(&temp_path).await;
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to open zip file: {e}"),
-            );
-        }
-    };
-    let cursor = std::io::Cursor::new(zip_bytes);
-
-    let mut archive = match zip::ZipArchive::new(cursor) {
-        Ok(a) => a,
-        Err(e) => {
-            let _ = tokio::fs::remove_file(&temp_path).await;
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to read zip archive: {e}"),
-            );
-        }
+    let installed = crate::skill::run_blocking_fs("plugins.installFromZip", move || {
+        install_zip(&plugins_dir, zip_data)
+    })
+    .await;
+    let names = match installed {
+        Some(Ok(names)) => names,
+        Some(Err(reason)) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, reason),
+        None => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, "Zip install cancelled"),
     };
 
-    if let Err(e) = archive.extract(&plugins_dir) {
-        let _ = tokio::fs::remove_file(&temp_path).await;
-        return JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to extract zip: {e}"),
-        );
-    }
-
-    let _ = tokio::fs::remove_file(&temp_path).await;
-
-    // Return list of installed plugin names
-    // For simplicity, return empty list - caller should use plugins.list to refresh
     if let Ok(manager) = get_extension_manager() {
         if let Err(e) = manager.reload().await {
             tracing::warn!("Failed to refresh extensions after zip install: {}", e);
         }
     }
-    JsonRpcResponse::success(
-        request.id,
-        json!({ "installedNames": Vec::<String>::new() }),
-    )
+    JsonRpcResponse::success(request.id, json!({ "installedNames": names }))
+}
+
+fn install_zip(plugins_dir: &Path, bytes: Vec<u8>) -> Result<Vec<String>, String> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .map_err(|e| format!("Failed to read zip archive: {e}"))?;
+    let staging = new_install_staging(plugins_dir)?;
+    let unpacked = staging.path().join("plugin");
+    archive
+        .extract(&unpacked)
+        .map_err(|e| format!("Failed to extract zip: {e}"))?;
+
+    let mut installs = Vec::new();
+    let mut names = Vec::new();
+    if crate::discovery::has_plugin_manifest(&unpacked) {
+        let output = validate_install_candidate(&unpacked)?;
+        crate::extension::manifest::validate_plugin_id(&output.plugin_id)
+            .map_err(|e| e.to_string())?;
+        installs.push((unpacked, plugins_dir.join(&output.plugin_id)));
+        names.push(output.plugin_id);
+    } else {
+        let mut entries = std::fs::read_dir(&unpacked)
+            .and_then(|entries| entries.collect::<Result<Vec<_>, _>>())
+            .map_err(|e| format!("Failed to read extracted zip: {e}"))?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let leaf = entry.file_name();
+            if leaf.to_string_lossy().starts_with('.')
+                || !entry.file_type().map_err(|e| e.to_string())?.is_dir()
+            {
+                continue;
+            }
+            let folder = entry.path();
+            let mut unreadable = Vec::new();
+            let mut candidates = crate::discovery::plugin_candidates(&folder, &mut unreadable);
+            if !unreadable.is_empty() {
+                return Err(format!(
+                    "Failed to read extracted directory: {}",
+                    folder.display()
+                ));
+            }
+            candidates.sort();
+            for candidate in &candidates {
+                names.push(validate_install_candidate(candidate)?.plugin_id);
+            }
+            if !candidates.is_empty() {
+                installs.push((folder, plugins_dir.join(leaf)));
+            }
+        }
+    }
+    if installs.is_empty() {
+        return Err("Zip archive does not contain a plugin manifest".to_owned());
+    }
+
+    let mut published: Vec<&(PathBuf, PathBuf)> = Vec::new();
+    for entry in &installs {
+        let (candidate, dest) = entry;
+        if let Err(error) = publish_install(plugins_dir, candidate, dest) {
+            for (original, installed) in published.into_iter().rev() {
+                if let Err(rollback) = std::fs::rename(installed, original) {
+                    return Err(format!(
+                        "{error}. Could not roll back '{}': {rollback}",
+                        installed.display()
+                    ));
+                }
+            }
+            return Err(error);
+        }
+        published.push(entry);
+    }
+    Ok(names)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn zip_plugins(plugins: &[(&str, &str)]) -> Vec<u8> {
+        use std::io::Write;
+
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (path, manifest) in plugins {
+            writer
+                .start_file(*path, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(manifest.as_bytes()).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn zip_install_validates_every_candidate_before_publishing() {
+        let root = tempfile::tempdir().unwrap();
+        let one = ("one/.claude-plugin/plugin.json", r#"{"name":"one"}"#);
+        let bad = ("two/.claude-plugin/plugin.toml", "name = [");
+        assert!(install_zip(root.path(), zip_plugins(&[one, bad])).is_err());
+        assert!(std::fs::read_dir(root.path()).unwrap().next().is_none());
+
+        let two = ("two/.claude-plugin/plugin.json", r#"{"name":"two"}"#);
+        let archive = zip_plugins(&[one, two]);
+        assert_eq!(
+            install_zip(root.path(), archive.clone()).unwrap(),
+            ["one", "two"]
+        );
+        assert!(install_zip(root.path(), archive).is_err());
+        assert!(root.path().join(one.0).is_file());
+        assert!(root.path().join(two.0).is_file());
+    }
 
     #[test]
     fn classify_bare_name_is_marketplace() {

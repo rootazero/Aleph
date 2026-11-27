@@ -6,6 +6,8 @@
 
 use std::path::Path;
 
+use crate::extension::manifest::inputs;
+
 use anyhow::Result;
 
 use crate::extension::capability::{CapabilitySource, SourceFormat};
@@ -17,12 +19,12 @@ pub struct AutoDiscoverAdapter;
 
 impl ManifestAdapter for AutoDiscoverAdapter {
     fn detect(&self, dir: &Path) -> bool {
-        dir.join("skills").is_dir()
-            || dir.join("commands").is_dir()
-            || dir.join("agents").is_dir()
-            || dir.join("hooks").exists()
-            || dir.join("hooks.json").exists()
-            || dir.join(".mcp.json").exists()
+        inputs::is_dir(dir.join("skills"))
+            || inputs::is_dir(dir.join("commands"))
+            || inputs::is_dir(dir.join("agents"))
+            || inputs::exists(dir.join("hooks"))
+            || inputs::exists(dir.join("hooks.json"))
+            || inputs::exists(dir.join(".mcp.json"))
     }
 
     fn parse(&self, dir: &Path) -> Result<AdapterOutput> {
@@ -36,7 +38,7 @@ impl ManifestAdapter for AutoDiscoverAdapter {
         }
         let mut caps = vec![];
 
-        if dir.join("skills").is_dir() {
+        if inputs::is_dir(dir.join("skills")) {
             parsers::extend_scanned(
                 &mut caps,
                 "skills",
@@ -45,7 +47,7 @@ impl ManifestAdapter for AutoDiscoverAdapter {
             );
         }
         // Commands are merged into skills following OpenClaw convention
-        if dir.join("commands").is_dir() {
+        if inputs::is_dir(dir.join("commands")) {
             parsers::extend_scanned(
                 &mut caps,
                 "commands",
@@ -53,7 +55,7 @@ impl ManifestAdapter for AutoDiscoverAdapter {
                 parsers::parse_commands_dir(dir, "commands", &plugin_id),
             );
         }
-        if dir.join("agents").is_dir() {
+        if inputs::is_dir(dir.join("agents")) {
             parsers::extend_scanned(
                 &mut caps,
                 "agents",
@@ -67,7 +69,7 @@ impl ManifestAdapter for AutoDiscoverAdapter {
         // malformed" and "there is no hooks/hooks.json" produced the same
         // silence before, and only one of them is the author's fault.
         for hooks_path in &["hooks/hooks.json", "hooks.json"] {
-            if !dir.join(hooks_path).exists() {
+            if !inputs::exists(dir.join(hooks_path)) {
                 continue;
             }
             match parsers::parse_hooks_file(dir, hooks_path, &plugin_id) {
@@ -83,7 +85,7 @@ impl ManifestAdapter for AutoDiscoverAdapter {
                 ),
             }
         }
-        if dir.join(".mcp.json").exists() {
+        if inputs::exists(dir.join(".mcp.json")) {
             parsers::extend_scanned(
                 &mut caps,
                 "mcp",
@@ -104,6 +106,8 @@ impl ManifestAdapter for AutoDiscoverAdapter {
                 format: SourceFormat::AutoDiscovered,
             },
             permissions: vec![],
+            runtime_manifest: super::super::auto_discover_manifest(dir).ok(),
+            diagnostics: Vec::new(),
         })
     }
 

@@ -8,7 +8,14 @@ use std::path::Path;
 use anyhow::{anyhow, Result};
 
 use crate::extension::capability::{CapabilityDeclaration, CapabilitySource};
-use crate::extension::manifest::PluginPermission;
+use crate::extension::manifest::{PluginManifest, PluginPermission};
+
+/// A package declaration that cannot be imported by this host.
+#[derive(Debug, Clone)]
+pub struct ImportDiagnostic {
+    pub path: std::path::PathBuf,
+    pub message: String,
+}
 
 /// Output from a manifest adapter parse operation.
 #[derive(Debug, Clone)]
@@ -27,6 +34,10 @@ pub struct AdapterOutput {
     pub source: CapabilitySource,
     /// Permissions required by this plugin
     pub permissions: Vec<PluginPermission>,
+    /// Runtime metadata derived from the same package inputs, when applicable.
+    pub runtime_manifest: Option<PluginManifest>,
+    /// Declarations that the selected adapter cannot import.
+    pub diagnostics: Vec<ImportDiagnostic>,
 }
 
 /// Trait for parsing plugin directories into capability declarations.
@@ -53,6 +64,7 @@ pub trait ManifestAdapter: Send + Sync {
 /// Registry of manifest adapters, tried in priority order.
 pub struct AdapterRegistry {
     adapters: Vec<Box<dyn ManifestAdapter>>,
+    shared_cache: bool,
 }
 
 impl Default for AdapterRegistry {
@@ -65,7 +77,10 @@ impl AdapterRegistry {
     /// Create an empty registry.
     #[must_use]
     pub fn new() -> Self {
-        Self { adapters: vec![] }
+        Self {
+            adapters: vec![],
+            shared_cache: false,
+        }
     }
 
     /// Create a registry with default adapters.
@@ -88,24 +103,53 @@ impl AdapterRegistry {
         registry.register(Box::new(
             super::adapters::auto_discover::AutoDiscoverAdapter,
         ));
+        registry.shared_cache = true;
         registry
+    }
+
+    pub(crate) fn defaults() -> &'static Self {
+        static REGISTRY: std::sync::LazyLock<AdapterRegistry> =
+            std::sync::LazyLock::new(AdapterRegistry::with_defaults);
+        &REGISTRY
     }
 
     /// Register a new adapter. Adapters are sorted by descending priority.
     pub fn register(&mut self, adapter: Box<dyn ManifestAdapter>) {
+        self.shared_cache = false;
         self.adapters.push(adapter);
         self.adapters
             .sort_by_key(|a| std::cmp::Reverse(a.priority()));
     }
 
-    /// Try each adapter in priority order; return the first successful parse.
-    ///
-    /// Every adapter's output passes through
-    /// `expand_plugin_variables` here rather
-    /// than inside each adapter: a new adapter inherits the expansion instead
-    /// of having to be told about it, which is the failure mode that left
-    /// `${CLAUDE_PLUGIN_ROOT}` unexpanded in every skill body ever parsed.
+    /// Read a package for a consumer that displays its contribution bodies.
     pub fn parse_dir(&self, dir: &Path) -> Result<AdapterOutput> {
+        let mut output = self.parse_declarations(dir)?;
+        Self::expand_plugin_variables(&mut output, dir);
+        Ok(output)
+    }
+
+    /// Read normalized declarations, reusing the result while its inputs match.
+    pub(crate) fn parse_declarations(&self, dir: &Path) -> Result<AdapterOutput> {
+        if self.shared_cache {
+            if let Some(output) = super::global_manifest_cache().get_package(dir) {
+                return Ok(output);
+            }
+        }
+        self.parse_dir_fresh(dir)
+    }
+
+    /// Re-read normalized declarations for installation and reload preflight.
+    pub fn parse_dir_fresh(&self, dir: &Path) -> Result<AdapterOutput> {
+        let (result, inputs) = super::inputs::capture(|| self.read_package(dir));
+        let output = result?;
+        inputs.verify()?;
+        if self.shared_cache {
+            super::global_manifest_cache().put_package(dir, output.clone(), inputs);
+        }
+        Ok(output)
+    }
+
+    fn read_package(&self, dir: &Path) -> Result<AdapterOutput> {
         for adapter in &self.adapters {
             if adapter.detect(dir) {
                 tracing::debug!(
@@ -114,22 +158,13 @@ impl AdapterRegistry {
                     "Adapter matched"
                 );
                 let mut output = adapter.parse(dir)?;
-                // Use the metadata parser selected by the same directory precedence.
                 // Context declarations remain discovery metadata, never registrations.
-                let has_manifest = [
-                    super::CC_PLUGIN_TOML,
-                    super::CC_PLUGIN_JSON,
-                    super::ALEPH_PLUGIN_TOML,
-                ]
-                .iter()
-                .any(|path| dir.join(path).is_file());
-                let extensions = if has_manifest {
-                    super::parse_manifest_from_dir_sync(dir)?.aleph_extensions
-                } else {
-                    None
-                };
+                let extensions = output
+                    .runtime_manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.aleph_extensions.as_ref());
                 if let Some(extensions) = extensions {
-                    for context in extensions.contexts {
+                    for context in &extensions.contexts {
                         context.descriptor.validate().map_err(|e| anyhow!("{e}"))?;
                         if context.handler.trim().is_empty()
                             || context.handler.trim() != context.handler
@@ -138,10 +173,9 @@ impl AdapterRegistry {
                         }
                         output
                             .capabilities
-                            .push(CapabilityDeclaration::Context(context));
+                            .push(CapabilityDeclaration::Context(context.clone()));
                     }
                 }
-                Self::expand_plugin_variables(&mut output, dir);
                 return Ok(output);
             }
         }
@@ -169,18 +203,22 @@ impl AdapterRegistry {
     /// `r $(touch M) "` spliced into source is parsed as code. Names and ids
     /// are identifiers, not paths, and expanding them would let a manifest
     /// smuggle an absolute path into a registry key.
-    fn expand_plugin_variables(output: &mut AdapterOutput, plugin_dir: &Path) {
+    pub(crate) fn expand_plugin_variables(
+        output: &mut AdapterOutput,
+        plugin_dir: &Path,
+    ) -> Option<std::path::PathBuf> {
         use crate::extension::plugin_vars::PluginVars;
 
         let vars = PluginVars::new(&output.plugin_id, plugin_dir);
+        let mut needs_data_dir = false;
         for cap in &mut output.capabilities {
             match cap {
                 CapabilityDeclaration::Skill(skill) => {
-                    vars.ensure_data_dir_if_referenced(&skill.content);
+                    needs_data_dir |= PluginVars::references_data(&skill.content);
                     skill.content = expand_outside_inline_commands(&vars, &skill.content);
                 }
                 CapabilityDeclaration::Agent(agent) => {
-                    vars.ensure_data_dir_if_referenced(&agent.content);
+                    needs_data_dir |= PluginVars::references_data(&agent.content);
                     agent.content = vars.expand(&agent.content);
                 }
                 // A hook's text is shell source (a `command`) or an
@@ -202,6 +240,7 @@ impl AdapterRegistry {
                 | CapabilityDeclaration::Context(_) => {}
             }
         }
+        needs_data_dir.then(|| vars.data_dir().to_path_buf())
     }
 
     /// Number of registered adapters.
@@ -289,6 +328,8 @@ mod tests {
                     format: SourceFormat::AlephToml,
                 },
                 permissions: vec![],
+                runtime_manifest: None,
+                diagnostics: Vec::new(),
             })
         }
 
@@ -448,6 +489,54 @@ mod tests {
             body.contains(&format!("{}/scripts/x.py", dir.path().to_string_lossy())),
             "expected the plugin root to be substituted: {body}"
         );
+    }
+
+    #[test]
+    fn cached_package_tracks_component_bytes_and_preferred_manifest() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        let meta = dir.join(".claude-plugin");
+        let skill_dir = dir.join("skills/sample");
+        std::fs::create_dir(&meta).unwrap();
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(meta.join("plugin.json"), r#"{"name":"cached-json"}"#).unwrap();
+        let body = skill_dir.join("SKILL.md");
+        let write_skill = |body_text| {
+            std::fs::write(
+                &body,
+                format!(
+                    "---
+name: sample
+description: sample
+---
+{body_text}
+"
+                ),
+            )
+            .unwrap()
+        };
+        let registry = AdapterRegistry::with_defaults();
+        let has_body = |text| {
+            registry.parse_dir(dir).unwrap().capabilities.iter().any(|cap| {
+            matches!(cap, CapabilityDeclaration::Skill(skill) if skill.content.contains(text))
+        })
+        };
+        write_skill("first body");
+        assert!(has_body("first body"));
+        write_skill("revised body");
+        assert!(has_body("revised body"));
+        std::fs::remove_file(body).unwrap();
+        assert!(!has_body("revised body"));
+
+        std::fs::write(
+            meta.join("plugin.toml"),
+            "name = \"preferred-toml\"
+",
+        )
+        .unwrap();
+        let preferred = registry.parse_dir(dir).unwrap();
+        assert_eq!(preferred.plugin_id, "preferred-toml");
+        assert_eq!(preferred.runtime_manifest.unwrap().id, "preferred-toml");
     }
 
     /// Identifiers are not paths. Expanding a name would let a manifest

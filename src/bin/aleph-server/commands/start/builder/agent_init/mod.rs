@@ -674,7 +674,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         continue;
                     }
                     if let Ok(manifest) =
-                        alephcore::extension::manifest::parse_manifest_from_dir_sync(
+                        alephcore::extension::manifest::parse_manifest_from_dir_cached_global(
                             &plugin.root_dir,
                         )
                     {

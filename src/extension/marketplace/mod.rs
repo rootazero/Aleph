@@ -370,29 +370,6 @@ impl MarketplaceManager {
             1 => {
                 let result = &results[0];
                 let plugin_path = result.installable_path()?;
-                // Verify integrity before installing when the marketplace entry
-                // declares a hash (no-op when `sha256` is absent).
-                installer::verify_plugin_integrity(plugin_path, result.plugin.sha256.as_deref())?;
-                // Gate on manifest soundness before copying into place: a plugin
-                // whose manifest fails to parse, has duplicate tools, or declares
-                // a malformed `config_schema` cannot load anyway, so reject it
-                // here with the concrete reasons rather than after install.
-                let validation = crate::extension::validation::validate_plugin(plugin_path);
-                if !validation.is_valid() {
-                    return Err(format!(
-                        "Plugin '{}' failed validation and was not installed:\n  - {}",
-                        plugin_name,
-                        validation.errors.join("\n  - ")
-                    ));
-                }
-                // The warnings are not fatal, but they are the operator's only
-                // clue that the installed plugin is not actually usable yet
-                // (entry file never built, duplicate hook handler, ...). They
-                // travel with the outcome instead of being dropped here.
-                let warnings = validation.warnings.clone();
-                for warning in &warnings {
-                    tracing::warn!(plugin = plugin_name, "{}", warning);
-                }
                 let install_dir =
                     crate::extension::visibility::scope_install_dir(scope, project_dir)?;
                 // review(extension): refuse symlink escapes at the install
@@ -410,8 +387,19 @@ impl MarketplaceManager {
                         "Refusing to install '{plugin_name}' into unsafe location: {e}"
                     ));
                 }
-                let path =
-                    installer::install_plugin_from_cache(plugin_path, &install_dir, plugin_name)?;
+                let (path, warnings) = installer::install_checked(
+                    plugin_path,
+                    &install_dir,
+                    plugin_name,
+                    |candidate| {
+                        validate_staged_plugin(
+                            candidate,
+                            plugin_name,
+                            result.plugin.sha256.as_deref(),
+                            "installed",
+                        )
+                    },
+                )?;
                 Ok(InstalledPlugin { path, warnings })
             }
             _ => {
@@ -498,23 +486,10 @@ impl MarketplaceManager {
                 }
 
                 let plugin_path = result.installable_path()?;
-                // Same gates as install: integrity hash (when declared) + manifest
-                // soundness, before touching the existing install.
-                installer::verify_plugin_integrity(plugin_path, result.plugin.sha256.as_deref())?;
-                let validation = crate::extension::validation::validate_plugin(plugin_path);
-                if !validation.is_valid() {
-                    return Err(format!(
-                        "Plugin '{}' failed validation and was not updated:\n  - {}",
-                        plugin_name,
-                        validation.errors.join("\n  - ")
-                    ));
-                }
-                let warnings = validation.warnings.clone();
-                for warning in &warnings {
-                    tracing::warn!(plugin = plugin_name, "{}", warning);
-                }
-
-                installer::update_plugin_from_cache(plugin_path, &install_dir, plugin_name)?;
+                let (_, warnings) =
+                    installer::update_checked(plugin_path, &install_dir, plugin_name, |candidate| {
+                        validate_staged_plugin(candidate, plugin_name, result.plugin.sha256.as_deref(), "updated")
+                    })?;
 
                 Ok(UpdateOutcome::Updated {
                     from: installed_version,
@@ -625,6 +600,30 @@ pub enum UpdateOutcome {
 /// Reuses the same adapter parsing path used at install time, so every manifest
 /// format Aleph understands (`.claude-plugin/plugin.toml`, `plugin.json`,
 /// auto-discovery, legacy) is handled identically.
+fn validate_staged_plugin(
+    candidate: &Path,
+    plugin_name: &str,
+    expected_hash: Option<&str>,
+    action: &str,
+) -> Result<Vec<String>, String> {
+    installer::verify_plugin_integrity(candidate, expected_hash)?;
+    let validation = crate::extension::validation::validate_plugin(candidate);
+    if !validation.is_valid() {
+        return Err(format!(
+            "Plugin '{plugin_name}' failed validation and was not {action}:
+  - {}",
+            validation.errors.join(
+                "
+  - "
+            )
+        ));
+    }
+    for warning in &validation.warnings {
+        tracing::warn!(plugin = plugin_name, "{}", warning);
+    }
+    Ok(validation.warnings)
+}
+
 fn read_installed_plugin_version(installed_path: &Path) -> Option<String> {
     use crate::extension::manifest::adapter::AdapterRegistry;
     AdapterRegistry::with_defaults()
