@@ -4,6 +4,11 @@
   "version": "26.9.1",
   "rust": ".",
   "root": "App",
+  "icon": {
+    "macos": "icons/aleph-macos.png",
+    "windows": "icons/aleph.png",
+    "linux": "icons/aleph.png"
+  },
   "schemes": [
     "aleph"
   ],

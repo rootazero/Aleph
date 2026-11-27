@@ -11,7 +11,7 @@ use crate::update::{self, InstallStep, Updater};
 use crate::{autostart, credentials, launch, menu, panel_bridge};
 use aleph_client::ConnectionTarget;
 use nsh_base::theme;
-use nsh_core::desktop::{Shortcut, TrayTitleRun};
+use nsh_core::desktop::Shortcut;
 #[cfg(target_os = "macos")]
 use nsh_core::element::desktop::set_application_menu;
 use nsh_core::element::desktop::{
@@ -134,7 +134,7 @@ pub fn App() -> impl IntoElement {
     };
     set_tray(
         tray()
-            .title([TrayTitleRun::new("Aleph")])
+            .icon(nsh_core::prelude::asset!("aleph-tray.png"))
             .tooltip("Aleph")
             .menu(commands.tray()),
     );

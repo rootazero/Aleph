@@ -7,6 +7,7 @@ first time (the nsh runner is compiled); later runs reuse its build.
 
 import json
 import os
+import plistlib
 import subprocess
 import sys
 import tarfile
@@ -65,6 +66,19 @@ class MacosPackage(unittest.TestCase):
             path = self.app / "Contents" / "MacOS" / helper
             self.assertTrue(path.is_file(), helper)
             self.assertTrue(os.access(path, os.X_OK), helper)
+
+    def test_bundle_carries_the_app_and_tray_icons(self):
+        contents = self.app / "Contents"
+        with (contents / "Info.plist").open("rb") as info:
+            icon_name = plistlib.load(info)["CFBundleIconFile"]
+        if not icon_name.endswith(".icns"):
+            icon_name += ".icns"
+        self.assertTrue((contents / "Resources" / icon_name).is_file())
+        tray = contents / "Resources/nsh/assets/@aleph-nsh-shell/aleph-tray.png"
+        self.assertEqual(
+            tray.read_bytes(),
+            (ROOT / "desktop/nsh-shell/assets/aleph-tray.png").read_bytes(),
+        )
 
     def test_bundle_signature_verifies(self):
         verify = subprocess.run(

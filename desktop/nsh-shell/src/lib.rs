@@ -55,5 +55,6 @@ pub use cli::run as run_command_line;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[nsh_core::prelude::native_module("aleph/native")]
 fn native(registry: &mut nsh_core::prelude::Registry) {
+    registry.assets(nsh_core::prelude::assets!());
     registry.register::<App>();
 }
