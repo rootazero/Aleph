@@ -357,6 +357,16 @@ impl AgentTask {
 // Task Trace
 // =============================================================================
 
+/// Attestation recorded only at the settled provider-response trace seam.
+/// Unknown future spellings remain readable but never authorize source lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThoughtProvenance {
+    ProviderResponse,
+    #[serde(other)]
+    Unknown,
+}
+
 /// Execution trace entry for Shadow Replay
 ///
 /// Records a single structured execution event in task execution,
@@ -380,6 +390,10 @@ pub struct TaskTrace {
     /// Structured agent trace event
     pub event: AgentTraceEvent,
 
+    /// Absent on legacy rows and generic stream/synthetic producers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_provenance: Option<ThoughtProvenance>,
+
     /// Timestamp (Unix epoch seconds)
     pub timestamp: i64,
 }
@@ -396,6 +410,7 @@ impl TaskTrace {
             task_id: task_id.into(),
             step_index,
             event: event.into(),
+            thought_provenance: None,
             timestamp: chrono::Utc::now().timestamp(),
         }
     }
