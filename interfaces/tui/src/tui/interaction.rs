@@ -455,10 +455,9 @@ impl InteractionController {
         });
     }
 
-    /// Offer a frame's public projection. Same-session supersede replaces its
-    /// predecessor in place; a delayed frame with an older cursor is ignored.
-    /// Identity-less projections are accepted for display only: they stay
-    /// read-only until a snapshot supplies both identities.
+    /// Install a question after the push or snapshot admission checks.
+    /// A confirmed replacement keeps its predecessor's place in the queue.
+    /// Projections without a request ID remain read-only.
     pub fn offer_question(&mut self, pending: PendingClarification) {
         let owner = ModalOwner::Clarification {
             session_key: pending.session_key.clone(),
@@ -573,9 +572,8 @@ impl InteractionController {
         }
     }
 
-    /// Consume the wire events without duplicating their public shape in the
-    /// app. Returns true when a legacy terminal needs an authoritative pending
-    /// refresh (it has no identity with which to safely close a modal).
+    /// Consume notifications without letting competing request IDs order each
+    /// other. Returns true when the authoritative pending snapshot must decide.
     pub fn observe_event(&mut self, event: &StreamEvent) -> bool {
         match event {
             StreamEvent::AskUser {
@@ -589,7 +587,23 @@ impl InteractionController {
                 ..
             } => {
                 if session_key.is_empty() {
-                    return true; // Legacy frame: discover session/request from pending.
+                    return true;
+                }
+                if self
+                    .retired
+                    .iter()
+                    .any(|(s, r)| s == session_key && r == request_id)
+                {
+                    return false;
+                }
+                // Request IDs are opaque. If this frame names a different
+                // request, only a snapshot can say which is live.
+                if self.cards.iter().any(|card| {
+                    matches!(card.owner(), ModalOwner::Clarification {
+                        session_key: key, request_id: current,
+                    } if key == session_key && current != request_id)
+                }) {
+                    return true;
                 }
                 self.offer_question(PendingClarification {
                     session_key: session_key.clone(),
@@ -600,14 +614,14 @@ impl InteractionController {
                     questions: questions.clone(),
                     answered: *answered,
                 });
-                false
+                request_id.is_empty()
             }
             StreamEvent::ClarificationEnded {
                 session_key,
                 request_id,
                 ..
             } => {
-                if request_id.is_empty() {
+                if session_key.is_empty() || request_id.is_empty() {
                     true
                 } else {
                     self.end_question(session_key, request_id);
@@ -1478,6 +1492,30 @@ mod tests {
         assert!(
             matches!(c.active_owner(), Some(ModalOwner::Clarification { request_id, .. }) if request_id == "new")
         );
+    }
+
+    #[test]
+    fn conflicting_push_does_not_retire_the_snapshot_confirmed_request() {
+        let mut c = InteractionController::new("s");
+        c.reconcile_pending("s", Some(pending("s", "current", "run-b", false)));
+        c.active_dialog_mut().unwrap().input = "draft".into();
+        let late = StreamEvent::AskUser {
+            run_id: "run-a".into(),
+            seq: 1,
+            session_key: "s".into(),
+            request_id: "late".into(),
+            question: "Old?".into(),
+            options: vec![],
+            questions: pending("s", "late", "run-a", false).questions,
+            answered: 0,
+        };
+        let needs_refresh = c.observe_event(&late);
+        c.reconcile_pending("s", Some(pending("s", "current", "run-b", false)));
+        assert!(
+            matches!(c.active_owner(), Some(ModalOwner::Clarification { request_id, .. }) if request_id == "current")
+        );
+        assert_eq!(c.active_dialog().unwrap().input, "draft");
+        assert!(needs_refresh);
     }
 
     #[test]

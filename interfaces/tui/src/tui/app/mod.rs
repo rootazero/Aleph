@@ -311,12 +311,8 @@ impl DialogState {
     }
 }
 
-/// The question an `AskUser` frame is asking, flattened for the overlay.
-///
-/// A struct rather than four positional arguments because two of them are
-/// adjacent bools: `show_dialog(key, q, opts, true, false)` reads identically
-/// whichever way round the last two go, and one of them decides whether the
-/// answer is masked.
+/// A test fixture for an old, read-only dialog projection.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AskDialogView {
     /// Prompt as rendered — position marker, header chip, and hint included.
@@ -1990,12 +1986,7 @@ impl AppState {
         }
     }
 
-    /// Show an `AskUser` dialog. `session_key` is the clarification key the
-    /// answer resolves against (`clarification.resolve`).
-    ///
-    /// The overlay opens in text mode whenever there is nothing to quick-pick,
-    /// so the first keystroke on a free-text (or multi-select) question already
-    /// goes where the user means it to.
+    #[cfg(test)]
     pub fn show_dialog(&mut self, session_key: String, view: AskDialogView) {
         self.interaction
             .offer_question(aleph_protocol::PendingClarification {
