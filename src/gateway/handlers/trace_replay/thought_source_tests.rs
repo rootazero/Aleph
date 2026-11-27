@@ -175,15 +175,19 @@ async fn thought_source_translates_only_owned_blocks_through_registered_engines(
     .unwrap();
     let mut updates = gateway.event_bus().subscribe();
     let handlers = gateway.handlers().clone();
-    let mut state = ConnectionState::new("127.0.0.1".parse().unwrap(), true);
-    state.first_message = false;
-    state.caller_user = Some("alice".into());
-    state.verified_user = state.caller_user.clone();
+    let connection = || {
+        let mut state = ConnectionState::new("127.0.0.1".parse().unwrap(), true);
+        state.first_message = false;
+        state.caller_user = Some("alice".into());
+        state.verified_user = state.caller_user.clone();
+        state
+    };
+    let state = connection();
     gateway
         .connections
         .write()
         .await
-        .insert("fixture".into(), state.clone());
+        .insert("fixture".into(), connection());
     let call = |request: JsonRpcRequest| {
         let handlers = handlers.clone();
         let role = state.caller_role.clone();
