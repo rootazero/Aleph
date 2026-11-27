@@ -56,7 +56,7 @@ impl AcpAdapterManager {
                 return Err(session_closed());
             }
             let slot = state.slots.entry(key.clone()).or_default();
-            if slot.epoch.is_cancelled() {
+            if slot.retiring {
                 return Err(session_closed());
             }
             if !replace {
@@ -467,7 +467,7 @@ impl AcpAdapterManager {
         let live = {
             let state = self.state();
             let slot = &state.slots[key];
-            if !Arc::ptr_eq(&slot.epoch, &target.epoch) {
+            if !slot.retiring {
                 return Ok(None);
             }
             slot.live.clone()
@@ -478,12 +478,14 @@ impl AcpAdapterManager {
         let mut state = self.state();
         let slot = state.slots.get_mut(key).expect("reserved slot");
         slot.live = None;
-        slot.epoch = Arc::default();
-        let epoch = Arc::clone(&slot.epoch);
+        let current = Arc::ptr_eq(&slot.epoch, &target.epoch);
+        if current {
+            slot.retiring = false;
+        }
         if live.is_some() {
             state.publish(None);
         }
-        Ok(Some(epoch))
+        Ok(current.then(|| Arc::clone(&target.epoch)))
     }
 }
 

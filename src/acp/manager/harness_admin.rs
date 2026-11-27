@@ -263,7 +263,7 @@ impl AcpAdapterManager {
                     record.session_name.as_deref(),
                 );
                 let slot = state.slots.entry(key.clone()).or_default();
-                if slot.live.is_none() && slot.saved_id.is_none() && !slot.epoch.is_cancelled() {
+                if slot.live.is_none() && slot.saved_id.is_none() && !slot.retiring {
                     slot.saved_id = Some(record.acp_session_id);
                     keys.push((key, Arc::clone(&slot.epoch)));
                 }

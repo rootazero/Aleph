@@ -257,6 +257,35 @@ async fn explicit_replacement_waits_for_old_child_exit() {
 }
 
 #[tokio::test]
+async fn shutdown_supersedes_a_replacement_waiting_for_its_predecessor() {
+    let fixture = PeerFixture::new();
+    let dir = fixture.workspace("superseded");
+    let cwd = dir.to_str().unwrap();
+    let manager = fixture.manager();
+    let active = manager.prompt(HARNESS, "stop reading", cwd, None, true, None);
+    tokio::pin!(active);
+    let pid = tokio::select! {
+        result = &mut active => panic!("prompt completed before peer stalled: {result:?}"),
+        pid = first_pid(&dir, "session/prompt") => pid,
+    };
+
+    let replace = manager.prompt(HARNESS, "replacement", cwd, None, false, None);
+    tokio::pin!(replace);
+    assert!(futures::poll!(&mut replace).is_pending());
+    let close = manager.shutdown_named(HARNESS, cwd, None);
+    let (active, replace, close) =
+        timeout(DEADLINE, async { tokio::join!(active, replace, close) })
+            .await
+            .expect("shutdown stalled while superseding replacement");
+    assert!(active.is_err());
+    assert!(replace.is_err());
+    close.unwrap();
+    assert_exited(pid);
+    assert_eq!(frames(&dir).matches(" initialize").count(), 1);
+    assert!(manager.list_sessions().await.is_empty());
+}
+
+#[tokio::test]
 async fn shutdown_reaps_unresponsive_child_and_rejects_stale_waiter() {
     let fixture = PeerFixture::new();
     let dir = fixture.workspace("unresponsive");

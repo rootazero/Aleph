@@ -80,14 +80,17 @@ fn session_closed() -> AlephError {
 struct SessionSlot {
     transition: Arc<AsyncMutex<()>>,
     epoch: Arc<CancellationToken>,
+    retiring: bool,
     live: Option<Arc<SessionEntry>>,
     saved_id: Option<String>,
     load_failure: Option<String>,
 }
 
 impl SessionSlot {
-    fn withdraw(&self) {
+    fn withdraw(&mut self) {
         self.epoch.cancel();
+        self.epoch = Arc::default();
+        self.retiring = true;
         if let Some(entry) = &self.live {
             entry.closed.cancel();
         }
