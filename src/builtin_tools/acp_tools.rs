@@ -685,8 +685,23 @@ mod registered_tool_tests {
         })
         .await
         .expect("registered ACP prompt and cancel must both finish");
-        assert_eq!(prompt.unwrap().value["result"], "canceled");
-        assert_eq!(cancel.unwrap().value["action"], "cancel");
+        let prompt = prompt.unwrap().value;
+        let cancel = cancel.unwrap().value;
+        assert!(prompt.as_str().unwrap().contains("canceled"), "{prompt}");
+        assert!(
+            cancel
+                .as_str()
+                .unwrap()
+                .contains("cancel notification sent"),
+            "{cancel}"
+        );
+        let frames = std::fs::read_to_string(cwd.join("frames")).unwrap();
+        let pid = frames
+            .lines()
+            .find_map(|line| line.strip_suffix(" session/prompt"))
+            .unwrap();
+        let cancel_frame = format!("{pid} cancel:peer-{pid}");
+        assert!(frames.lines().any(|line| line == cancel_frame), "{frames}");
         manager.shutdown_all().await;
     }
 }
