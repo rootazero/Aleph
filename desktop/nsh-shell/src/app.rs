@@ -2,21 +2,22 @@
 //! runner mounts it as nsh.json's `"root"`; the command-line entry mounts the
 //! same component after presetting its launch.
 
+use crate::connect_form::{self, Switch, View};
 #[cfg(feature = "embedded-core")]
 use crate::local_service::{LocalService, ServerPhase};
+use crate::shell_host::HostSettings;
 use crate::{autostart, credentials, launch, panel_bridge};
-#[cfg(feature = "embedded-core")]
 use nsh_base::theme;
 use nsh_core::desktop::{Shortcut, TrayTitleRun};
 use nsh_core::element::desktop::{
     main_window, quit, register_global_shortcut, set_tray, tray, MenuItem, WindowRef,
 };
 use nsh_core::prelude::{
-    component, element_ref, request_notification_permission, spawn, web_view, AnyElement, Element,
-    IntoElement, Styled, WebNavigation,
+    component, dynamic, element_ref, px, request_notification_permission, signal, spawn, text,
+    view, web_view, AnyElement, Element, IntoElement, ParentElement, Styled, WebNavigation,
 };
 #[cfg(feature = "embedded-core")]
-use nsh_core::prelude::{dynamic, px, signal, text, view, when, Interactive, ParentElement};
+use nsh_core::prelude::{when, Interactive};
 use std::io::Write;
 use std::sync::Mutex;
 
@@ -57,6 +58,12 @@ fn injected_script(launch: &launch::Launch, bridge_prefix: &str) -> String {
 #[component]
 pub fn App() -> impl IntoElement {
     let launch = launch::current();
+    let switch = Switch {
+        view: signal(connect_form::initial_view(&launch.settings.target)),
+        home: std::env::home_dir(),
+        #[cfg(feature = "embedded-core")]
+        service: LocalService::bundled(),
+    };
     let window = main_window();
     let close_window = window.clone();
     window.on_close_press(move |_| close_window.hide());
@@ -66,12 +73,21 @@ pub fn App() -> impl IntoElement {
         window.show();
         window.focus();
     };
+    let connect = {
+        let switch = switch.clone();
+        let show = show.clone();
+        move || {
+            switch.open_form();
+            show();
+        }
+    };
     set_tray(
         tray()
             .title([TrayTitleRun::new("Aleph")])
             .tooltip("Aleph")
             .menu([
                 MenuItem::new("Show Aleph").on_select(show.clone()),
+                MenuItem::new("Connect to Server…").on_select(connect),
                 MenuItem::new("Enable Notifications").on_select(|| {
                     let permission = request_notification_permission();
                     spawn(async move {
@@ -111,29 +127,84 @@ pub fn App() -> impl IntoElement {
             .flex_1()
             .into_element();
     }
-    #[cfg(feature = "embedded-core")]
-    if launch.settings.acquires_local_server {
-        return local_panel(launch, bridge_window);
+    // A QA run shows its isolated endpoint as it is: no probe, no form.
+    if launch.qa.is_some() {
+        return panel(&launch, bridge_window);
     }
-    panel(&launch, bridge_window)
+    if let target @ aleph_client::ConnectionTarget::Remote(_) = &launch.settings.target {
+        switch.probe_startup(target.clone());
+    }
+    let shown = switch.view;
+    view()
+        .flex_1()
+        .child(dynamic(move || match shown.get() {
+            View::Starting => local(&switch, bridge_window.clone()),
+            View::Checking => status_screen()
+                .child(muted("正在连接服务器…"))
+                .into_element(),
+            View::Connect { error, back } => {
+                connect_form::form(error, back.map(|view| *view), switch.clone())
+            }
+            View::Panel { target } => match HostSettings::for_target(target, None) {
+                Ok(settings) => panel(
+                    &launch::Launch { settings, qa: None },
+                    bridge_window.clone(),
+                ),
+                Err(error) => connect_form::form(Some(error), None, switch.clone()),
+            },
+        }))
+        .into_element()
+}
+
+/// This computer's server: the bundled one once it is ready, or, in a build
+/// without it, whatever already listens on the local port.
+fn local(switch: &Switch, window: WindowRef) -> AnyElement {
+    let settings = HostSettings::for_target(aleph_client::ConnectionTarget::Local, None)
+        .expect("the local target is a loopback HTTP origin");
+    let launch = launch::Launch { settings, qa: None };
+    #[cfg(feature = "embedded-core")]
+    return local_panel(launch, switch.service.clone(), window);
+    #[cfg(not(feature = "embedded-core"))]
+    {
+        let _ = switch;
+        panel(&launch, window)
+    }
+}
+
+fn status_screen() -> nsh_core::prelude::View {
+    view()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .gap_3()
+        .p(px(32.0))
+        .bg(move || theme().background)
+}
+
+fn muted(message: impl Into<String>) -> impl IntoElement {
+    text(message.into()).text_color(move || theme().muted_foreground)
 }
 
 /// The Panel once the bundled server is ready; until then, its progress or
 /// its failure with a retry.
 #[cfg(feature = "embedded-core")]
-fn local_panel(launch: launch::Launch, window: WindowRef) -> AnyElement {
-    let service = LocalService::bundled();
+fn local_panel(launch: launch::Launch, service: LocalService, window: WindowRef) -> AnyElement {
+    // Start first, so the phase read below is this attempt's, not the
+    // Ready left over from before a switch to a remote server.
+    service.start();
     let phase = signal(service.phase());
     let mut changes = service.subscribe();
     spawn(async move {
         loop {
-            phase.set(changes.borrow_and_update().clone());
+            // The view that owns `phase` is gone after a switch away.
+            if !phase.try_set(changes.borrow_and_update().clone()) {
+                return;
+            }
             if changes.changed().await.is_err() {
                 return;
             }
         }
     });
-    service.start();
     view()
         .flex_1()
         .child(
@@ -151,22 +222,14 @@ fn local_panel(launch: launch::Launch, window: WindowRef) -> AnyElement {
 
 #[cfg(feature = "embedded-core")]
 fn local_status(phase: ServerPhase, service: &LocalService) -> AnyElement {
-    let screen = view()
-        .flex_1()
-        .items_center()
-        .justify_center()
-        .gap_3()
-        .p(px(32.0))
-        .bg(move || theme().background);
+    let screen = status_screen();
     let ServerPhase::Failed(error) = phase else {
-        return screen
-            .child(text("正在启动本地服务…").text_color(move || theme().muted_foreground))
-            .into_element();
+        return screen.child(muted("正在启动本地服务…")).into_element();
     };
     let retry = service.clone();
     screen
         .child(text("本地服务启动失败").text_color(move || theme().foreground))
-        .child(text(error).text_color(move || theme().muted_foreground))
+        .child(muted(error))
         .child(
             view()
                 .px(px(20.0))

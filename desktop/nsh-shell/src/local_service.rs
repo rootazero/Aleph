@@ -14,9 +14,13 @@ pub(crate) enum ServerPhase {
 /// Brings the local server up; blocks until it is ready or refused.
 pub(crate) type Launcher = Box<dyn Fn() -> Result<(), String> + Send + Sync>;
 
+/// Stops the local server; blocks until its port is closed.
+pub(crate) type Stopper = Box<dyn Fn() + Send + Sync>;
+
 #[derive(Clone)]
 pub(crate) struct LocalService {
     launcher: Arc<Launcher>,
+    stopper: Arc<Stopper>,
     phase: Arc<watch::Sender<ServerPhase>>,
     /// Whether an attempt is in flight. Held while the phase changes, so an
     /// attempt that settles cannot overwrite the start of a newer one.
@@ -24,9 +28,10 @@ pub(crate) struct LocalService {
 }
 
 impl LocalService {
-    pub(crate) fn new(launcher: Launcher) -> Self {
+    pub(crate) fn new(launcher: Launcher, stopper: Stopper) -> Self {
         Self {
             launcher: Arc::new(launcher),
+            stopper: Arc::new(stopper),
             phase: Arc::new(watch::Sender::new(ServerPhase::Starting)),
             running: Arc::new(Mutex::new(false)),
         }
@@ -35,13 +40,22 @@ impl LocalService {
     /// The `aleph-server` next to this executable, as the packaged app
     /// ships it; a compatible server already listening is used as it is.
     pub(crate) fn bundled() -> Self {
-        Self::new(Box::new(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|_| "could not initialize the local service runtime".to_owned())?
-                .block_on(aleph_desktop_host::local_server::ensure_compatible_ready())
-        }))
+        Self::new(
+            Box::new(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| "could not initialize the local service runtime".to_owned())?
+                    .block_on(aleph_desktop_host::local_server::ensure_compatible_ready())
+            }),
+            Box::new(stop_bundled),
+        )
+    }
+
+    /// Stops the local server and waits for its port to close; blocks, so
+    /// call it off the engine thread. The next [`Self::start`] brings it up.
+    pub(crate) fn stop(&self) {
+        (self.stopper)();
     }
 
     /// Starts an attempt in the background, unless one is in flight.
@@ -92,6 +106,32 @@ impl LocalService {
     }
 }
 
+/// `aleph-server stop` for the server next to this executable, then waits
+/// for the port to close so a later start does not find the old server.
+fn stop_bundled() {
+    use aleph_desktop_host::local_server::{resolve_daemon_binary, wait_until_port_closed};
+    let Some(server) = resolve_daemon_binary() else {
+        eprintln!("cannot stop the local server: aleph-server not found");
+        return;
+    };
+    match std::process::Command::new(&server).arg("stop").output() {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => eprintln!(
+            "aleph-server stop exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+        Err(error) => eprintln!("aleph-server stop failed: {error}"),
+    }
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime.block_on(wait_until_port_closed()),
+        Err(error) => eprintln!("could not wait for the local server to stop: {error}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{LocalService, ServerPhase};
@@ -117,11 +157,14 @@ mod tests {
         let gate = Mutex::new(gate);
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = calls.clone();
-        let service = LocalService::new(Box::new(move || {
-            counted.fetch_add(1, Ordering::SeqCst);
-            let _ = gate.lock().unwrap().recv();
-            result.clone()
-        }));
+        let service = LocalService::new(
+            Box::new(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let _ = gate.lock().unwrap().recv();
+                result.clone()
+            }),
+            Box::new(|| {}),
+        );
         (service, release, calls)
     }
 
@@ -136,7 +179,8 @@ mod tests {
 
     #[test]
     fn failure_is_reported_not_exited() {
-        let service = LocalService::new(Box::new(|| Err("port 18790 busy".into())));
+        let service =
+            LocalService::new(Box::new(|| Err("port 18790 busy".into())), Box::new(|| {}));
         service.start();
         assert_eq!(
             settled(&service),
@@ -148,10 +192,13 @@ mod tests {
     fn retry_calls_launcher_again() {
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = calls.clone();
-        let service = LocalService::new(Box::new(move || {
-            counted.fetch_add(1, Ordering::SeqCst);
-            Err("port 18790 busy".into())
-        }));
+        let service = LocalService::new(
+            Box::new(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Err("port 18790 busy".into())
+            }),
+            Box::new(|| {}),
+        );
         service.start();
         assert!(matches!(settled(&service), ServerPhase::Failed(_)));
         service.start();
@@ -168,5 +215,23 @@ mod tests {
         release.send(()).unwrap();
         assert_eq!(settled(&service), ServerPhase::Ready);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn stop_runs_the_stopper_and_start_brings_it_back() {
+        let stops = Arc::new(AtomicUsize::new(0));
+        let counted = stops.clone();
+        let service = LocalService::new(
+            Box::new(|| Ok(())),
+            Box::new(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        service.start();
+        assert_eq!(settled(&service), ServerPhase::Ready);
+        service.stop();
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
+        service.start();
+        assert_eq!(settled(&service), ServerPhase::Ready);
     }
 }

@@ -101,6 +101,10 @@ pub use metrics::{
 pub use panel::{
     PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust, PANEL_UI_API_MAJOR,
 };
+/// The mDNS service type a Gateway advertises itself as on the local network.
+/// The server's broadcaster and the desktop shell's discovery both use it.
+pub const GATEWAY_MDNS_SERVICE: &str = "_aleph._tcp.local.";
+
 pub use resume::{RefusedEntry, ResumeReceipt, ResumeStatus};
 pub use session_thread::{
     AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentRunStatusRequest,

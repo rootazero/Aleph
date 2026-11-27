@@ -6,6 +6,7 @@
 mod autostart;
 mod credentials;
 mod deep_link;
+mod gateway_probe;
 mod launch;
 #[cfg(feature = "embedded-core")]
 mod local_service;
@@ -17,6 +18,8 @@ mod target_store;
 mod app;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod cli;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+mod connect_form;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod ipc_status;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]

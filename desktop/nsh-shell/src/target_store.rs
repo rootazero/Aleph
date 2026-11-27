@@ -22,10 +22,6 @@ pub(crate) fn load_target(home: &Path) -> ConnectionTarget {
 /// Saves `target`. `Local` is the default, so saving it removes the file;
 /// a remote target replaces the file through a rename, so a reader sees the
 /// old contents or the new ones, never a partial write.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the connect form (plan Task 7) is the first caller")
-)]
 pub(crate) fn save_target(home: &Path, target: &ConnectionTarget) -> std::io::Result<()> {
     let marker = marker(home);
     if matches!(target, ConnectionTarget::Local) {

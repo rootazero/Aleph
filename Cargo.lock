@@ -333,6 +333,7 @@ dependencies = [
  "dispatch2",
  "futures-util",
  "log",
+ "native-tls",
  "nsh-base",
  "nsh-core",
  "nsh-engine",
@@ -345,6 +346,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-native-tls",
  "tokio-tungstenite 0.28.0",
  "uuid",
 ]

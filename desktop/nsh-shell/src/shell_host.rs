@@ -10,11 +10,11 @@ pub(crate) fn valid_qa_nonce(nonce: &str) -> bool {
 
 #[derive(Clone, Debug)]
 pub(crate) struct HostSettings {
+    /// The server this window shows.
+    pub(crate) target: aleph_client::ConnectionTarget,
     pub(crate) url: String,
     pub(crate) gateway: String,
     pub(crate) qa_nonce: Option<String>,
-    #[cfg(feature = "embedded-core")]
-    pub(crate) acquires_local_server: bool,
 }
 
 impl HostSettings {
@@ -64,10 +64,8 @@ impl HostSettings {
         Ok(Self {
             url: target.panel_url(),
             gateway,
-            #[cfg(feature = "embedded-core")]
-            acquires_local_server: qa_nonce.is_none()
-                && matches!(target, aleph_client::ConnectionTarget::Local),
             qa_nonce,
+            target,
         })
     }
 
@@ -124,34 +122,23 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "embedded-core")]
+    /// The app starts its bundled server only for the `Local` target; an
+    /// explicit loopback origin is a server someone else runs.
     #[test]
-    fn only_canonical_local_target_acquires_bundled_service() {
-        assert!(
-            HostSettings::from_inputs(None, None)
-                .unwrap()
-                .acquires_local_server
+    fn only_canonical_local_spelling_is_the_bundled_server() {
+        use aleph_client::ConnectionTarget;
+        assert_eq!(
+            HostSettings::from_inputs(None, None).unwrap().target,
+            ConnectionTarget::Local
         );
-        for (name, acquires) in [
+        for (name, local) in [
             ("local", true),
             ("http://127.0.0.1:18790/", false),
             ("https://box.lan", false),
         ] {
             let args = ["--connect".into(), name.into()];
-            assert_eq!(
-                HostSettings::from_launch(&args, None, None)
-                    .unwrap()
-                    .acquires_local_server,
-                acquires
-            );
-        }
-        if cfg!(debug_assertions) {
-            let nonce = "a".repeat(64);
-            assert!(
-                !HostSettings::from_inputs(Some("http://127.0.0.1:18790/"), Some(&nonce))
-                    .unwrap()
-                    .acquires_local_server
-            );
+            let target = HostSettings::from_launch(&args, None, None).unwrap().target;
+            assert_eq!(target == ConnectionTarget::Local, local, "{name}");
         }
     }
 
