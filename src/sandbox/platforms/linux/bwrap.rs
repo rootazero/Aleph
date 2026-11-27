@@ -607,6 +607,10 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn supports_shell_lifecycle(&self) -> bool {
+        true
+    }
+
     async fn run(
         &self,
         program: &str,
@@ -617,6 +621,7 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
         profile: &OsSandboxProfile,
         timeout: Duration,
         max_output_bytes: usize,
+        lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
     ) -> Result<SandboxOutput, SandboxError> {
         let bwrap_path = self
             .find_bwrap()
@@ -768,14 +773,22 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
                 None
             };
 
-        let child = cmd
-            .spawn()
-            .map_err(|e| SandboxError::ExecutionFailed(format!("failed to spawn bwrap: {e}")))?;
+        let mut spawn = || {
+            cmd.spawn()
+                .map_err(|e| SandboxError::ExecutionFailed(format!("failed to spawn bwrap: {e}")))
+        };
+        let child = match lifecycle {
+            Some(control) => control.spawn(spawn),
+            None => spawn(),
+        }?;
 
         // `_cgroup_scope` is kept alive across the await so its Drop —
         // which rmdir's the cgroup directory — only fires after the
         // child has been reaped by the helper.
-        run_child_with_drain(child, stdin, timeout, max_output_bytes).await
+        if let Some(control) = lifecycle {
+            control.ready();
+        }
+        run_child_with_drain(child, stdin, timeout, max_output_bytes, lifecycle).await
     }
 }
 

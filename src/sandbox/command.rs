@@ -55,6 +55,10 @@ pub struct SandboxOutput {
     /// Bytes dropped from stderr to satisfy `max_output_bytes`.
     #[serde(default)]
     pub stderr_truncated_bytes: u64,
+    /// At least one output pipe did not reach EOF within the drain budget.
+    /// Unread bytes are not counted as capacity truncation.
+    #[serde(default)]
+    pub drain_incomplete: bool,
     pub duration_ms: u64,
     /// Set when the OS backend's own denial dialect appeared in `stderr` —
     /// see [`SandboxDenialHint`]. `None` when the driver declares no dialect
@@ -126,16 +130,14 @@ pub enum SandboxError {
     #[error("io error: {0}")]
     Io(String),
 
-    /// Wall-clock timeout fired. The child was killed and we drained the
-    /// stdout/stderr pipes for up to 2s (codex-parity `IO_DRAIN_TIMEOUT_MS`)
-    /// so the model still sees whatever the script printed before the kill —
-    /// "started, did X, then sleep 9999" is much more useful than zero bytes.
-    /// Either partial buffer may be empty when nothing was captured.
+    /// The wall clock expired, and the direct child was reaped. Captured
+    /// output is retained even when its pipes did not reach EOF.
     #[error("timeout after {elapsed_ms}ms")]
     Timeout {
         elapsed_ms: u64,
         partial_stdout: Vec<u8>,
         partial_stderr: Vec<u8>,
+        drain_incomplete: bool,
     },
 
     #[error("execution failed: {0}")]

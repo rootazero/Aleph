@@ -169,6 +169,7 @@ mod tests {
             _profile: &OsSandboxProfile,
             _timeout: Duration,
             _max_output_bytes: usize,
+            _lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
         ) -> Result<SandboxOutput, SandboxError> {
             unreachable!("factory tests should not invoke driver.run");
         }
@@ -440,6 +441,7 @@ mod tests {
             _profile: &OsSandboxProfile,
             _timeout: Duration,
             _max_output_bytes: usize,
+            _lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
         ) -> Result<SandboxOutput, SandboxError> {
             Ok(SandboxOutput {
                 stdout: b"ok".to_vec(),

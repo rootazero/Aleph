@@ -296,7 +296,7 @@ impl CompanionLauncher for SandboxLauncher {
         let (exit_tx, exit_rx) = watch::channel(false);
         let (id_tx, id_rx) = oneshot::channel();
         let kill = Arc::new(Notify::new());
-        let join = tokio::spawn(supervise(
+        tokio::spawn(supervise(
             child,
             spawn.keepalive,
             link,
@@ -308,7 +308,6 @@ impl CompanionLauncher for SandboxLauncher {
         let registered = process_registry().register_managed(
             format!("browser_companion pid={service_pid}"),
             caller.clone(),
-            join.abort_handle(),
             link_end,
         );
         let registry_id = match registered {
@@ -330,6 +329,7 @@ impl CompanionLauncher for SandboxLauncher {
                     }
                 )));
             }
+            RegisterOutcome::AdmissionClosed => unreachable!("only shell admission can close"),
         };
         let _ = id_tx.send(registry_id);
         let process = Arc::new(SandboxProcess {
@@ -410,7 +410,7 @@ mod tests {
         let (link_end, link) = managed_link();
         let (exit_tx, exit_rx) = watch::channel(false);
         let (id_tx, id_rx) = oneshot::channel();
-        let join = tokio::spawn(supervise(
+        tokio::spawn(supervise(
             Box::new(TokioManagedProcess::new(child).expect("adapter")),
             Vec::new(),
             link,
@@ -422,11 +422,11 @@ mod tests {
         let id = match process_registry().register_managed(
             "supervisor test",
             caller.clone(),
-            join.abort_handle(),
             link_end,
         ) {
             RegisterOutcome::Registered(id) => id,
             RegisterOutcome::TooManyRunning { .. } => panic!("registry full"),
+            RegisterOutcome::AdmissionClosed => unreachable!("only shell admission can close"),
         };
         id_tx.send(id).expect("supervisor alive");
         let process = SandboxProcess {

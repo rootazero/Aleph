@@ -50,8 +50,8 @@ pub(crate) enum PartialView {
 /// Text substituted for a withheld snapshot. Silence would read as "it printed
 /// nothing", which is the opposite of what happened.
 pub(crate) const WITHHELD_NOTE: &str =
-    "[output withheld: block-class secret material was detected in this job's output, so \
-     Aleph refuses to show or store it — the same refusal the completed path applies]";
+    "[output withheld: the content safety check found block-class material or could not verify a clipped line, so \
+     Aleph refuses to show or store this snapshot]";
 
 /// Run the completed path's content floor over a PRE-scrub live snapshot.
 ///
@@ -63,6 +63,9 @@ pub(crate) const WITHHELD_NOTE: &str =
 /// the finished call fail closed, so the partial is withheld rather than shown
 /// redacted.
 pub(crate) fn gate(snapshot: &LiveSnapshot) -> PartialView {
+    if snapshot.withhold {
+        return PartialView::Withheld;
+    }
     if snapshot.stdout.is_empty() && snapshot.stderr.is_empty() {
         return PartialView::Empty;
     }
@@ -91,6 +94,94 @@ pub(crate) fn gate(snapshot: &LiveSnapshot) -> PartialView {
         stdout: sanitize_command_output(&String::from_utf8_lossy(&probe.stdout)).into_owned(),
         stderr: sanitize_command_output(&String::from_utf8_lossy(&probe.stderr)).into_owned(),
     }
+}
+
+/// One stream's projection in source-byte coordinates. The text may be
+/// absent even though the cursor advances over a lost or withheld interval.
+#[derive(Default, serde::Serialize)]
+pub(crate) struct CursorStream {
+    pub text: String,
+    pub lost: Option<[u64; 2]>,
+    pub withheld: Vec<[u64; 2]>,
+    pub pending: bool,
+    #[serde(skip)]
+    pub next: u64,
+}
+
+pub(crate) fn project_cursor_stream(
+    bytes: &[u8],
+    total: u64,
+    offset: u64,
+    terminal: bool,
+    withhold: bool,
+) -> CursorStream {
+    let retained_start = total - bytes.len() as u64;
+    let mut view = CursorStream {
+        next: offset,
+        ..Default::default()
+    };
+    if view.next < retained_start {
+        view.lost = Some([view.next, retained_start]);
+        view.next = retained_start;
+    }
+    if view.next == total {
+        return view;
+    }
+    if withhold {
+        view.withheld.push([view.next, total]);
+        view.next = total;
+        return view;
+    }
+
+    // Once a line's prefix has scrolled away, it cannot be screened safely.
+    // Use line boundaries because the output floor's token patterns do not
+    // span lines. Never release an open line before its right context arrives.
+    let start = if retained_start == 0 {
+        0
+    } else {
+        bytes
+            .iter()
+            .position(|&byte| byte == b'\n')
+            .map_or(bytes.len(), |i| i + 1)
+    };
+    let end = bytes
+        .iter()
+        .rposition(|&byte| byte == b'\n')
+        .map_or(start, |i| (i + 1).max(start));
+    let source_start = retained_start + start as u64;
+    if view.next < source_start {
+        view.withheld.push([view.next, source_start]);
+        view.next = source_start;
+    }
+    let source_end = retained_start + end as u64;
+    if view.next < source_end {
+        let complete = &bytes[start..end];
+        let snapshot = LiveSnapshot {
+            stdout: complete.to_vec(),
+            ..Default::default()
+        };
+        let relative = (view.next - source_start) as usize;
+        match gate(&snapshot) {
+            PartialView::Text { stdout, .. } if stdout.as_bytes() == complete => {
+                if let Some(text) = stdout.get(relative..) {
+                    view.text = text.to_owned();
+                } else {
+                    view.withheld.push([view.next, source_end]);
+                }
+            }
+            _ => view.withheld.push([view.next, source_end]),
+        }
+        view.next = source_end;
+    }
+    if view.next < total {
+        if terminal {
+            view.withheld.push([view.next, total]);
+            view.next = total;
+        } else {
+            view.pending = true;
+        }
+    }
+    view
 }
 
 /// BT-D-R4-18 (partial fix): known-secret-prefix check applied to the
@@ -165,6 +256,7 @@ mod tests {
             stderr: stderr.as_bytes().to_vec(),
             stdout_total: stdout.len() as u64,
             stderr_total: stderr.len() as u64,
+            withhold: false,
         }
     }
 

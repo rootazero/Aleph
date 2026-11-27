@@ -115,6 +115,11 @@ pub trait OsSandboxDriverTrait: Send + Sync + 'static {
         })
     }
 
+    /// Drivers opt in only if they report spawn and reaping on the `run` path.
+    fn supports_shell_lifecycle(&self) -> bool {
+        false
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,
@@ -126,5 +131,6 @@ pub trait OsSandboxDriverTrait: Send + Sync + 'static {
         profile: &OsSandboxProfile,
         timeout: Duration,
         max_output_bytes: usize,
+        lifecycle: Option<&super::shell_lifecycle::ShellLifecycle>,
     ) -> Result<SandboxOutput, SandboxError>;
 }
