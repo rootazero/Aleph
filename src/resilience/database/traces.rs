@@ -70,13 +70,24 @@ impl AgentUsageTotal {
     }
 }
 
+/// Optional provenance shares the existing event JSON, so older rows and
+/// readers keep the same trace shape without a second store or schema migration.
+#[derive(Serialize, Deserialize)]
+struct StoredTraceEvent {
+    #[serde(flatten)]
+    event: AgentTraceEvent,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thought_provenance: Option<crate::resilience::ThoughtProvenance>,
+}
+
 /// Construct `TaskTrace` from a rusqlite row.
 /// Expected column order: id, `task_id`, `step_index`, `event_kind`, `event_json`, timestamp
 fn task_trace_from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskTrace> {
     let event_kind = row.get_ref(3)?.as_str()?;
     let event_json = row.get_ref(4)?.as_str()?;
-    let event = serde_json::from_str::<AgentTraceEvent>(event_json)
+    let stored = serde_json::from_str::<StoredTraceEvent>(event_json)
         .map_err(|err| rusqlite::Error::FromSqlConversionFailure(4, Type::Text, Box::new(err)))?;
+    let event = stored.event;
 
     if event.kind() != event_kind {
         tracing::warn!(
@@ -91,6 +102,7 @@ fn task_trace_from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskTrace> {
         task_id: row.get(1)?,
         step_index: row.get(2)?,
         event,
+        thought_provenance: stored.thought_provenance,
         timestamp: row.get(5)?,
     })
 }
@@ -179,8 +191,11 @@ impl StateDatabase {
 
     /// Insert a single trace entry
     pub async fn insert_trace(&self, trace: &TaskTrace) -> Result<i64, AlephError> {
-        let event_json = serde_json::to_string(&trace.event)
-            .map_err(|e| AlephError::config(format!("Failed to serialize trace event: {e}")))?;
+        let event_json = serde_json::to_string(&StoredTraceEvent {
+            event: trace.event.clone(),
+            thought_provenance: trace.thought_provenance,
+        })
+        .map_err(|e| AlephError::config(format!("Failed to serialize trace event: {e}")))?;
         let task_id = trace.task_id.clone();
         let step_index = trace.step_index;
         let event_kind = trace.event_kind();
@@ -558,6 +573,7 @@ mod tests {
                 .await
                 .unwrap();
             let trace = TaskTrace {
+                thought_provenance: None,
                 id: 0,
                 task_id: tid.clone(),
                 step_index: 0,
@@ -603,6 +619,7 @@ mod tests {
                 .await
                 .unwrap();
             let trace = TaskTrace {
+                thought_provenance: None,
                 id: 0,
                 task_id: tid.clone(),
                 step_index: 0,
@@ -674,6 +691,7 @@ mod tests {
             ))
             .await;
         let trace = TaskTrace {
+            thought_provenance: None,
             id: 0,
             task_id: task_id.to_string(),
             step_index: step,

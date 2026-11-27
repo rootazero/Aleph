@@ -67,6 +67,7 @@ pub mod system_hello;
 pub mod team_topic;
 pub mod telecom_relay;
 pub mod terminate;
+pub mod thought;
 pub mod tool_permissions;
 pub mod trace_presentation;
 pub mod trace_replay;

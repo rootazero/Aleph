@@ -1007,6 +1007,7 @@ mod usage_handler_tests {
                 .insert_agent_task(&AgentTask::new(task, "s", "coder", "x", RiskLevel::Low))
                 .await;
             db.insert_trace(&TaskTrace {
+                thought_provenance: None,
                 id: 0,
                 task_id: task.into(),
                 step_index: ts as u32,
@@ -1090,6 +1091,7 @@ mod usage_handler_tests {
         // over-reported the hit rate by up to 2x in exactly the degraded regime
         // (see `AgentUsageTotal::cache_hit_ratio`).
         db.insert_trace(&TaskTrace {
+            thought_provenance: None,
             id: 0,
             task_id: "t1".into(),
             step_index: 0,

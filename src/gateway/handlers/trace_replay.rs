@@ -66,8 +66,13 @@ use aleph_protocol::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+#[cfg(test)]
+mod thought_source_tests;
+
 mod chat_details;
+mod thought_source;
 pub use chat_details::handle_transcript_details;
+pub use thought_source::resolve_thought_source;
 
 #[derive(Debug, Default, Deserialize)]
 struct TraceByRunsParams {
@@ -191,6 +196,7 @@ pub async fn handle_by_runs(
                         // `presentations` was masked at serve — the seam is
                         // spelled out at that call site, in
                         // [`presentations_for_session`].
+                        let thought_reference = thought_source::reference_for_trace(&t, key_str);
                         let mut event = t.event;
                         // Only ever FILLS a hole. If a future writer starts
                         // putting a presentation on the trace row itself, that
@@ -203,7 +209,13 @@ pub async fn handle_by_runs(
                                 call.presentation = presentations.get(&call.tool_id).cloned();
                             }
                         }
-                        serde_json::to_value(&event).unwrap_or(Value::Null)
+                        let mut projected = serde_json::to_value(&event).unwrap_or(Value::Null);
+                        if let (Some(reference), Some(row)) =
+                            (thought_reference, projected.as_object_mut())
+                        {
+                            row.insert("thought_block_ref".into(), json!(reference));
+                        }
+                        projected
                     })
                     .collect(),
                 Err(e) => {
@@ -751,7 +763,7 @@ mod tests {
     use aleph_protocol::{AgentTraceEvent, AgentTraceTextKind};
     use tempfile::TempDir;
 
-    fn req(params: serde_json::Value) -> JsonRpcRequest {
+    pub(super) fn req(params: serde_json::Value) -> JsonRpcRequest {
         JsonRpcRequest {
             jsonrpc: "2.0".into(),
             method: "trace.by_runs".into(),
@@ -810,7 +822,7 @@ mod tests {
         }
     }
 
-    fn session_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+    pub(super) fn session_store(temp: &TempDir) -> Arc<dyn SessionStore> {
         Arc::new(
             FileSessionStore::new(FileSessionStoreConfig {
                 base_dir: temp.path().to_path_buf(),
@@ -824,7 +836,7 @@ mod tests {
     /// the way a real turn does: the run id rides in the message metadata
     /// (`agent_instance::build_message_metadata`), which is where
     /// `chat.history` reads it from too.
-    async fn seed_session(
+    pub(super) async fn seed_session(
         sessions: &Arc<dyn SessionStore>,
         key: &SessionKey,
         owner: &str,

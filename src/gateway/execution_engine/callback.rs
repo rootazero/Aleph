@@ -24,10 +24,22 @@ impl TracePersistence {
         let step_index = self.next_step_index.fetch_add(1, Ordering::Relaxed);
         let db = self.db.clone();
         let task_id = self.task_id.clone();
+        let provider_thought = matches!(
+            event,
+            crate::harness::trace::LoopTraceEvent::ReasoningEmitted { .. }
+        );
         let trace_event: aleph_protocol::AgentTraceEvent = event.clone().into();
 
         let handle = tokio::spawn(async move {
-            let trace = crate::resilience::TaskTrace::new(task_id.clone(), step_index, trace_event);
+            let mut trace =
+                crate::resilience::TaskTrace::new(task_id.clone(), step_index, trace_event);
+            // Only think::emit_reasoning emits this settled response event.
+            // Generic StreamEvent::Reasoning (commands/progress/deltas) never
+            // enters this seam. Preserve the text already masked by the sink.
+            if provider_thought {
+                trace.thought_provenance =
+                    Some(crate::resilience::ThoughtProvenance::ProviderResponse);
+            }
             if let Err(error) = db.insert_trace(&trace).await {
                 tracing::warn!(
                     task_id = %task_id,
@@ -120,5 +132,68 @@ impl super::trace_sink_adapter::TraceFlushHandle for CallbackStateFlushHandle {
                 state.flush_trace_persistence().await;
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod thought_source_tests {
+    use super::*;
+    use crate::harness::trace::LoopTraceEvent;
+    use crate::resilience::{AgentTask, RiskLevel, StateDatabase, ThoughtProvenance};
+
+    #[tokio::test]
+    async fn thought_source_attests_only_settled_provider_trace() {
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        db.insert_agent_task(&AgentTask::new(
+            "run",
+            "session",
+            "coder",
+            "x",
+            RiskLevel::Low,
+        ))
+        .await
+        .unwrap();
+        let persistence = Arc::new(TracePersistence::new(db.clone(), "run".into()));
+        let state = Arc::new(StreamCallbackState::new(Some(persistence.clone())));
+        let sink = crate::gateway::execution_engine::UnattendedRedactingSink::new(Arc::new(
+            crate::gateway::execution_engine::GatewayTraceSink::new(Arc::new(
+                CallbackStateFlushHandle::new(state),
+            )),
+        ));
+        use crate::harness::TraceSink;
+        let secret = "sk-abcdefghijklmnopqrstuvwxyz0123456789";
+        sink.on_trace(&LoopTraceEvent::ReasoningEmitted {
+            iteration: 1,
+            text: format!("settled provider thought {secret}"),
+        });
+        sink.on_trace(&LoopTraceEvent::TextEmitted {
+            iteration: 1,
+            stream: crate::harness::trace::LoopTraceTextKind::Final,
+            text: "synthetic summary".into(),
+        });
+        persistence.flush().await;
+        let traces = db.get_traces_by_task("run").await.unwrap();
+        assert_eq!(traces.len(), 2);
+        assert_eq!(
+            traces[0].thought_provenance,
+            Some(ThoughtProvenance::ProviderResponse)
+        );
+        assert!(!serde_json::to_string(&traces[0].event)
+            .unwrap()
+            .contains(secret));
+        assert_eq!(traces[1].thought_provenance, None);
+        // A generic stream event (including a command/synthetic producer's
+        // is_complete=true) cannot enter TracePersistence::record's typed seam.
+        let stream = aleph_protocol::StreamEvent::Reasoning {
+            run_id: "run".into(),
+            seq: 1,
+            content: "command reasoning".into(),
+            is_complete: true,
+        };
+        assert!(serde_json::to_value(stream)
+            .unwrap()
+            .get("thought_provenance")
+            .is_none());
+        assert_eq!(db.get_traces_by_task("run").await.unwrap().len(), 2);
     }
 }
