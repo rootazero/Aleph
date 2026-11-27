@@ -315,6 +315,198 @@ async function openChat(handlers: ReturnType<typeof gateway>) {
   return app;
 }
 
+const questionnaireWrites = (app: Parameters<typeof rpcParams>[0]) =>
+  rpcParams(app, "clarification.resolve").map(({ idempotency_key, ...params }) => {
+    expect(String(idempotency_key)).toMatch(/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/);
+    return params;
+  });
+
+const selectQuestion = {
+  id: "choice", prompt: "Select deployment?", multi_select: true,
+  options: [
+    { label: "Alpha", description: "Shared QA", preview: "```toml\nport = 42\n```" },
+    { label: "Beta" },
+  ],
+};
+const textQuestion = { id: "literal", prompt: "Type the reply", options: [{ label: "Existing reply" }] };
+const secretQuestion = { id: "secret", prompt: "Enter the test value", options: [], secret: true };
+const pendingQuestionnaire = (request_id = "request-1", answered = 0) => ({
+  session_key: "s-1", request_id, run_id: "r-1", answered,
+  questions: [selectQuestion, textQuestion, secretQuestion],
+});
+const askEvent = (request_id: string) => ({ topic: "stream.ask_user", data: {
+  type: "ask_user", session_key: "s-1", request_id, run_id: "r-1",
+} });
+
+test("previews independently and submits one exact guarded batch after review", async () => {
+  let pending = [pendingQuestionnaire()];
+  const { handlers } = chatGateway({
+    "clarification.pending": () => ({ pending }),
+    "clarification.resolve": () => { pending = []; return { status: "answered" }; },
+  });
+  const app = await openChat(handlers);
+  await app.waitFor("Select deployment?");
+  await app.type("label:Message", "ordinary draft");
+  await app.press("label:Preview Alpha");
+  await app.waitFor("port = 42");
+  expect(rpcParams(app, "clarification.resolve")).toEqual([]);
+  await app.press("label:Hide preview for Alpha");
+  await app.waitFor("port = 42", { state: "gone" });
+  await app.press("label:Beta");
+  await app.press("Continue");
+  await app.press("Enter your own answer");
+  await app.type("label:Your answer", "1");
+  await app.press("Continue");
+  await app.type("label:Your answer", "private-test-value");
+  await app.press("Review answers");
+  await app.waitFor("Hidden answer");
+  expect(app.texts()).not.toContain("private-test-value");
+  expect(rpcParams(app, "clarification.resolve")).toEqual([]);
+  await app.press("Submit answers");
+  await app.waitFor("Submit answers", { state: "gone" });
+  expect(questionnaireWrites(app)).toEqual([{
+    session_key: "s-1", expected_request_id: "request-1", expected_question_id: "choice",
+    action: { kind: "submit", answers: [
+      { question_id: "choice", answer: { kind: "choices", indices: [1] } },
+      { question_id: "literal", answer: { kind: "text", text: "1" } },
+      { question_id: "secret", answer: { kind: "text", text: "private-test-value" } },
+    ] },
+  }]);
+  await app.press("Send");
+  expect(rpcParams(app, "chat.send")[0]?.message).toBe("ordinary draft");
+});
+
+test("rereads current guards after advance and ignores a late ask after reconnect", async () => {
+  let pending = [pendingQuestionnaire()];
+  const { handlers } = chatGateway({
+    "sessions.list": () => ({ sessions: [
+      { key: "s-1", label: "Release notes", message_count: 3 },
+      { key: "s-2", label: "Build notes", message_count: 2 },
+    ], count: 2 }),
+    "clarification.pending": () => ({ pending }),
+    "clarification.resolve": () => { pending = []; return { status: "cancelled" }; },
+  });
+  const app = await openChat(handlers);
+  await app.waitFor("Select deployment?");
+  pending = [pendingQuestionnaire("request-1", 1)];
+  await app.host.send("aleph.event", askEvent("request-1"));
+  await app.waitFor("Type the reply");
+  await app.press("Cancel questions");
+  await app.waitFor("Type the reply", { state: "gone" });
+  expect(questionnaireWrites(app)).toEqual([{
+    session_key: "s-1", expected_request_id: "request-1", expected_question_id: "literal",
+    action: { kind: "cancel" },
+  }]);
+  pending = [pendingQuestionnaire("request-2")];
+  await app.host.send("aleph.connection", { ...CONNECTED, state: "disconnected", subject: null });
+  await app.host.send("aleph.connection", CONNECTED);
+  await app.waitFor("Select deployment?");
+  await app.press("label:Beta");
+  await app.press("label:Open Sessions");
+  await app.press("label:Open chat Build notes");
+  await app.waitFor("Select deployment?", { state: "gone" });
+  await app.press("label:Open Sessions");
+  await app.press("label:Open chat Release notes");
+  await app.waitFor("Select deployment?");
+  expect(rpcParams(app, "clarification.resolve")).toHaveLength(1);
+  pending = [];
+  await app.host.send("aleph.event", askEvent("request-1"));
+  await app.waitFor("Select deployment?", { state: "gone" });
+  expect(rpcParams(app, "clarification.resolve").length).toBe(1);
+});
+
+test("keeps later drafts when another panel advances the same questionnaire", async () => {
+  let pending = [pendingQuestionnaire()];
+  const { handlers } = chatGateway({
+    "clarification.pending": () => ({ pending }),
+    "clarification.resolve": () => ({ status: "stale" }),
+  });
+  const app = await openChat(handlers);
+  await app.waitFor("Select deployment?");
+  await app.press("label:Beta");
+  await app.press("label:Alpha");
+  await app.press("Continue");
+  await app.press("label:Existing reply");
+  await app.press("Continue");
+  await app.type("label:Your answer", "secret draft");
+  await app.press("Review answers");
+  await app.waitFor("Beta, Alpha");
+  pending = [pendingQuestionnaire("request-1", 1)];
+  await app.host.send("aleph.event", askEvent("request-1"));
+  await app.waitFor("Type the reply");
+  await app.press("Continue");
+  await app.press("Review answers");
+  await app.waitFor("Hidden answer");
+  await app.press("Submit answers");
+  await app.waitFor("Questions changed. Check the current questionnaire before trying again.");
+  expect(questionnaireWrites(app)).toEqual([{
+    session_key: "s-1", expected_request_id: "request-1", expected_question_id: "literal",
+    action: { kind: "submit", answers: [
+      { question_id: "literal", answer: { kind: "choices", indices: [0] } },
+      { question_id: "secret", answer: { kind: "text", text: "secret draft" } },
+    ] },
+  }]);
+});
+
+test("ignores an older pending read and recovers a lost write without resending", async () => {
+  let completeRead!: (reply: unknown) => void;
+  let failWrite!: (error: Error) => void;
+  let startedRead!: () => void;
+  let startedWrite!: () => void;
+  const reading = new Promise<void>((resolve) => { startedRead = resolve; });
+  const writing = new Promise<void>((resolve) => { startedWrite = resolve; });
+  const oldRead = new Promise((resolve) => { completeRead = resolve; });
+  const lostWrite = new Promise((_, reject) => { failWrite = reject; });
+  let pending = [pendingQuestionnaire()];
+  let holdRead = false;
+  const { handlers } = chatGateway({
+    "clarification.pending": () => {
+      if (holdRead) {
+        startedRead();
+        return oldRead;
+      }
+      return { pending };
+    },
+    "clarification.resolve": () => {
+      startedWrite();
+      return lostWrite;
+    },
+  });
+  const app = await openChat(handlers);
+  await app.waitFor("Select deployment?");
+  holdRead = true;
+  const oldEvent = app.host.send("aleph.event", askEvent("request-1"));
+  try {
+    await reading;
+    holdRead = false;
+    pending = [pendingQuestionnaire("request-2", 2)];
+    await app.host.send("aleph.event", askEvent("request-2"));
+    await app.waitFor("Enter the test value");
+  } finally {
+    completeRead({ pending: [pendingQuestionnaire()] });
+    await oldEvent;
+  }
+  await app.type("label:Your answer", "answer before disconnect");
+  await app.press("Review answers");
+  const submit = app.press("Submit answers");
+  try {
+    await writing;
+    await app.keyboard.press("return");
+    expect(rpcParams(app, "clarification.resolve")).toHaveLength(1);
+    pending = [];
+  } finally {
+    failWrite(new Error("Connection lost"));
+    await submit;
+  }
+  await app.waitFor("Submit answers", { state: "gone" });
+  expect(questionnaireWrites(app)).toEqual([{
+    session_key: "s-1", expected_request_id: "request-2", expected_question_id: "secret",
+    action: { kind: "submit", answers: [
+      { question_id: "secret", answer: { kind: "text", text: "answer before disconnect" } },
+    ] },
+  }]);
+});
+
 test("resumes the acknowledged session after Settings and same-subject reconnect", async () => {
   const { handlers } = chatGateway();
   const app = await openPanel({ host: { handlers } });
