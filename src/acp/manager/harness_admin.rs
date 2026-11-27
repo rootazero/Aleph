@@ -14,6 +14,33 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 
 impl AcpAdapterManager {
+    /// Resolve launch policy and adapter from the same registration.
+    /// Registration locks are released before the caller starts a subprocess.
+    pub async fn admitted_adapter(&self, harness_id: &str) -> Result<Arc<dyn AcpAdapter>> {
+        let adapters = self.adapters.read().await;
+        let configs = self.configs.read().await;
+        let harness = adapters.get(harness_id).ok_or_else(|| {
+            AcpOperationError::new(
+                AcpErrorCode::HarnessNotFound,
+                format!("Unknown ACP harness: '{harness_id}'"),
+            )
+        })?;
+        let config = configs.get(harness_id).ok_or_else(|| {
+            AcpOperationError::new(
+                AcpErrorCode::HarnessNotFound,
+                format!("Missing ACP harness configuration: '{harness_id}'"),
+            )
+        })?;
+        if config.trust_level == crate::config::types::acp::TrustLevel::Disabled {
+            return Err(AcpOperationError::new(
+                AcpErrorCode::HarnessDenied,
+                format!("ACP harness '{harness_id}' is disabled (trust_level=disabled)"),
+            )
+            .into());
+        }
+        Ok(Arc::clone(harness))
+    }
+
     /// Create a manager with all default harnesses enabled.
     #[must_use]
     pub fn new() -> Self {
@@ -401,14 +428,11 @@ impl AcpAdapterManager {
 
             // Clone Arc ref under brief read lock, then spawn without holding it.
             // spawn_session may take seconds (process startup + initialize handshake).
-            let harness = {
-                let adapters = self.adapters.read().await;
-                match adapters.get(&entry.harness_id) {
-                    Some(h) => Arc::clone(h),
-                    None => {
-                        warn!(harness_id = %entry.harness_id, "Harness not found, skipping restore");
-                        continue;
-                    }
+            let harness = match self.admitted_adapter(&entry.harness_id).await {
+                Ok(harness) => harness,
+                Err(error) => {
+                    warn!(harness_id = %entry.harness_id, %error, "Restore admission refused; retaining saved session");
+                    continue;
                 }
             };
             // read lock dropped — writers can proceed while we spawn

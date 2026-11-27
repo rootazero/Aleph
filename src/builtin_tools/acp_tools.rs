@@ -521,3 +521,30 @@ mod tests {
         assert_eq!(args.target, "claude-code");
     }
 }
+
+#[cfg(test)]
+mod disabled_tests {
+    use super::*;
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn disabled_delegate_never_starts_harness() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("started");
+        let entry = crate::config::types::acp::AcpAdapterEntry {
+            executable: Some("/bin/sh".into()),
+            args: vec!["-c".into(), format!("touch '{}'; exit 1", marker.display())],
+            enabled: true,
+            trust_level: TrustLevel::Disabled,
+            ..Default::default()
+        };
+        let tool = AcpDelegateTool::new(Arc::new(AcpAdapterManager::from_entries(
+            std::collections::HashMap::from([("blocked".into(), entry)]),
+        )));
+        let args = serde_json::from_value(serde_json::json!({
+            "harness": "blocked", "prompt": "hello", "cwd": directory.path()
+        }))
+        .unwrap();
+        assert!(tool.call(args).await.is_err());
+        assert!(!marker.exists());
+    }
+}

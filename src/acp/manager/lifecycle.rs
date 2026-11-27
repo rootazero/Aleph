@@ -57,6 +57,7 @@ impl AcpAdapterManager {
         cwd: &str,
         session_name: Option<&str>,
     ) -> Result<SessionEntry> {
+        let harness = self.admitted_adapter(harness_id).await?;
         let key = SessionKey::with_name(harness_id, cwd, session_name);
 
         // Fast path: clone the entry under a READ lock, then run the liveness
@@ -101,15 +102,6 @@ impl AcpAdapterManager {
         }
 
         // Slow path: spawn outside any lock, then double-check.
-        let harness = {
-            let adapters = self.adapters.read().await;
-            Arc::clone(adapters.get(harness_id).ok_or_else(|| {
-                AcpOperationError::new(
-                    AcpErrorCode::HarnessNotFound,
-                    format!("Unknown ACP harness: '{harness_id}'"),
-                )
-            })?)
-        };
         let mut new_session = harness.spawn_session(Some(cwd)).await?;
 
         let mut sessions = self.sessions.write().await;
@@ -227,14 +219,7 @@ impl AcpAdapterManager {
     ) -> Result<String> {
         // Resolve effective mode and validate
         let (effective_mode, timeout) = {
-            let adapters = self.adapters.read().await;
-            let harness = adapters.get(harness_id).ok_or_else(|| {
-                AcpOperationError::new(
-                    AcpErrorCode::HarnessNotFound,
-                    format!("Unknown ACP harness: '{harness_id}'"),
-                )
-            })?;
-
+            let harness = self.admitted_adapter(harness_id).await?;
             let effective = mode.unwrap_or_else(|| harness.mode());
 
             // Validate mode is supported
@@ -358,15 +343,7 @@ impl AcpAdapterManager {
             }
             AdapterMode::Oneshot => {
                 // Clone Arc ref under brief read lock; execute_oneshot may take minutes.
-                let harness = {
-                    let adapters = self.adapters.read().await;
-                    Arc::clone(adapters.get(harness_id).ok_or_else(|| {
-                        AcpOperationError::new(
-                            AcpErrorCode::HarnessNotFound,
-                            format!("Unknown ACP harness: '{harness_id}'"),
-                        )
-                    })?)
-                };
+                let harness = self.admitted_adapter(harness_id).await?;
                 harness.execute_oneshot(prompt_text, cwd).await
             }
         }
