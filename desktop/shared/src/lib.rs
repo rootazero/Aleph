@@ -68,6 +68,8 @@ pub use ax_secure::is_password_like;
 pub use coord::{CoordinateSpace, Point};
 pub use error::{DesktopError, Result};
 pub use native_screen::NativeScreen;
+// Named by every `MediaCapability::speech_to_text_offline` implementation.
+pub use tokio_util::sync::CancellationToken;
 // Re-exported at the root because it is the return type of
 // `ensure_process_dpi_aware`, which the Windows platform crate calls by path.
 pub use win_dpi::{ensure_process_dpi_aware, DpiAwareness};

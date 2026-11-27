@@ -14,8 +14,10 @@ use tracing::{error, info};
 use super::super::agent_instance::AgentRegistry;
 use super::super::event_bus::GatewayEventBus;
 use super::super::event_emitter::{EventEmitter, GatewayEventEmitter, OutputMode, StreamEvent};
-use super::super::execution_adapter::ExecutionAdapter;
-use super::super::execution_engine::RunRequest;
+use super::super::execution_adapter::{
+    ChatRunCancellation, ChatRunStopUndecided, ExecutionAdapter,
+};
+use super::super::execution_engine::{ExecutionError, RunRequest};
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::super::router::{AgentRouter, SessionKey};
 use super::parse_params;
@@ -33,7 +35,13 @@ pub struct Attachment {
 }
 
 /// Parameters for agent.run request
+///
+/// Unknown fields are ignored, with one exception: a field this struct once
+/// had whose silent loss would weaken a safety promise is refused instead
+/// (see the `Deserialize` impl below). The derive is `remote = "Self"` so that
+/// impl can check the raw keys first and then reuse the derived field mapping.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(remote = "Self")]
 pub struct AgentRunParams {
     /// User input message.
     ///
@@ -140,6 +148,33 @@ const fn default_stream() -> bool {
     true
 }
 
+/// Removed request fields that must be refused rather than ignored, each with
+/// what replaced it.
+///
+/// `plan_phase` selected the old read-only planning phase. A client that still
+/// sends it believes its turn cannot change anything; ignoring the field would
+/// run every tool for it. Its replacement is `exec_tier: "plan"`.
+const REFUSED_REMOVED_FIELDS: &[(&str, &str)] = &[(
+    "plan_phase",
+    "it was removed; send `exec_tier: \"plan\"` for a read-only planning turn",
+)];
+
+impl<'de> Deserialize<'de> for AgentRunParams {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        for (name, replacement) in REFUSED_REMOVED_FIELDS {
+            if fields.contains_key(*name) {
+                return Err(D::Error::custom(format!(
+                    "`{name}` is not accepted: {replacement}"
+                )));
+            }
+        }
+        // The derived mapping (`remote = "Self"` makes it an inherent fn).
+        AgentRunParams::deserialize(serde_json::Value::Object(fields)).map_err(D::Error::custom)
+    }
+}
+
 /// Result of agent.run request (immediate response)
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentRunResult {
@@ -159,6 +194,57 @@ pub struct RunState {
     pub started_at: Instant,
     pub status: RunStatus,
     pub input: String,
+    chat_cancellation: Option<ChatRunControl>,
+}
+
+#[derive(Debug, Clone)]
+struct ChatRunControl {
+    origin_user: String,
+    cancellation: ChatRunCancellation,
+    queued: bool,
+}
+
+impl RunState {
+    fn is_legacy_local(&self) -> bool {
+        self.chat_cancellation
+            .as_ref()
+            .is_none_or(|control| !control.queued)
+    }
+}
+
+/// The queue's handoff to the manager's existing run entry, not a second registration.
+pub(crate) struct QueuedChatRun {
+    run_id: String,
+    runs: Arc<RwLock<HashMap<String, RunState>>>,
+    pub(crate) cancellation: ChatRunCancellation,
+}
+
+impl QueuedChatRun {
+    pub(crate) async fn settle(&self, result: &Result<(), ExecutionError>) {
+        settle_run(&mut *self.runs.write().await, &self.run_id, result);
+    }
+}
+
+fn settle_run(
+    runs: &mut HashMap<String, RunState>,
+    run_id: &str,
+    result: &Result<(), ExecutionError>,
+) {
+    if let Some(run) = runs.get_mut(run_id) {
+        run.status = match result {
+            Ok(()) => RunStatus::Completed,
+            Err(ExecutionError::Cancelled)
+                if run
+                    .chat_cancellation
+                    .as_ref()
+                    .is_some_and(|control| control.cancellation.finished_after_request()) =>
+            {
+                RunStatus::Cancelled
+            }
+            Err(e) => RunStatus::Failed(e.to_string()),
+        };
+    }
+    retain_terminal_runs_bounded(runs);
 }
 
 /// How many finished runs the manager keeps as recent history.
@@ -166,12 +252,19 @@ const MAX_TERMINAL_RUNS: usize = 128;
 
 /// Evict the oldest terminal entries so the run map stays bounded by recent
 /// history instead of growing with every request forever. Active runs
-/// (`Running` / `Cancelled`) are never evicted.
+/// are never evicted. A legacy stop can set `Cancelled` before execution exits.
 fn retain_terminal_runs_bounded(runs: &mut HashMap<String, RunState>) {
     let mut finished: Vec<(std::time::Instant, String)> = runs
         .iter()
         .filter_map(|(id, r)| match r.status {
             RunStatus::Completed | RunStatus::Failed(_) => Some((r.started_at, id.clone())),
+            RunStatus::Cancelled
+                if r.chat_cancellation
+                    .as_ref()
+                    .is_some_and(|control| control.cancellation.finished_after_request()) =>
+            {
+                Some((r.started_at, id.clone()))
+            }
             _ => None,
         })
         .collect();
@@ -297,6 +390,57 @@ impl AgentRunManager {
 
     /// Start a new agent run
     pub async fn start_run(&self, params: AgentRunParams) -> Result<AgentRunResult, StartRunError> {
+        self.start_run_with_control(params, None).await
+    }
+
+    pub(super) async fn start_chat_run(
+        &self,
+        params: AgentRunParams,
+    ) -> Result<AgentRunResult, StartRunError> {
+        self.start_run_with_control(params, self.chat_run_control())
+            .await
+    }
+
+    fn chat_run_control(&self) -> Option<ChatRunControl> {
+        let origin_user = crate::gateway::caller_identity::current_caller_user()
+            .filter(|user| !user.is_empty())?;
+        let cancellation = self.execution_adapter.chat_run_cancellation()?;
+        Some(ChatRunControl {
+            origin_user,
+            cancellation,
+            queued: false,
+        })
+    }
+
+    /// Bind an already authorized `chat.send` receipt before it enters the busy queue.
+    pub(crate) async fn bind_queued_chat_run(&self, request: &RunRequest) -> Option<QueuedChatRun> {
+        let mut control = self.chat_run_control()?;
+        control.queued = true;
+        let run_id = request.run_id.clone();
+        let cancellation = control.cancellation.clone();
+        self.active_runs.write().await.insert(
+            run_id.clone(),
+            RunState {
+                run_id: run_id.clone(),
+                session_key: request.session_key.clone(),
+                started_at: Instant::now(),
+                status: RunStatus::Running,
+                input: request.input.clone(),
+                chat_cancellation: Some(control),
+            },
+        );
+        Some(QueuedChatRun {
+            run_id,
+            runs: self.active_runs.clone(),
+            cancellation,
+        })
+    }
+
+    async fn start_run_with_control(
+        &self,
+        params: AgentRunParams,
+        chat_cancellation: Option<ChatRunControl>,
+    ) -> Result<AgentRunResult, StartRunError> {
         // Generate run ID
         let run_id = uuid::Uuid::new_v4().to_string();
 
@@ -360,6 +504,18 @@ impl AgentRunManager {
         .await
         .map_err(|e| StartRunError::Refused(e.to_string()))?;
 
+        // An exact receipt can be cancelled before engine admission. Persist
+        // and authorize the same session row the event filter will consult.
+        if chat_cancellation.is_some() {
+            let metadata =
+                crate::gateway::execution_engine::prepare_session_for_run(&agent, &request)
+                    .await
+                    .map_err(|_| StartRunError::Refused("Session unavailable".into()))?;
+            if !crate::gateway::visibility::session_visible(&metadata) {
+                return Err(StartRunError::SessionNotVisible);
+            }
+        }
+
         // Create run state
         let run_state = RunState {
             run_id: run_id.clone(),
@@ -367,6 +523,7 @@ impl AgentRunManager {
             started_at: Instant::now(),
             status: RunStatus::Running,
             input,
+            chat_cancellation: chat_cancellation.clone(),
         };
 
         // Store in active runs
@@ -444,20 +601,16 @@ impl AgentRunManager {
         let run_id_for_spawn = run_id.clone();
 
         tokio::spawn(async move {
-            let result = execution_adapter.execute(request, agent, emitter).await;
+            let result = match &chat_cancellation {
+                Some(control) => {
+                    execution_adapter
+                        .execute_chat_run(request, agent, emitter, control.cancellation.clone())
+                        .await
+                }
+                None => execution_adapter.execute(request, agent, emitter).await,
+            };
 
-            let mut runs = active_runs.write().await;
-            if let Some(run) = runs.get_mut(&run_id_for_spawn) {
-                run.status = match result {
-                    Ok(()) => RunStatus::Completed,
-                    Err(e) => RunStatus::Failed(e.to_string()),
-                };
-            }
-            // Reclaim memory from finished runs: evict the oldest terminal
-            // entries so the map stays bounded by recent history instead of
-            // growing with every request forever. Active runs are never
-            // evicted.
-            retain_terminal_runs_bounded(&mut runs);
+            settle_run(&mut *active_runs.write().await, &run_id_for_spawn, &result);
         });
 
         Ok(AgentRunResult {
@@ -469,7 +622,12 @@ impl AgentRunManager {
 
     /// Get status of a run
     pub async fn get_run_status(&self, run_id: &str) -> Option<RunState> {
-        self.active_runs.read().await.get(run_id).cloned()
+        self.active_runs
+            .read()
+            .await
+            .get(run_id)
+            .filter(|r| r.is_legacy_local())
+            .cloned()
     }
 
     /// The session that owns `run_id`, from whichever table holds it.
@@ -487,6 +645,7 @@ impl AgentRunManager {
             .read()
             .await
             .get(run_id)
+            .filter(|state| state.is_legacy_local())
             .map(|state| state.session_key.clone());
         if let Some(session_key) = managed {
             return Some(session_key);
@@ -498,7 +657,7 @@ impl AgentRunManager {
             .and_then(|key| SessionKey::from_key_string(&key))
     }
 
-    /// Cancel an active run
+    /// Stop the session tree of an active run, or cancel a queued run by ID.
     pub async fn cancel_run(&self, run_id: &str) -> bool {
         // Forward to the execution engine FIRST: firing the run's
         // CancellationToken is the only thing that actually interrupts the
@@ -517,12 +676,9 @@ impl AgentRunManager {
         // missed it, while `cancel_session`'s own doc and FEATURE_LOCATOR §4.8
         // both claimed `chat.abort` took that path.
         //
-        // Per-session mutual exclusion makes this exact, not approximate: if
-        // the engine holds `run_id`, it IS the run on that session, so
-        // `cancel_session` cancels that run and nothing else's. A run the
-        // engine does not hold (finished, or still queued in its busy lane)
-        // resolves to `None` and falls through to the run-id primitive — which
-        // is also what `cancel_queued_run` below needs.
+        // This is a session-wide stop: the active run can change between
+        // looking up the session and cancelling it. Callers that must not
+        // stop a successor use `cancel_run_only` instead.
         let signalled = match self.execution_adapter.session_of_run(run_id).await {
             Some(session_key) => self
                 .execution_adapter
@@ -531,7 +687,35 @@ impl AgentRunManager {
                 .is_ok_and(|cancelled| cancelled.is_some()),
             None => self.execution_adapter.cancel(run_id).await.is_ok(),
         };
+        self.finish_run_cancellation(run_id, signalled).await
+    }
 
+    /// Cancel only the authenticated chat receipt's run. Never resolve through a queue or engine lookup.
+    pub(super) async fn cancel_run_only(
+        &self,
+        run_id: &str,
+        sessions: &dyn crate::gateway::session_store::SessionStore,
+    ) -> Option<Result<bool, ChatRunStopUndecided>> {
+        let caller = crate::gateway::caller_identity::current_caller_user()
+            .filter(|caller| !caller.is_empty())?;
+        let (session, control) = {
+            let runs = self.active_runs.read().await;
+            let run = runs.get(run_id)?;
+            (run.session_key.clone(), run.chat_cancellation.clone()?)
+        };
+        let visible = match sessions.get_metadata(&session).await {
+            Ok(Some(meta)) => crate::gateway::visibility::session_visible(&meta),
+            // Before the first turn writes metadata, only the bound issuer may cancel it.
+            Ok(None) => caller == control.origin_user,
+            Err(_) => false,
+        };
+        if !visible {
+            return None;
+        }
+        Some(control.cancellation.request().await)
+    }
+
+    async fn finish_run_cancellation(&self, run_id: &str, signalled: bool) -> bool {
         // A run can also be waiting in its session's busy lane — the client has
         // its `run_id` (both RPC handlers return one up front) but the engine
         // has never admitted it, so `cancel` above is a miss and Stop would do
@@ -543,7 +727,9 @@ impl AgentRunManager {
         // report Cancelled even if the run finished between the signal and now.
         let mut runs = self.active_runs.write().await;
         let was_running = matches!(
-            runs.get(run_id).map(|r| &r.status),
+            runs.get(run_id)
+                .filter(|r| r.is_legacy_local())
+                .map(|r| &r.status),
             Some(RunStatus::Running)
         );
         if was_running {
@@ -608,6 +794,8 @@ impl AgentRunManager {
 pub enum BuildRunError {
     /// Malformed or unacceptable params → `INVALID_PARAMS`.
     Invalid(String),
+    /// The selection failed Core's exact-binding check.
+    InvalidModel(crate::providers::session_model_handle::ModelSelectionError),
     /// The turn named a project the caller cannot reach — or the check itself
     /// could not complete. Maps to `RESOURCE_NOT_FOUND` with the SAME message
     /// a project id that was never minted produces, so `chat.send` cannot be
@@ -634,6 +822,14 @@ impl std::fmt::Display for BuildRunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BuildRunError::Invalid(s) => f.write_str(s),
+            BuildRunError::InvalidModel(error) => {
+                use crate::providers::session_model_handle::ModelSelectionError;
+                f.write_str(match error {
+                    ModelSelectionError::Unavailable => "Chat model selection is unavailable.",
+                    ModelSelectionError::Ambiguous { .. } => "Model ID is ambiguous; select a provider and model.",
+                    _ => "The requested model is not available for selection.",
+                })
+            }
             BuildRunError::ProjectNotFound(id) => write!(f, "project not found: {id}"),
             BuildRunError::AgentForbidden(id) => write!(
                 f,
@@ -921,6 +1117,12 @@ pub async fn build_run_request(
         return Err(BuildRunError::AgentForbidden(agent.agent_id.clone()));
     }
 
+    let attribution =
+        resolve_attribution(sessions, session_key, params.project_id.as_deref()).await?;
+    let explicit_override = params
+        .model_override
+        .map(validate_explicit_model)
+        .transpose()?;
     let session_key_str = session_key.to_key_string();
 
     // Record voice mode for this session BEFORE the run spawns, so prompt
@@ -946,6 +1148,12 @@ pub async fn build_run_request(
     crate::gateway::voice::voice_mode::set(&session_key_str, voice_state);
 
     let mut metadata = HashMap::new();
+    if explicit_override.is_some() {
+        metadata.insert(
+            crate::gateway::model_override::USER_MODEL_OVERRIDE_METADATA.into(),
+            "1".into(),
+        );
+    }
     metadata.insert(
         "channel_id".to_string(),
         params.channel.clone().unwrap_or_default(),
@@ -985,8 +1193,6 @@ pub async fn build_run_request(
     // P1 data isolation + P2 project rooms: stamp the run's owner/scope
     // attribution. Two paths, and writing only the second is the silent bug
     // this comment exists to prevent — see `resolve_attribution`.
-    let attribution =
-        resolve_attribution(sessions, session_key, params.project_id.as_deref()).await?;
     if let Some(attr) = attribution.as_ref() {
         crate::scope::stamp_metadata(&mut metadata, attr);
     }
@@ -1164,7 +1370,6 @@ pub async fn build_run_request(
     // llm_provider/llm_model`) so the spoken reply starts faster — the same pin
     // the channel voice path applies. An explicit per-turn override from the
     // model picker always wins.
-    let explicit_override = params.model_override;
     let model_override = match (explicit_override, params.voice_input, app_config) {
         (Some(o), _, _) => Some(o),
         (None, true, Some(cfg)) => {
@@ -1192,6 +1397,18 @@ pub async fn build_run_request(
         telecom_public: None,
         telecom_authority: None,
     })
+}
+
+fn validate_explicit_model(
+    model: crate::gateway::model_override::ModelOverride,
+) -> Result<crate::gateway::model_override::ModelOverride, BuildRunError> {
+    use crate::providers::session_model_handle::{selectable_models, ModelSelectionError};
+    let snapshot = selectable_models();
+    snapshot
+        .as_deref()
+        .ok_or(ModelSelectionError::Unavailable)
+        .and_then(|snapshot| model.validate_explicit(snapshot))
+        .map_err(BuildRunError::InvalidModel)
 }
 
 /// Authenticated server-only run path. Capture the transport identity here,
@@ -1457,6 +1674,29 @@ mod tests {
         assert_eq!(parsed.thinking, shared.thinking);
         assert_eq!(parsed.mode, shared.mode);
         assert_eq!(parsed.exec_tier, shared.exec_tier);
+    }
+
+    /// A client still sending the removed `plan_phase` field believes its turn
+    /// is read-only planning. Dropping the field silently would run every tool
+    /// for it (fail-open), so the request is refused and told what replaced it.
+    #[test]
+    fn a_run_request_carrying_the_removed_plan_phase_is_refused() {
+        let err = serde_json::from_value::<AgentRunParams>(serde_json::json!({
+            "message": "hi",
+            "plan_phase": "planning",
+        }))
+        .expect_err("plan_phase must not be accepted");
+        let text = err.to_string();
+        assert!(text.contains("plan_phase"), "{text}");
+        assert!(text.contains("exec_tier"), "{text}");
+
+        let parsed = serde_json::from_value::<AgentRunParams>(serde_json::json!({
+            "message": "hi",
+            "exec_tier": "plan",
+        }))
+        .expect("the replacement field still parses");
+        assert_eq!(parsed.input, "hi");
+        assert_eq!(parsed.exec_tier.as_deref(), Some("plan"));
     }
 
     /// The response half of the same contract, checked by **key-set equality**,
@@ -1961,8 +2201,22 @@ mod tests {
             project_id: None,
         };
 
-        let request = crate::gateway::caller_identity::CALLER_ROLE
-            .scope(
+        use crate::providers::session_model_handle::{
+            with_test_selectable_models, SelectableModelsSnapshot,
+        };
+        let mut config = crate::Config::default();
+        config.providers.insert(
+            "anthropic".into(),
+            crate::config::ProviderConfig::test_config("claude-opus-4-8"),
+        );
+        let ready = std::collections::BTreeSet::from(["anthropic".to_string()]);
+        let snapshot =
+            SelectableModelsSnapshot::from_config(&config, ready.clone(), &ready, |name| {
+                name == "anthropic"
+            });
+        let request = with_test_selectable_models(
+            Some(snapshot),
+            crate::gateway::caller_identity::CALLER_ROLE.scope(
                 Some("guest".to_string()),
                 build_run_request(
                     "run-1".to_string(),
@@ -1972,9 +2226,10 @@ mod tests {
                     None,
                     &crate::gateway::agent_instance::AgentInstanceConfig::default(),
                 ),
-            )
-            .await
-            .expect("build_run_request");
+            ),
+        )
+        .await
+        .expect("build_run_request");
 
         assert_eq!(request.attachments.len(), 1);
         assert_eq!(
@@ -2003,6 +2258,45 @@ mod tests {
             Some(session_key.to_key_string().as_str()),
             "ask_user / approval routing refuse a turn with an empty conversation_id"
         );
+    }
+
+    #[tokio::test]
+    async fn invalid_explicit_model_cannot_clear_existing_voice_state() {
+        use crate::gateway::model_override::ModelOverride;
+        use crate::gateway::voice::voice_mode;
+        use crate::providers::session_model_handle::with_test_selectable_models;
+
+        let key = SessionKey::Ephemeral {
+            agent_id: "main".into(),
+            ephemeral_id: uuid::Uuid::new_v4().to_string(),
+        };
+        let key_string = key.to_key_string();
+        voice_mode::set(
+            &key_string,
+            Some(voice_mode::VoiceTurnState::new(true, None)),
+        );
+        let params: AgentRunParams =
+            serde_json::from_value(serde_json::json!({ "input": "hi" })).unwrap();
+        let result = with_test_selectable_models(
+            None,
+            build_run_request(
+                "invalid-explicit-model".into(),
+                &key,
+                AgentRunParams {
+                    model_override: Some(ModelOverride::Raw {
+                        model: "absent".into(),
+                    }),
+                    ..params
+                },
+                None,
+                None,
+                &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+            ),
+        )
+        .await;
+        assert!(matches!(result, Err(BuildRunError::InvalidModel(_))));
+        assert!(voice_mode::get(&key_string).is_some());
+        voice_mode::set(&key_string, None);
     }
 
     /// The DreamDaemon idle sensor: every human run entrance funnels through
@@ -2205,6 +2499,7 @@ mod tests {
                             _ => RunStatus::Failed("failed".into()),
                         },
                         input: String::new(),
+                        chat_cancellation: None,
                     },
                 );
             }
@@ -2216,6 +2511,7 @@ mod tests {
                     started_at: oldest,
                     status: RunStatus::Running,
                     input: "in-flight input".into(),
+                    chat_cancellation: None,
                 },
             );
             retain_terminal_runs_bounded(&mut runs);

@@ -86,11 +86,10 @@ pub fn ChatView() -> impl IntoView {
         // see it — and the parked tool would sit blocked until it timed out.
         // Seed from the authoritative registry, exactly as the approval card
         // seeds from `exec.approvals.pending`.
-        match crate::api::ClarificationApi::list_pending(&dash_for_sub).await {
-            Ok(list) => dash_for_sub.pending_clarifications.set(list),
-            Err(e) => web_sys::console::error_1(
+        if let Err(e) = crate::api::ClarificationApi::refresh_pending(&dash_for_sub).await {
+            web_sys::console::error_1(
                 &format!("Failed to load pending clarifications: {e}").into(),
-            ),
+            );
         }
     });
 
@@ -173,12 +172,6 @@ pub fn ChatView() -> impl IntoView {
             // Chat surface — the shell-owned right pane is a normal flex
             // sibling, so this column keeps all available chat width.
             <div class="relative flex flex-col flex-1 min-w-0 h-full">
-                // No chat-local drag strip or LayoutToggle here: the
-                // global `aleph-main-drag-band` at the top of `<main>`
-                // (see `app.rs` → `ChatBandChrome`) hosts the workspace
-                // toggle on the traffic-light row and reserves the
-                // macOS overlay-titlebar space uniformly across tabs.
-                // On web / Win / Linux native chrome owns window drag.
                 // Overlap container: the scroll area extends to the full height
                 // and the composer FLOATS over the bottom (real backdrop blur —
                 // messages frost as they flow behind it).
@@ -197,21 +190,8 @@ pub fn ChatView() -> impl IntoView {
                     // being looked at is always visible — pairing failure
                     // degrades to the banner, never to silence.
                     <SessionApprovalBanner />
-                    // Team participants — top-left avatar cluster + popover
-                    // (replaces the old left roster rail). Top-left keeps it
-                    // clear of the band's workspace toggle + notification bell,
-                    // which live top-right. Team mode only.
-                    //
-                    // The macOS `aleph-main-drag-band` (app.rs, z-50,
-                    // `-webkit-app-region: drag`) floats over the top 30px of
-                    // `<main>`. This full-width wrapper sits ABOVE the band
-                    // (`z-[60]`) but is `pointer-events-none`: window-drag and
-                    // the top chrome (sidebar/workspace toggles, notification
-                    // bell) stay reachable THROUGH it — it carves no `no-drag`
-                    // hole and steals no clicks. Only the roster's own cluster
-                    // button + popover opt back in with `pointer-events-auto` +
-                    // `aleph-no-drag` (see team_participants.rs); the expanded
-                    // pill bar is display-only, so the band drags over it.
+                    // The roster floats over chat without blocking the chrome.
+                    // Only the roster's cluster button and popover receive clicks.
                     <Show when=move || chat.team_id.get().is_some()>
                         <div class="absolute top-0 inset-x-0 z-[60] pointer-events-none">
                             <TeamParticipants />

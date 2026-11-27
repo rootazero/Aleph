@@ -1,10 +1,13 @@
 //! Native-TLS browser ingress. The Cookie references an existing Core device credential.
 
-use std::{collections::HashMap, net::SocketAddr, sync::Mutex, time::Duration};
+use std::{collections::HashMap, future::Future, net::SocketAddr, sync::Mutex, time::Duration};
 
-use aleph_client::local_ipc::parse_payload;
+use aleph_client::local_ipc::{parse_payload, parse_request_payload, parse_voice_response_payload};
 use aleph_protocol::{
     framing::{encode_header, split_frame, HEADER_BYTES},
+    panel_voice::{
+        VOICE_TURN_CANCEL_METHOD, VOICE_TURN_SYNTHESIZE_METHOD, VOICE_TURN_TRANSCRIBE_METHOD,
+    },
     system_hello::{Feature, HelloLimits},
 };
 use axum::{
@@ -17,9 +20,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use futures_util::{Stream, StreamExt};
 use serde::Deserialize;
 use tokio::{
-    sync::Semaphore,
+    sync::{oneshot, Semaphore},
     time::{timeout, timeout_at, Instant},
 };
 use tokio_util::sync::CancellationToken;
@@ -29,6 +33,7 @@ use super::{
     cleanup,
     dispatch::{CallerSnapshot, DispatchPeer},
     event_admission::{next_received, V1Event, V1EventFeed},
+    reply_writer::Writes,
     rpc, ConnectionContext,
 };
 use crate::{
@@ -50,9 +55,10 @@ const COOKIE: &str = "__Host-aleph-v1";
 const SUBPROTOCOL: &str = "aleph.protocol.v1";
 const TTL: Duration = Duration::from_secs(300);
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_MESSAGE: u32 = 1024 * 1024;
+pub(super) const MAX_MESSAGE: u32 = 1024 * 1024;
 const MAX_SESSIONS: usize = 256;
 const MAX_SOCKETS: usize = 8;
+const MAX_PENDING_VOICE_CONTROLS: usize = 2;
 
 struct WebIngress {
     gateway: Arc<GatewaySharedState>,
@@ -474,11 +480,15 @@ async fn serve(
         )
     });
     let expires = binding.expires;
+    let cancellation = stop.child_token();
+    let _cancel_on_close = cancellation.clone().drop_guard();
     let peer = DispatchPeer::web(
         gateway.connections.clone(),
         conn_id.clone(),
         expected,
         binding,
+        cancellation,
+        events.is_some(),
     );
     let executor = rpc::RpcExecutor {
         middleware: ctx.middleware_chain.clone(),
@@ -488,80 +498,167 @@ async fn serve(
     };
     let traffic = async {
         send_response(socket, &hello).await?;
-        loop {
-            // One request at a time (`max_inflight_requests: 1`): events are
-            // written between requests and wait in the receiver while one
-            // executes. Admission runs in the branch body so a request
-            // arriving mid-admission never drops a frame.
-            let (text, request) = tokio::select! {
-                biased;
-                received = next_received(&mut events) => {
-                    let feed = events.as_mut().expect("only a feed yields frames");
-                    match feed.admit(&ctx, received).await {
-                        None => continue,
-                        Some(V1Event::Send(frame)) => {
-                            send(socket, &frame, None, INTERNAL_ERROR).await?;
-                            continue;
-                        }
-                        Some(V1Event::ToolPresentation(frame)) => {
-                            if peer.snapshot().await.is_none() {
+        let (mut sink, mut incoming) = (&mut *socket).split();
+        // Leave room for the media reply behind unwritten control replies.
+        let (writes, mut replies) = Writes::<Message>::queue(MAX_PENDING_VOICE_CONTROLS + 1);
+        let writer = async {
+            use futures_util::SinkExt;
+            while let Some(item) = replies.recv().await {
+                timeout(IO_TIMEOUT, sink.send(item.frame))
+                    .await
+                    .ok()?
+                    .ok()?;
+                let _ = item.sent.send(());
+            }
+            Some(())
+        };
+        let requests = async {
+            let mut deferred = None;
+            loop {
+                // One ordinary execution at a time (`max_inflight_requests: 1`).
+                // Admission runs in the branch body; events still run between jobs.
+                let (text, request) = tokio::select! {
+                    biased;
+                    received = next_received(&mut events) => {
+                        let feed = events.as_mut().expect("only a feed yields frames");
+                        match feed.admit(&ctx, received).await {
+                            None => continue,
+                            Some(V1Event::Send(frame)) => {
+                                writes.flush(wire_message(&frame, None, INTERNAL_ERROR, false)?).await?;
+                                continue;
+                            }
+                            Some(V1Event::ToolPresentation(frame)) => {
+                                if peer.snapshot().await.is_none() {
+                                    break;
+                                }
+                                writes.flush(wire_message(&frame, None, INTERNAL_ERROR, false)?).await?;
+                                continue;
+                            }
+                            Some(V1Event::Lost(warning)) => {
+                                let _ = writes.flush(wire_message(&warning, None, INTERNAL_ERROR, false)?).await;
                                 break;
                             }
-                            send(socket, &frame, None, INTERNAL_ERROR).await?;
-                            continue;
+                            Some(V1Event::Close(_)) => break,
                         }
-                        Some(V1Event::Lost(warning)) => {
-                            let _ = send(socket, &warning, None, INTERNAL_ERROR).await;
-                            break;
-                        }
-                        Some(V1Event::Close(_)) => break,
+
                     }
-                }
-                frame = read(socket) => match frame {
-                    Some(frame) => frame,
-                    None => break,
-                },
-            };
-            let Some(caller) = peer.snapshot().await else {
-                break;
-            };
-            if !super::v1_mounted(&request.method) {
-                // Rejected traffic doesn't consume legacy RPC or auth buckets.
-                let key = RateLimitKey::new(
-                    &format!("web-v1-unsupported:{}", addr.ip()),
-                    RateLimitScope::Auth,
-                );
-                if gateway.rate_limiter.check_and_record(&key).is_err() {
+                    frame = async {
+                        if deferred.is_some() {
+                            deferred.take()
+                        } else {
+                            read(&mut incoming).await
+                        }
+                    } => match frame {
+                        Some(frame) => frame,
+                        None => break,
+                    },
+                };
+                let Some(caller) = peer.snapshot().await else {
                     break;
-                }
-                let rejection = JsonRpcResponse::error(
-                    request.id,
-                    METHOD_NOT_FOUND,
-                    "method unavailable on Web v1",
-                );
-                send_response(socket, &rejection).await?;
-                continue;
-            }
-            if let Err(rejection) =
-                rpc::check_origin_rate(&gateway.rate_limiter, Some(addr.ip()), &request)
-            {
-                send_response(socket, &rejection).await?;
-                continue;
-            }
-            match rpc::prepare(&request, &caller, gateway.require_idempotency_key) {
-                Ok(plan) => {
-                    let response = executor
-                        .execute(&text, &request, plan, &peer, &caller)
-                        .await;
-                    if peer.snapshot().await.is_none() {
+                };
+                if !super::v1_mounted(&request.method) {
+                    // Rejected traffic doesn't consume legacy RPC or auth buckets.
+                    let key = RateLimitKey::new(
+                        &format!("web-v1-unsupported:{}", addr.ip()),
+                        RateLimitScope::Auth,
+                    );
+                    if gateway.rate_limiter.check_and_record(&key).is_err() {
                         break;
                     }
-                    send(socket, &response, request.id, INTERNAL_ERROR).await?;
+                    let rejection = JsonRpcResponse::error(
+                        request.id,
+                        METHOD_NOT_FOUND,
+                        "method unavailable on Web v1",
+                    );
+                    writes.flush(response_message(&rejection)?).await?;
+                    continue;
                 }
-                Err(error) => send_response(socket, &error).await?,
+                if let Err(rejection) =
+                    rpc::check_origin_rate(&gateway.rate_limiter, Some(addr.ip()), &request)
+                {
+                    writes.flush(response_message(&rejection)?).await?;
+                    continue;
+                }
+                match rpc::prepare(&request, &caller, gateway.require_idempotency_key) {
+                    Ok(plan) => {
+                        let execution = executor.execute(&text, &request, plan, &peer, &caller);
+                        let response = if matches!(
+                            request.method.as_str(),
+                            VOICE_TURN_TRANSCRIBE_METHOD | VOICE_TURN_SYNTHESIZE_METHOD
+                        ) {
+                            drive_voice_media(
+                                execution,
+                                &mut incoming,
+                                &request.id,
+                                &mut deferred,
+                                &writes,
+                                |control_text, control| {
+                                    let executor = &executor;
+                                    let peer = &peer;
+                                    async move {
+                                        let current = peer.snapshot().await?;
+                                        match rpc::check_origin_rate(
+                                            &gateway.rate_limiter,
+                                            Some(addr.ip()),
+                                            &control,
+                                        ) {
+                                            Err(error) => response_message(&error),
+                                            Ok(()) => match rpc::prepare(
+                                                &control,
+                                                &current,
+                                                gateway.require_idempotency_key,
+                                            ) {
+                                                Ok(plan) => {
+                                                    let reply = executor
+                                                        .execute(
+                                                            &control_text,
+                                                            &control,
+                                                            plan,
+                                                            peer,
+                                                            &current,
+                                                        )
+                                                        .await;
+                                                    peer.snapshot().await?;
+                                                    wire_message(
+                                                        &reply,
+                                                        control.id,
+                                                        INTERNAL_ERROR,
+                                                        false,
+                                                    )
+                                                }
+                                                Err(error) => response_message(&error),
+                                            },
+                                        }
+                                    }
+                                },
+                            )
+                            .await?
+                        } else {
+                            execution.await
+                        };
+                        if peer.snapshot().await.is_none() {
+                            break;
+                        }
+                        let voice_synthesis = request.method == VOICE_TURN_SYNTHESIZE_METHOD;
+                        writes
+                            .flush(wire_message(
+                                &response,
+                                request.id,
+                                INTERNAL_ERROR,
+                                voice_synthesis,
+                            )?)
+                            .await?;
+                    }
+                    Err(error) => writes.flush(response_message(&error)?).await?,
+                }
             }
+            Some(())
+        };
+        tokio::select! {
+            biased;
+            result = writer => result,
+            result = requests => result,
         }
-        Some(())
     };
     let revoked = async {
         let mut ticks = tokio::time::interval(Duration::from_secs(1));
@@ -583,16 +680,63 @@ async fn serve(
     reservation.conn_id = None;
 }
 
-async fn read(socket: &mut WebSocket) -> Option<(String, JsonRpcRequest)> {
+async fn drive_voice_media<E, F>(
+    execution: impl Future<Output = String>,
+    incoming: &mut (impl Stream<Item = Result<Message, E>> + Unpin),
+    active_id: &Option<serde_json::Value>,
+    deferred: &mut Option<(String, JsonRpcRequest)>,
+    writes: &Writes<Message>,
+    control: impl Fn(String, JsonRpcRequest) -> F,
+) -> Option<String>
+where
+    F: Future<Output = Option<Message>>,
+{
+    tokio::pin!(execution);
+    let mut pending_controls: Vec<(Option<serde_json::Value>, oneshot::Receiver<()>)> = Vec::new();
     loop {
-        match socket.recv().await?.ok()? {
+        tokio::select! {
+            biased;
+            // The caller flushes the media reply behind these controls before
+            // taking another request, so their IDs cannot be reused in that gap.
+            response = &mut execution => return Some(response),
+            frame = read(incoming) => {
+                let (text, request) = frame?;
+                pending_controls.retain_mut(|(_, ack)| ack.try_recv().is_err());
+                if &request.id == active_id
+                    || deferred.as_ref().is_some_and(|(_, saved)| saved.id == request.id)
+                    || pending_controls.iter().any(|(id, _)| id == &request.id)
+                {
+                    return None;
+                }
+                if request.method == VOICE_TURN_CANCEL_METHOD {
+                    if pending_controls.len() >= MAX_PENDING_VOICE_CONTROLS {
+                        return None;
+                    }
+                    let id = request.id.clone();
+                    let ack = writes.enqueue(control(text, request).await?)?;
+                    pending_controls.push((id, ack));
+                } else if deferred.replace((text, request)).is_some() {
+                    // Preserve at most one already-arrived ordinary frame.
+                    // Further pipelining exceeds the negotiated ordinary limit.
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+async fn read<E>(
+    socket: &mut (impl Stream<Item = Result<Message, E>> + Unpin),
+) -> Option<(String, JsonRpcRequest)> {
+    loop {
+        match socket.next().await?.ok()? {
             Message::Binary(bytes) => {
                 let (text, tail) = split_frame(&bytes, MAX_MESSAGE).ok()??;
                 if !tail.is_empty() {
                     return None;
                 }
                 let request: JsonRpcRequest =
-                    serde_json::from_value(parse_payload(text).ok()?).ok()?;
+                    serde_json::from_value(parse_request_payload(text).ok()?).ok()?;
                 if request.jsonrpc != "2.0"
                     || !request
                         .id
@@ -610,22 +754,35 @@ async fn read(socket: &mut WebSocket) -> Option<(String, JsonRpcRequest)> {
 }
 
 async fn send_response(socket: &mut WebSocket, response: &JsonRpcResponse) -> Option<()> {
+    timeout(IO_TIMEOUT, socket.send(response_message(response)?))
+        .await
+        .ok()?
+        .ok()
+}
+
+fn response_message(response: &JsonRpcResponse) -> Option<Message> {
     let text = serde_json::to_string(response).ok()?;
     let code = response
         .error
         .as_ref()
         .map_or(INTERNAL_ERROR, |error| error.code);
-    send(socket, &text, response.id.clone(), code).await
+    wire_message(&text, response.id.clone(), code, false)
 }
 
-async fn send(
-    socket: &mut WebSocket,
+fn wire_message(
     text: &str,
     id: Option<serde_json::Value>,
     code: i32,
-) -> Option<()> {
+    voice_synthesis: bool,
+) -> Option<Message> {
+    let budget = MAX_MESSAGE as usize;
+    let fits = if voice_synthesis {
+        parse_voice_response_payload(text, budget, |actual| id.as_ref() == Some(actual)).is_ok()
+    } else {
+        text.len() <= budget && parse_payload(text).is_ok()
+    };
     let fallback;
-    let text = if text.len() > MAX_MESSAGE as usize || parse_payload(text).is_err() {
+    let text = if !fits {
         fallback = serde_json::to_string(&JsonRpcResponse::error(
             id,
             code,
@@ -640,10 +797,7 @@ async fn send(
     let mut wire = Vec::with_capacity(HEADER_BYTES + text.len());
     wire.extend_from_slice(&prefix);
     wire.extend_from_slice(text.as_bytes());
-    timeout(IO_TIMEOUT, socket.send(Message::Binary(wire.into())))
-        .await
-        .ok()?
-        .ok()
+    Some(Message::Binary(wire.into()))
 }
 
 #[cfg(test)]

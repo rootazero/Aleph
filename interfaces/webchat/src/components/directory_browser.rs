@@ -1,9 +1,8 @@
 //! Cross-platform directory picker — Modal that browses the *server's*
 //! filesystem via `fs.*` RPCs. Same UX whether the panel is loaded by
-//! Tauri shell, localhost web tab, or remote Tailnet web.
+//! the NSH shell, a localhost web tab, or a remote browser.
 //!
-//! Why we don't use a native OS dialog: see [R6 in CLAUDE.md] — a Tauri
-//! `pickDirectory` only sees the *client's* laptop, which is wrong the
+//! A native OS dialog only sees the *client's* filesystem, which is wrong the
 //! moment server and client are on different machines (Tailnet). Routing
 //! through the server is the only correct semantics.
 //!
@@ -357,7 +356,6 @@ pub fn DirectoryBrowser(
             // Backdrop — click to cancel.
             <div
                 class="fixed inset-0 z-[60] bg-black/40 aleph-scrim"
-                data-tauri-drag-region="false"
                 on:click=cancel
             />
             // Modal card.
@@ -365,7 +363,6 @@ pub fn DirectoryBrowser(
                 class="fixed left-1/2 top-[12vh] -translate-x-1/2 z-[61] w-[min(640px,calc(100vw-32px))] \
                        glass bg-surface-overlay/85 border border-border \
                        rounded-2xl shadow-2xl overflow-hidden flex flex-col"
-                data-tauri-drag-region="false"
                 role="dialog"
                 aria-modal="true"
                 aria-label=move || title.get()

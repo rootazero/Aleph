@@ -58,6 +58,9 @@ pub(super) async fn send_to_agent(
         // tells us its canonical spelling, rather than us inventing one it
         // cannot parse.
         session_key: (!state.session_key.is_empty()).then(|| state.session_key.clone()),
+        // This client is listening for interactive events on the same Gateway.
+        // Without a channel, Core correctly treats the turn as unreachable.
+        channel: Some("cli:tui".into()),
         ..AgentRunRequest::default()
     };
     match client
@@ -468,6 +471,7 @@ pub(super) async fn execute_local_command(
         LocalCommand::Knob { knob, value } => execute_knob(state, client, knob, value).await,
         LocalCommand::Sessions => execute_sessions(state, client).await,
         LocalCommand::Providers { query } => execute_providers(state, client, query).await,
+        LocalCommand::PickModel { query } => execute_pick_model(state, client, query).await,
         LocalCommand::Agents => execute_agents(state, client).await,
         LocalCommand::Context => execute_context(state, client).await,
         LocalCommand::Todo => {
@@ -1116,6 +1120,22 @@ async fn execute_providers(state: &mut AppState, client: &AlephClient, query: St
     }
 }
 
+async fn execute_pick_model(state: &mut AppState, client: &AlephClient, query: String) {
+    use aleph_protocol::providers::ChatModelsListResult;
+    match client
+        .call::<(), ChatModelsListResult>("chat.models.list", None)
+        .await
+    {
+        Ok(result) if result.items.is_empty() => {
+            state.add_system_message("No chat models are currently available.".to_string());
+        }
+        Ok(result) => state.open_model_choices(result.items, query),
+        Err(error) => {
+            state.add_system_message(gateway_error::explain(&error, "the chat model list"))
+        }
+    }
+}
+
 /// Pull the catalogue rows out of the response envelope.
 ///
 /// Deserialised straight into the shared [`CatalogEntry`], so a field this
@@ -1227,7 +1247,7 @@ fn refresh_summary(row: &ModelsRefreshRow) -> String {
 /// Confirm the highlighted picker row.
 ///
 /// A provider row descends into its roster; a model row pins the model. The pin
-/// travels as `/model <id>` on the normal gateway path — `slash::parse_input`
+/// travels as `/model <provider>/<id>` on the normal gateway path — `slash::parse_input`
 /// classifies it as `Gateway`, so it reaches `select_model`, which stays the
 /// single authority on a session's model (it writes both the process-global map
 /// the run builder reads and the session row). The picker adds no second
@@ -1236,9 +1256,9 @@ fn refresh_summary(row: &ModelsRefreshRow) -> String {
 pub(super) async fn confirm_provider_pick(state: &mut AppState, client: &AlephClient) {
     match state.selected_provider_pick() {
         Some(app::ProviderPick::Provider(index)) => state.enter_provider(index),
-        Some(app::ProviderPick::Model(id)) => {
+        Some(app::ProviderPick::Model { provider, model }) => {
             state.close_overlay();
-            let command = format!("/model {id}");
+            let command = provider_model_command(&provider, &model);
             state.add_user_message(command.clone(), vec![]);
             send_to_agent(state, client, &command, "Model select error").await;
         }
@@ -1246,6 +1266,10 @@ pub(super) async fn confirm_provider_pick(state: &mut AppState, client: &AlephCl
         // honest answer; guessing a row is not.
         None => state.close_overlay(),
     }
+}
+
+pub(super) fn provider_model_command(provider: &str, model: &str) -> String {
+    format!("/model {provider}/{model}")
 }
 
 /// Whether an attach ADDS to what is on screen or REPLACES it.

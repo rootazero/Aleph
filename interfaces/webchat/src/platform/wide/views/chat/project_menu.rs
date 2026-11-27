@@ -86,9 +86,7 @@ pub fn ProjectMenu() -> impl IntoView {
     // enter it. "New blank" differs only in that the browser auto-opens
     // its inline "new subdirectory" input (see `auto_create` on the component
     // below), so the path we get back is the freshly created (and
-    // navigated-into) folder. We deliberately avoid `window.prompt`: it is
-    // silently disabled inside the Tauri webview, which previously left
-    // "new blank" unable to enter the folder at all.
+    // navigated-into) folder without relying on WebView dialog handlers.
     let on_pick = Callback::new(move |path: String| {
         let dash = dashboard;
         spawn_local(async move {

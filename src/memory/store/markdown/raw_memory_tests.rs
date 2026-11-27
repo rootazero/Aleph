@@ -636,15 +636,21 @@ async fn raw_memory_session_and_source_queries_include_processed_and_source_deta
     for record in [&second, &third, &first, &raw("other", 1, "other", "one")] {
         store.insert_raw_memory(record).await.unwrap();
     }
-    assert_eq!(
-        ids(&store
-            .get_raws_by_session("main", "session-a")
-            .await
-            .unwrap()),
-        ["first", "second"]
-    );
+    for (limit, expected) in [
+        (0, &[][..]),
+        (1, &["first"][..]),
+        (3, &["first", "second"][..]),
+    ] {
+        assert_eq!(
+            store
+                .get_raw_ids_by_session("main", "session-a", limit)
+                .await
+                .unwrap(),
+            expected
+        );
+    }
     assert!(store
-        .get_raws_by_session("main", "unknown")
+        .get_raw_ids_by_session("main", "unknown", 3)
         .await
         .unwrap()
         .is_empty());

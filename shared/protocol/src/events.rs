@@ -32,6 +32,15 @@ pub enum StreamEvent {
         ahead: u16,
     },
 
+    /// The message sent as `run_id` was folded into the live run
+    /// `joined_run_id` on the same session and will never run on its own.
+    /// Terminal for `run_id` only — the conversation is still running.
+    RunJoined {
+        run_id: String,
+        session_key: String,
+        joined_run_id: String,
+    },
+
     /// Reasoning/thinking process update
     Reasoning {
         run_id: String,
@@ -680,6 +689,7 @@ impl StreamEvent {
         match self {
             Self::RunAccepted { run_id, .. }
             | Self::RunQueued { run_id, .. }
+            | Self::RunJoined { run_id, .. }
             | Self::Reasoning { run_id, .. }
             | Self::ToolStart { run_id, .. }
             | Self::ToolUpdate { run_id, .. }

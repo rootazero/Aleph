@@ -39,22 +39,18 @@
 //! `run_loop` sends `SessionKey::to_key_string()` as the flow's `session_hint`,
 //! `resolve_session`'s `Reuse` arm forwards it verbatim, and `harness_bridge`
 //! parses it back with `from_key_string` before the harness stamps
-//! `session_id.to_string()` into the payload metadata. **That round trip is not
-//! the identity**, and assuming it was is how this seam nearly shipped broken:
-//! a `DmScope::PerPeer` key with a non-empty channel serialises to
-//! `agent:<a>:dm:<peer>` — dropping the channel — and parses back to a
-//! channel-less key that re-serialises as `agent:<a>:peer:<peer>`. Writer and
-//! reader would therefore have disagreed on **every channel DM session**
-//! (Telegram, Slack, …), which is most real traffic, and the banner would have
-//! gone quiet exactly where it is needed most — silently, since a missing
-//! witness is indistinguishable from "nothing deviated".
+//! `session_id.to_string()` into the payload metadata. That round trip was once
+//! not the identity: a `DmScope::PerPeer` key with a channel serialised to
+//! `agent:<a>:dm:<peer>` and re-serialised as `agent:<a>:peer:<peer>`, so writer
+//! and reader disagreed on every channel DM session and the banner went quiet
+//! silently (a missing witness looks like "nothing deviated"). `SessionKey` now
+//! has one per-peer spelling (`peer:`, with `dm:` kept only as a parse alias),
+//! and the round trip is the identity for every key `to_key_string` produces.
 //!
-//! So neither side uses its own spelling. Both canonicalise through
-//! [`witness_key`], which applies the same parse-and-re-serialise the harness
-//! already performs. Fixing the asymmetry in `SessionKey` itself would be the
-//! deeper fix, but those strings are persisted session identity — out of scope
-//! here, and not required: canonicalisation is idempotent, which is the only
-//! property this seam needs.
+//! Both sides still canonicalise through [`witness_key`]: a `dm:` alias string
+//! that reaches either side from persisted state lands on the same key as its
+//! `peer:` twin. Canonicalisation is idempotent, the only property this seam
+//! needs.
 //!
 //! ## What is deliberately NOT recorded
 //!
@@ -231,6 +227,8 @@ pub struct RouteWitness {
     pub first: Dialed,
     /// The endpoint that answered the most recent successful dial.
     pub served: Dialed,
+    /// Distinguishes a real answer from the plan-time mirror in `served`.
+    pub answered: bool,
 }
 
 impl RouteWitness {
@@ -273,14 +271,15 @@ impl RouteWitness {
             && self.first.provider == attempted.provider
             && attempted.model != DialedModel::Unresolved
         {
-            // `served == first` is exactly "nothing has answered yet"; keep the
+            // While nothing has answered yet, keep the
             // two in step so the mirror above survives the refinement.
-            if self.served == self.first {
+            if !self.answered {
                 self.served = attempted.clone();
             }
             self.first = attempted.clone();
         }
         if let Some(served) = served {
+            self.answered = true;
             self.served = served;
         }
     }
@@ -349,8 +348,16 @@ impl BoundedWitnesses {
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
                 let first = attempted;
+                let answered = served.is_some();
                 let served = served.unwrap_or_else(|| first.clone());
-                entry.insert((tick, RouteWitness { first, served }));
+                entry.insert((
+                    tick,
+                    RouteWitness {
+                        first,
+                        served,
+                        answered,
+                    },
+                ));
             }
         }
     }
@@ -373,9 +380,7 @@ impl BoundedWitnesses {
     /// delete turn 1's real, dialed record.
     fn retract(&mut self, key: &str, provider: &str) {
         let is_bare_anchor = self.map.get(key).is_some_and(|(_, w)| {
-            w.first.provider == provider
-                && w.first.model == DialedModel::Unresolved
-                && w.served == w.first
+            w.first.provider == provider && w.first.model == DialedModel::Unresolved && !w.answered
         });
         if is_bare_anchor {
             self.map.remove(key);
@@ -790,27 +795,22 @@ mod tests {
     }
 
     #[test]
-    fn the_session_key_round_trip_is_not_the_identity() {
-        // Documents the trap this module's key handling exists for, so nobody
-        // "simplifies" `witness_key` away: a PerPeer DM key with a non-empty
-        // channel serialises to `:dm:` (dropping the channel) and parses back to
-        // a channel-less key that re-serialises as `:peer:`. Writer and reader
-        // spelling the session differently is invisible at runtime — a missing
-        // witness looks exactly like "nothing deviated".
-        let wire = SessionKey::dm(
-            "main",
-            "telegram",
-            "user123",
-            crate::routing::session_key::DmScope::PerPeer,
-        )
-        .to_key_string();
-        let reparsed = SessionKey::from_key_string(&wire)
-            .expect("a key produced by to_key_string must parse back")
-            .to_key_string();
-        assert_ne!(
-            reparsed, wire,
-            "if this ever becomes the identity, the DM asymmetry was fixed \
-             upstream and `witness_key` can be revisited"
+    fn the_session_key_round_trip_is_the_identity_and_folds_the_dm_alias() {
+        // Writer and reader spelling one session differently is invisible at
+        // runtime — a missing witness looks exactly like "nothing deviated".
+        // Every key `to_key_string` produces must therefore survive the
+        // harness's parse-and-re-serialise unchanged, and a persisted `dm:`
+        // alias must land on its `peer:` twin.
+        for key in every_key_shape() {
+            let wire = key.to_key_string();
+            let reparsed = SessionKey::from_key_string(&wire)
+                .expect("a key produced by to_key_string must parse back")
+                .to_key_string();
+            assert_eq!(reparsed, wire, "round trip must be the identity for {wire}");
+        }
+        assert_eq!(
+            witness_key("agent:main:dm:user123"),
+            witness_key("agent:main:peer:user123")
         );
     }
 

@@ -612,6 +612,7 @@ mod tests {
                 ),
                 session_store: None,
                 provider: None,
+                provider_secrets: None,
                 extensions: Arc::new(MemoryExtensionRegistry::new()),
                 state_db: None,
                 default_agent_id: crate::routing::DEFAULT_AGENT_ID.into(),

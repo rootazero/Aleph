@@ -64,6 +64,7 @@ async fn registered_notes_restart_while_real_raw_sessions_remain_available() {
             raw_store: raw.clone(),
             session_store: Some(sessions.clone()),
             provider: None,
+            provider_secrets: None,
             extensions: Arc::new(MemoryExtensionRegistry::new()),
             state_db: None,
             default_agent_id: alephcore::routing::DEFAULT_AGENT_ID.into(),

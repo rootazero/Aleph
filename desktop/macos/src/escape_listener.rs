@@ -39,7 +39,7 @@
 
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 
@@ -115,7 +115,7 @@ const KEY_DOWN_MASK: u64 = 1 << EVENT_KEY_DOWN;
 /// only after that thread's run loop has returned, so the pointer the tap holds
 /// is valid for the tap's whole life.
 struct TapContext {
-    abort_flag: Arc<AtomicBool>,
+    abort_state: Arc<AtomicU64>,
     /// The tap's own mach port, needed to re-enable it after the system disables
     /// it. Written just after creation; the callback tolerates the null it may
     /// briefly observe (a tap is enabled from birth, so it can fire first).
@@ -144,10 +144,16 @@ extern "C" fn tap_callback(
             // duration of this callback; the field id is the documented constant.
             let code = unsafe { CGEventGetIntegerValueField(event, FIELD_KEYCODE) };
             if code == ESCAPE_KEY_CODE {
-                ctx.abort_flag.store(true, Ordering::Release);
+                ctx.abort_state
+                    .try_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                        Some(state.wrapping_add(2) | 1)
+                    })
+                    .expect("Escape state update always succeeds");
             }
         }
         EVENT_TAP_DISABLED_BY_TIMEOUT | EVENT_TAP_DISABLED_BY_USER_INPUT => {
+            // Progress while the tap was disabled is unknown. Invalidate held approvals.
+            ctx.abort_state.fetch_add(2, Ordering::AcqRel);
             // A disabled tap is a silently dead abort key. Re-arm it.
             let port = ctx.port.load(Ordering::Acquire);
             if !port.is_null() {
@@ -180,7 +186,8 @@ struct TapThread {
 
 /// macOS implementation of [`EscapeAbort`] backed by a listen-only `CGEventTap`.
 pub struct EscapeListener {
-    abort_flag: Arc<AtomicBool>,
+    // Low bit: sticky abort flag. Upper bits: interruption generation.
+    abort_state: Arc<AtomicU64>,
     /// `Mutex` so `start`/`stop` can run through `&self` (the trait's shape).
     thread: Mutex<Option<TapThread>>,
 }
@@ -189,7 +196,7 @@ impl EscapeListener {
     /// Create a new `EscapeListener` (not yet active).
     pub fn new() -> Self {
         Self {
-            abort_flag: Arc::new(AtomicBool::new(false)),
+            abort_state: Arc::new(AtomicU64::new(0)),
             thread: Mutex::new(None),
         }
     }
@@ -197,11 +204,11 @@ impl EscapeListener {
     /// Body of the tap thread: build the tap, publish the run loop to the
     /// caller, then service events until [`EscapeListener::stop`] stops us.
     fn run_tap(
-        abort_flag: Arc<AtomicBool>,
+        abort_state: Arc<AtomicU64>,
         ready: &mpsc::Sender<std::result::Result<CFRunLoop, String>>,
     ) {
         let ctx = Box::into_raw(Box::new(TapContext {
-            abort_flag,
+            abort_state,
             port: AtomicPtr::new(ptr::null_mut()),
         }));
 
@@ -317,10 +324,11 @@ impl EscapeAbort for EscapeListener {
         }
 
         let (tx, rx) = mpsc::channel();
-        let flag = Arc::clone(&self.abort_flag);
+        self.abort_state.fetch_add(2, Ordering::AcqRel);
+        let state = Arc::clone(&self.abort_state);
         let join = std::thread::Builder::new()
             .name("aleph-escape-tap".into())
-            .spawn(move || Self::run_tap(flag, &tx))
+            .spawn(move || Self::run_tap(state, &tx))
             .map_err(|e| {
                 DesktopError::InputFailed(format!("failed to spawn escape tap thread: {e}"))
             })?;
@@ -362,11 +370,18 @@ impl EscapeAbort for EscapeListener {
     }
 
     fn is_aborted(&self) -> bool {
-        self.abort_flag.load(Ordering::Acquire)
+        self.abort_state.load(Ordering::Acquire) & 1 != 0
+    }
+
+    fn abort_generation(&self) -> Option<u64> {
+        let thread = self.thread.lock().unwrap_or_else(PoisonError::into_inner);
+        thread.as_ref().filter(|tap| !tap.join.is_finished())?;
+        let state = self.abort_state.load(Ordering::Acquire);
+        (state & 1 == 0).then_some(state >> 1)
     }
 
     fn reset(&self) {
-        self.abort_flag.store(false, Ordering::Release);
+        self.abort_state.fetch_and(!1, Ordering::AcqRel);
     }
 }
 
@@ -389,10 +404,11 @@ mod tests {
     #[test]
     fn reset_clears_abort_flag() {
         let listener = EscapeListener::new();
-        listener.abort_flag.store(true, Ordering::Release);
+        listener.abort_state.store(3, Ordering::Release);
         assert!(listener.is_aborted());
         listener.reset();
         assert!(!listener.is_aborted());
+        assert_eq!(listener.abort_state.load(Ordering::Acquire), 2);
     }
 
     /// `start` is re-entrant, and — the part that used to be untrue — when it

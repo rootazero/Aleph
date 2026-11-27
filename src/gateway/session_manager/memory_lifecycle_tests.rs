@@ -48,6 +48,7 @@ async fn session_close_preserves_raw_off_and_drains_derived_when_running() {
             raw_store: raw.clone(),
             session_store: Some(sessions.clone()),
             provider: Some(Arc::new(MockProvider::new("A completed session."))),
+            provider_secrets: None,
             extensions: Arc::new(MemoryExtensionRegistry::new()),
             state_db: None,
             default_agent_id: crate::routing::DEFAULT_AGENT_ID.into(),

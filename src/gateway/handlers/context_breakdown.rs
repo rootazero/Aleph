@@ -134,20 +134,21 @@ pub async fn handle_context_breakdown(
 
     let context_window = match meta.model.as_deref() {
         Some(model) => {
-            let override_w = match (&app_config, meta.model_provider.as_deref()) {
-                (Some(cfg), Some(provider)) => cfg
-                    .read()
-                    .await
-                    .providers
-                    .get(provider)
-                    .and_then(|p| p.context_window),
+            use crate::providers::model_catalog::{context_window_for, resolve_context_window};
+            let configured_window = match (&app_config, meta.model_provider.as_deref()) {
+                (Some(cfg), Some(provider)) => {
+                    let cfg = cfg.read().await;
+                    cfg.providers.get(provider).and_then(|p| {
+                        context_window_for(
+                            model,
+                            p.context_window,
+                            p.model_defs.iter().find(|def| def.id == model),
+                        )
+                    })
+                }
                 _ => None,
             };
-            Some(
-                crate::providers::model_catalog::resolve_context_window_with_override(
-                    override_w, model,
-                ),
-            )
+            Some(configured_window.unwrap_or_else(|| resolve_context_window(model)))
         }
         // No model on the row means nothing has run here yet under a known
         // model; the window is unknown, not a default.

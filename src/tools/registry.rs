@@ -35,6 +35,8 @@ use serde_json::Value;
 #[derive(Clone)]
 pub struct RegistryEntry {
     pub handler: Arc<dyn ToolHandler>,
+    // Provider views wrap the callable afresh; retain the same published identity.
+    pub(crate) published_handler: Option<Weak<dyn ToolHandler>>,
     pub descriptor: Arc<ToolCapabilityDescriptor>,
     /// The producer-owned result budget admitted with this handler/descriptor pair.
     pub max_result_tokens: Option<usize>,
@@ -472,6 +474,14 @@ impl ToolHandler for ProviderCallHandler {
 }
 
 impl RegistryEntry {
+    pub(crate) fn same_published_handler(&self, other: &Self) -> bool {
+        match (&self.published_handler, &other.published_handler) {
+            (Some(left), Some(right)) => Weak::ptr_eq(left, right),
+            (None, None) => Arc::ptr_eq(&self.handler, &other.handler),
+            _ => false,
+        }
+    }
+
     fn for_provider(
         &self,
         provider: &ProviderHandle,
@@ -489,6 +499,7 @@ impl RegistryEntry {
                 ready: self.ready.clone(),
                 shared: Arc::downgrade(shared),
             }),
+            published_handler: Some(Arc::downgrade(&self.handler)),
             descriptor: Arc::clone(&self.descriptor),
             max_result_tokens: self.max_result_tokens,
             ready: self.ready.clone(),
@@ -509,6 +520,7 @@ impl RegistryEntry {
                 inner: handler,
                 descriptor: Arc::clone(&descriptor),
             }),
+            published_handler: None,
             descriptor,
             max_result_tokens,
             ready: None,
@@ -4011,6 +4023,7 @@ mod tests {
             // Public scaffold fields cannot become an admission bypass.
             let entry = RegistryEntry {
                 handler: fake("injected"),
+                published_handler: None,
                 descriptor: Arc::new(desc("injected")),
                 max_result_tokens: Some(1),
                 ready: None,

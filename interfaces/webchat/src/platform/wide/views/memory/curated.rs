@@ -101,9 +101,16 @@ pub fn CuratedPanel(
             // the agent's recent decisions rather than one fact's history.
             // Pinned server-side by
             // `an_empty_write_decision_target_lists_the_recent_ledger`.
-            let res = MemoryApi::trace(&state, &agent, "", TraceKind::WriteDecision, LEDGER_LIMIT)
-                .await
-                .map(|t| t.write_decisions);
+            let res = MemoryApi::trace(
+                &state,
+                &agent,
+                "",
+                TraceKind::WriteDecision,
+                LEDGER_LIMIT,
+                false,
+            )
+            .await
+            .map(|t| t.write_decisions);
             ledger.set(Loadable::from_rpc(res));
         });
     });

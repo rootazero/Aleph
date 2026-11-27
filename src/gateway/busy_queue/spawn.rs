@@ -7,9 +7,12 @@
 //! user a receipt* — that rule lives with [`DeliveryOutcome`], and this is its
 //! one implementation for stream surfaces.
 
-use super::{deliver_with_ticket, durable, register_run, BusyQueueConfig, DeliveryOutcome};
+use super::{
+    deliver_with_ticket, durable, register_run, BusyQueueConfig, DeliveryOutcome, TicketGuard,
+};
 use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
 use crate::gateway::execution_engine::{ExecutionError, RunRequest};
+use crate::gateway::handlers::agent::{AgentRunManager, QueuedChatRun};
 use crate::gateway::i18n::Locale;
 use crate::gateway::router::SessionKey;
 use crate::gateway::server::connection::dispatch::{
@@ -111,10 +114,11 @@ pub fn spawn_queued_run<P, R, E>(
     R: crate::executor::ToolRegistry + 'static,
     E: EventEmitter + Send + Sync + 'static,
 {
-    spawn_queued_run_with_origin(engine, request, agent, emitter, cfg, locale, label, None);
+    spawn_panel_queued_run(engine, request, agent, emitter, cfg, locale, label, None);
 }
 
-/// Carry the authenticated Panel request origin into this live worker only.
+/// Carry the authenticated Panel request origin into this ordinary live worker only.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_panel_queued_run<P, R, E>(
     engine: Arc<ExecutionEngine<P, R>>,
     request: RunRequest,
@@ -129,14 +133,25 @@ pub fn spawn_panel_queued_run<P, R, E>(
     R: crate::executor::ToolRegistry + 'static,
     E: EventEmitter + Send + Sync + 'static,
 {
+    let ticket = register_queue_ticket(&request, cfg.max_per_session);
     let paired_run = owners.and_then(|owners| PairedShellRun::capture(&request, owners));
-    spawn_queued_run_with_origin(
-        engine, request, agent, emitter, cfg, locale, label, paired_run,
+    // Only registered ordinary runs are eligible for queue recovery. A
+    // rejected ticket has no payload, and paired origin is never journaled.
+    if ticket.is_some() && durable::is_armed() {
+        if let Some(payload) = durable::QueuedRunPayload::from_request(&request, locale) {
+            durable::record_enqueued(payload);
+        }
+    }
+    spawn_registered_run(
+        engine, request, agent, emitter, cfg, locale, label, ticket, None, paired_run,
     );
 }
 
+/// Submit an exact-cancellable Chat receipt through the same live wait lane.
+/// Do not journal it for queue recovery: the receipt's authority and cancellation
+/// decision live in this process and cannot be reconstructed during boot replay.
 #[allow(clippy::too_many_arguments)]
-fn spawn_queued_run_with_origin<P, R, E>(
+pub async fn spawn_queued_chat_run<P, R, E>(
     engine: Arc<ExecutionEngine<P, R>>,
     request: RunRequest,
     agent: Arc<AgentInstance>,
@@ -144,6 +159,44 @@ fn spawn_queued_run_with_origin<P, R, E>(
     cfg: BusyQueueConfig,
     locale: Locale,
     label: &'static str,
+    manager: &AgentRunManager,
+) where
+    P: crate::thinker::ProviderRegistry + 'static,
+    R: crate::executor::ToolRegistry + 'static,
+    E: EventEmitter + Send + Sync + 'static,
+{
+    // Keep arrival order: take the ticket before waiting on the manager's run map.
+    let ticket = register_queue_ticket(&request, cfg.max_per_session);
+    let managed = manager.bind_queued_chat_run(&request).await;
+    spawn_registered_run(
+        engine, request, agent, emitter, cfg, locale, label, ticket, managed, None,
+    );
+}
+
+fn register_queue_ticket(request: &RunRequest, max_per_session: usize) -> Option<TicketGuard> {
+    if request.owns_worktree() {
+        return None;
+    }
+    // A side question waits on the derived execution session, not the addressed session.
+    register_run(
+        &request.session_key,
+        &request.metadata,
+        max_per_session,
+        &request.run_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_registered_run<P, R, E>(
+    engine: Arc<ExecutionEngine<P, R>>,
+    request: RunRequest,
+    agent: Arc<AgentInstance>,
+    emitter: Arc<E>,
+    cfg: BusyQueueConfig,
+    locale: Locale,
+    label: &'static str,
+    ticket: Option<TicketGuard>,
+    managed: Option<QueuedChatRun>,
     paired_run: Option<PairedShellRun>,
 ) where
     P: crate::thinker::ProviderRegistry + 'static,
@@ -151,62 +204,67 @@ fn spawn_queued_run_with_origin<P, R, E>(
     E: EventEmitter + Send + Sync + 'static,
 {
     let run_id = request.run_id.clone();
+    // The queue may be on a derived /btw session; receipts name the addressed session.
     let session_key = request.session_key.to_key_string();
     let agent_id = request.session_key.agent_id().to_string();
-    // `register_run`, not `register`: the lane is keyed on the session this run
-    // will EXECUTE on, which for a side question is not the one it was
-    // addressed to. See that function for what keying it wrong costs.
-    //
-    // `session_key` above stays the session it was ADDRESSED to, and the two
-    // uses below want that one: the log line reads better against the
-    // conversation a person is looking at, and the `RunError` receipt for a run
-    // that never reached the engine has to resolve on the client that is
-    // attached to it — the derived session may have no row at all yet.
-    let owned_worktree = request
-        .workspace_override
-        .as_ref()
-        .is_some_and(crate::sandbox::context::ExecWorkspace::is_owned_worktree);
-    let ticket = if owned_worktree {
-        None
-    } else {
-        register_run(
-            &request.session_key,
-            &request.metadata,
-            cfg.max_per_session,
-            &run_id,
-        )
-    };
-    // Crash-durability write point (one of two; the channel twin lives in
-    // `inbound_router::executor`). Only a *registered* ticket is journaled —
-    // a `None` here is REJECT_NEWEST, the sender already heard no.
-    if ticket.is_some() && durable::is_armed() {
-        if let Some(payload) = durable::QueuedRunPayload::from_request(&request, locale) {
-            durable::record_enqueued(payload);
+    if let Some(managed) = &managed {
+        if ticket.is_none() {
+            let _ = managed.cancellation.begin_terminal_commit();
         }
     }
 
     tokio::spawn(async move {
-        let outcome = PAIRED_SHELL_RUN
-            .scope(paired_run, async {
-                match ticket {
-                    None => DeliveryOutcome::Rejected,
-                    Some(ticket) => {
+        let delivery = async {
+            match ticket {
+                None => DeliveryOutcome::Rejected,
+                Some(ticket) => {
+                    // The lane's own surface for "still waiting" — the shared
+                    // constructor carries the addressed-vs-derived session rule
+                    // and the failure policy; see `run_queued_reporter`.
+                    let report_emitter: Arc<dyn EventEmitter + Send + Sync> = emitter.clone();
+                    let mut report = super::run_queued_reporter(
+                        report_emitter,
+                        run_id.clone(),
+                        session_key.clone(),
+                    );
+                    if let Some(run) = &managed {
+                        let token = run.cancellation.token();
+                        let mut attempt = || {
+                            engine.execute_with_chat_cancellation(
+                                request.clone(),
+                                agent.clone(),
+                                emitter.clone(),
+                                Some(&run.cancellation),
+                            )
+                        };
+                        super::deliver::deliver_with_cancellation(
+                            ticket,
+                            cfg,
+                            &mut attempt,
+                            &mut report,
+                            Some(&token),
+                        )
+                        .await
+                    } else {
                         let mut attempt =
                             || engine.execute(request.clone(), agent.clone(), emitter.clone());
-                        // The lane's own surface for "still waiting" — the shared
-                        // constructor carries the addressed-vs-derived session rule
-                        // and the failure policy; see `run_queued_reporter`.
-                        let report_emitter: Arc<dyn EventEmitter + Send + Sync> = emitter.clone();
-                        let mut report = super::run_queued_reporter(
-                            report_emitter,
-                            run_id.clone(),
-                            session_key.clone(),
-                        );
                         deliver_with_ticket(ticket, cfg, &mut attempt, &mut report).await
                     }
                 }
-            })
-            .await;
+            }
+        };
+        let outcome = PAIRED_SHELL_RUN.scope(paired_run, delivery).await;
+
+        // Executed attempts settle at their own outcome boundary. Only a
+        // never-ran receipt belongs to the queue, before the durable settle.
+        let outcome = if managed.as_ref().is_some_and(|run| {
+            !matches!(outcome, DeliveryOutcome::Executed(_))
+                && run.cancellation.begin_terminal_commit().is_err()
+        }) {
+            DeliveryOutcome::Purged
+        } else {
+            outcome
+        };
 
         // Which failure (if any) this surface still owes a terminal frame for.
         // `DeliveryOutcome::user_error` covers the two never-ran outcomes; the
@@ -214,13 +272,13 @@ fn spawn_queued_run_with_origin<P, R, E>(
         // once, in the `/stop` reply, but the Panel has an in-flight bubble
         // keyed to this `run_id` and nothing else will ever close it — without a
         // terminal frame the user is left with a spinner they just stopped.
-        let pending_error = match outcome {
+        let mut pending_error = match &outcome {
             DeliveryOutcome::Executed(Ok(())) => {
                 tracing::info!(run_id = %run_id, "{label} completed successfully");
                 durable::record_settled(&run_id, durable::SettleReason::AttemptConcluded);
-                return;
+                None
             }
-            DeliveryOutcome::Executed(Err(ref e)) => {
+            DeliveryOutcome::Executed(Err(e)) => {
                 // Raw chain goes to server logs only; the engine already put a
                 // sanitized receipt on the wire (shared single source with
                 // `ExecutionError::user_receipt`).
@@ -241,6 +299,17 @@ fn spawn_queued_run_with_origin<P, R, E>(
                 outcome.user_error(&agent_id)
             }
         };
+
+        if let Some(managed) = managed {
+            match outcome {
+                DeliveryOutcome::Executed(result) => managed.settle(&result).await,
+                _ => {
+                    let result = pending_error.take().map_or(Ok(()), Err);
+                    managed.settle(&result).await;
+                    pending_error = result.err();
+                }
+            }
+        }
 
         let Some(e) = pending_error else {
             return;

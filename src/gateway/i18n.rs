@@ -203,6 +203,9 @@ pub enum Msg<'a> {
     ClarifyReplyPickOne,
     /// Reply hint under a pick-several menu.
     ClarifyReplyPickMany,
+    ClarifyNoChannelQuestion,
+    ClarifyCancelled,
+    ClarifyPrivateChannelReply,
 
     // --- plan-approval card (`scratchpad(action='request_approval')`) ---
     /// Verdict label: approve as written.
@@ -254,6 +257,8 @@ pub enum ReceiptKind {
     Auth,
     /// Network / upstream outage across the whole provider chain.
     Unreachable,
+    /// The message may already be durable; do not encourage resubmission.
+    DeliveryUnconfirmed,
     /// Anything else. Deliberately opaque: the raw chain goes to the server
     /// log, never onto the wire (hermes GAP-5).
     Failed,
@@ -295,7 +300,7 @@ impl ReceiptKind {
             Self::RateLimited => C::RateLimited,
             Self::Auth => C::Auth,
             Self::Unreachable => C::ProvidersUnreachable,
-            Self::Failed => C::Failed,
+            Self::Failed | Self::DeliveryUnconfirmed => C::Failed,
             Self::SpendExhausted { .. } => C::SpendExhausted,
         }
     }
@@ -443,6 +448,12 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
                 .into()
         }
 
+        (Msg::ErrReceipt(ReceiptKind::DeliveryUnconfirmed), Locale::Zh) => {
+            "无法确认消息是否送达，请先检查会话。".into()
+        }
+        (Msg::ErrReceipt(ReceiptKind::DeliveryUnconfirmed), Locale::En) => {
+            "Could not confirm message delivery. Check the conversation first.".into()
+        }
         (Msg::ErrReceipt(ReceiptKind::Failed), Locale::Zh) => "任务执行失败，请重试。".into(),
         (Msg::ErrReceipt(ReceiptKind::Failed), Locale::En) => {
             "The task failed. Please try again.".into()
@@ -549,6 +560,18 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
         // replaced, so an install that never calls `install_locale`
         // renders exactly what it rendered before the catalog existed.
         // ============================================================
+        (Msg::ClarifyNoChannelQuestion, Locale::En) => {
+            "No question is available in this channel.".into()
+        }
+        (Msg::ClarifyNoChannelQuestion, Locale::Zh) => "当前通道没有可操作的问题。".into(),
+        (Msg::ClarifyCancelled, Locale::En) => "Questionnaire cancelled.".into(),
+        (Msg::ClarifyCancelled, Locale::Zh) => "已取消问卷。".into(),
+        (Msg::ClarifyPrivateChannelReply, Locale::En) => {
+            "This question accepts replies only in the Panel or TUI.".into()
+        }
+        (Msg::ClarifyPrivateChannelReply, Locale::Zh) => {
+            "此问题只能在 Panel 或 TUI 中回答。".into()
+        }
         (Msg::ClarifyReplyFreeText, Locale::En) => "Reply with your answer.".into(),
         (Msg::ClarifyReplyFreeText, Locale::Zh) => "请回复你的答案。".into(),
         (Msg::ClarifyReplyPickOne, Locale::En) => "Reply with the number or your answer.".into(),
@@ -1269,6 +1292,9 @@ mod tests {
             Msg::ClarifyReplyFreeText,
             Msg::ClarifyReplyPickOne,
             Msg::ClarifyReplyPickMany,
+            Msg::ClarifyNoChannelQuestion,
+            Msg::ClarifyCancelled,
+            Msg::ClarifyPrivateChannelReply,
             Msg::PlanApproveLabel,
             Msg::PlanReviseLabel,
             Msg::PlanRejectLabel,

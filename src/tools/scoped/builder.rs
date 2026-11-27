@@ -201,7 +201,15 @@ impl ScopedToolService {
 
     /// Wire the operator-targeted config approval requester (Phase 2b sudo).
     pub fn with_config_approval(mut self, requester: Arc<dyn ApprovalRequester>) -> Self {
-        self.config_approval_requester = Some(requester);
+        self.config_approval_requester = Some(super::ConfigApprovalRequester::Generic(requester));
+        self
+    }
+
+    pub(crate) fn with_operator_approval(
+        mut self,
+        requester: Arc<crate::approval::OperatorApprovalRequester>,
+    ) -> Self {
+        self.config_approval_requester = Some(super::ConfigApprovalRequester::Operator(requester));
         self
     }
 

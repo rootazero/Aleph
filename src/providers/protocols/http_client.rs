@@ -15,14 +15,18 @@ use std::time::Duration;
 /// long-lived and an overall cap would kill a legitimately long stream.
 /// Mid-stream stalls are handled separately by `stream_idle::wrap_idle_timeout`.
 pub(crate) fn build_provider_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .pool_idle_timeout(Duration::from_secs(90))
-        .tcp_keepalive(Duration::from_secs(60))
+    provider_http_client_builder()
         .build()
         // Fail-soft: a builder error is implausible with these options, but a
         // default client beats a panic at provider-construction time.
         .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+pub(crate) fn provider_http_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .tcp_keepalive(Duration::from_secs(60))
 }
 
 /// The response's `Retry-After` as a decimal seconds string, or `None` when the

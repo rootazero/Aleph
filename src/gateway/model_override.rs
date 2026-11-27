@@ -74,16 +74,36 @@ pub enum ModelOverride {
         /// Model id (e.g. `"gpt-5"`).
         model: String,
     },
-    /// Send only the model name; the resolver picks the provider via the
-    /// existing prefix heuristic (`gpt-*` → openai, `claude-*` → anthropic, …).
-    /// Falls through to the agent's default provider if no rule matches.
+    /// A literal wire model ID. User-facing admission resolves it to one
+    /// usable provider. Trusted internal producers can still use raw routing.
     Raw {
         /// Model id (e.g. `"claude-sonnet-4"`).
         model: String,
     },
 }
 
+/// Set only by Gateway admission, to keep queued user selections distinct from
+/// trusted voice and replay directives with the same wire shape.
+pub(crate) const USER_MODEL_OVERRIDE_METADATA: &str = "user_model_override";
+
 impl ModelOverride {
+    /// Resolve a user-facing override before committing any run effects.
+    pub fn validate_explicit(
+        self,
+        snapshot: &crate::providers::session_model_handle::SelectableModelsSnapshot,
+    ) -> Result<Self, crate::providers::session_model_handle::ModelSelectionError> {
+        use crate::providers::session_model_handle::ModelSelectionError;
+        let binding = match self {
+            Self::Qualified { provider, model } => snapshot.resolve(Some(&provider), &model),
+            Self::Raw { model } => snapshot.resolve_raw(&model),
+        }?;
+        let provider = binding.provider.ok_or(ModelSelectionError::Unavailable)?;
+        Ok(Self::Qualified {
+            provider,
+            model: binding.model,
+        })
+    }
+
     /// Model id the user asked for (both variants carry one).
     #[must_use]
     pub fn model(&self) -> &str {

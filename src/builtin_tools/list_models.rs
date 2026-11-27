@@ -172,7 +172,8 @@ impl ListModelsTool {
 
     /// Ask every credentialed provider for its live model list, concurrently.
     ///
-    /// Returns `provider → [model id]` for the providers that answered.
+    /// Returns providers with an accepted fresh, cached, or stale inventory. The
+    /// projection reads the current inventory after all requests finish.
     /// Failures are dropped, not surfaced as errors: discovery is an
     /// enrichment pass over a catalog that already works, so one unreachable
     /// vendor must not fail the tool call. The per-provider reasons are logged
@@ -184,119 +185,63 @@ impl ListModelsTool {
     async fn discover_live_models(
         &self,
         config: &Arc<RwLock<Config>>,
-    ) -> (std::collections::HashMap<String, Vec<String>>, usize) {
-        struct Target {
-            provider: String,
-            base_url: String,
-            protocol: String,
-            api_key: String,
-        }
-
-        let targets: Vec<Target> = {
-            let guard = config.read().await;
-            guard
-                .providers
+    ) -> (
+        Vec<(
+            crate::providers::model_catalog::discovery::DiscoveredModels,
+            DiscoverySource,
+        )>,
+        usize,
+    ) {
+        use crate::providers::model_catalog::{
+            refresh_configured_models, RefreshMode, RefreshOutcome,
+        };
+        let targets: Vec<_> = {
+            let cfg = config.read().await;
+            cfg.providers
                 .iter()
-                .filter(|(_, cfg)| cfg.enabled)
-                // Six presets publish no `/models` endpoint. `refresh_models`
-                // refuses them at the leaf, so this is not what stops the
-                // network call — it stops them being *counted*: `attempted`
-                // rides back to the model in the tool's own message, and a
-                // number that includes providers nobody asked anything is a
-                // small lie told to the one reader who cannot check it.
-                // Same predicate as the leaf, so the two cannot disagree.
-                .filter(|(name, _)| crate::providers::probe::supports_model_listing(name))
-                .filter_map(|(name, cfg)| {
-                    let preset = crate::providers::presets::get_preset(name);
-                    let base_url = cfg
-                        .base_url
-                        .clone()
-                        .or_else(|| preset.map(|p| p.base_url.to_string()))?;
-                    let protocol = cfg
-                        .protocol
-                        .clone()
-                        .or_else(|| preset.map(|p| p.protocol.to_string()))
-                        .unwrap_or_else(|| "openai".to_string());
-                    let api_key = self.resolve_api_key(name, cfg.api_key.as_ref())?;
-                    Some(Target {
-                        provider: name.clone(),
-                        base_url,
-                        protocol,
-                        api_key,
-                    })
+                .filter(|(name, pc)| {
+                    pc.enabled
+                        && crate::providers::model_catalog::discovery::listing_address(&cfg, name)
+                            .is_ok()
+                        && self.provider_configured(name, pc.api_key.as_ref())
                 })
+                .map(|(name, _)| name.clone())
                 .collect()
         };
-
         let attempted = targets.len();
-        let mut out = std::collections::HashMap::new();
-        let mut tasks = tokio::task::JoinSet::new();
-        for t in targets {
-            // A listing fetched moments ago is reused rather than refetched.
-            // `list_models` is open to chat-tier callers, so an unconditional
-            // fetch would make "call this repeatedly" a way to hammer every
-            // configured vendor with the operator's keys. The operator RPC
-            // (`providers.modelsRefresh`) still forces a real round trip —
-            // that path is an explicit, authorised "go look now".
-            if let Some(cached) =
-                crate::providers::model_catalog::cached_models(&t.provider, &t.base_url)
-            {
-                if cached.is_fresh(crate::providers::model_catalog::discovery::CACHE_TTL) {
-                    out.insert(
-                        t.provider,
-                        cached.models.into_iter().map(|m| m.id).collect::<Vec<_>>(),
-                    );
-                    continue;
-                }
-            }
-            tasks.spawn(async move {
-                let base_url = t.base_url.clone();
-                let outcome = crate::providers::model_catalog::refresh_models(
-                    &t.provider,
-                    &t.base_url,
-                    &t.protocol,
-                    &t.api_key,
-                )
-                .await;
-                (t.provider, base_url, outcome)
-            });
-        }
-
-        while let Some(joined) = tasks.join_next().await {
-            let Ok((provider, base_url, outcome)) = joined else {
-                continue;
-            };
+        let results = futures::future::join_all(targets.into_iter().map(|provider| async move {
+            let outcome = refresh_configured_models(
+                config,
+                &provider,
+                RefreshMode::PreferFreshCache,
+                |name, _| self.resolve_api_key(name, None),
+            )
+            .await;
+            (provider, outcome)
+        }))
+        .await;
+        let out = results.into_iter().filter_map(|(provider, outcome)| {
             match outcome {
-                Ok(listing) => {
-                    out.insert(
-                        provider,
-                        listing.models.into_iter().map(|m| m.id).collect::<Vec<_>>(),
-                    );
+                Ok(RefreshOutcome::Fresh(listing)) => Some((listing, DiscoverySource::Fresh)),
+                Ok(RefreshOutcome::CacheHit(listing)) => Some((listing, DiscoverySource::Cache)),
+                Ok(RefreshOutcome::Stale { listing, cause }) => {
+                    tracing::debug!(%provider, error = %cause, "model discovery failed; checking stale inventory");
+                    Some((listing, DiscoverySource::Stale))
                 }
-                Err(e) => {
-                    // Stale snapshot beats no snapshot (pi's recovery shape):
-                    // a vendor that is unreachable *right now* still had an
-                    // inventory the last time we looked, and every id in it
-                    // is enriched by the curated tables anyway.
-                    if let Some(stale) =
-                        crate::providers::model_catalog::cached_models(&provider, &base_url)
-                    {
-                        tracing::debug!(
-                            provider = %provider, error = %e,
-                            "model discovery failed; serving stale cache"
-                        );
-                        out.insert(
-                            provider,
-                            stale.models.into_iter().map(|m| m.id).collect::<Vec<_>>(),
-                        );
-                    } else {
-                        tracing::debug!(provider = %provider, error = %e, "model discovery skipped");
-                    }
+                Err(error) => {
+                    tracing::debug!(%provider, %error, "model discovery skipped");
+                    None
                 }
             }
-        }
+        }).collect();
         (out, attempted)
     }
+}
+
+enum DiscoverySource {
+    Fresh,
+    Cache,
+    Stale,
 }
 
 /// Look up the operator-declared override for `model` from a `model_defs`
@@ -377,13 +322,41 @@ impl crate::tools::AlephTool for ListModelsTool {
 
         // Live discovery runs before the main read lock is taken (see
         // `discover_live_models`) so no network I/O happens under it.
-        let (discovered, discovery_attempted) = if args.refresh {
+        let (accepted, discovery_attempted) = if args.refresh {
             self.discover_live_models(config).await
         } else {
-            (std::collections::HashMap::new(), 0)
+            (Vec::new(), 0)
         };
 
         let guard = config.read().await;
+        let (mut fresh_count, mut cache_count, mut stale_count) = (0, 0, 0);
+        let discovered: std::collections::HashMap<String, Vec<String>> = accepted
+            .into_iter()
+            .filter_map(|(accepted, source)| {
+                let provider = &accepted.provider;
+                if !guard.providers.get(provider).is_some_and(|pc| pc.enabled) {
+                    return None;
+                }
+                let listing = crate::providers::model_catalog::discovery::configured_inventory(
+                    config,
+                    &guard,
+                    provider,
+                    |name, _| self.resolve_api_key(name, None),
+                )?;
+                if !listing.same_acceptance(&accepted) {
+                    return None;
+                }
+                match source {
+                    DiscoverySource::Fresh => fresh_count += 1,
+                    DiscoverySource::Cache => cache_count += 1,
+                    DiscoverySource::Stale => stale_count += 1,
+                }
+                Some((
+                    accepted.provider,
+                    accepted.models.into_iter().map(|model| model.id).collect(),
+                ))
+            })
+            .collect();
         let default_provider = guard.general.default_provider.clone();
 
         let mut models: Vec<ModelEntry> = Vec::new();
@@ -449,6 +422,18 @@ impl crate::tools::AlephTool for ListModelsTool {
             } else {
                 Vec::new()
             };
+            let effective =
+                crate::providers::presets::get_merged_preset(entry.name, &guard.presets_override);
+            let catalog = if configured {
+                preset.catalog_models_for(
+                    cfg.and_then(|c| c.base_url.as_deref())
+                        .or_else(|| effective.as_ref().map(|preset| preset.base_url.as_str())),
+                    cfg.and_then(|c| c.protocol.as_deref())
+                        .or_else(|| effective.as_ref().map(|preset| preset.protocol.as_str())),
+                )
+            } else {
+                &[]
+            };
             let candidates: Vec<(String, ModelSource)> =
                 std::iter::once((preset.default_model.to_string(), ModelSource::PresetDefault))
                     .chain(curated)
@@ -459,16 +444,25 @@ impl crate::tools::AlephTool for ListModelsTool {
                             .map(|m| (m, ModelSource::Configured)),
                     )
                     .chain(
+                        cfg.into_iter()
+                            .flat_map(|c| &c.model_defs)
+                            .map(|def| (def.id.clone(), ModelSource::Configured)),
+                    )
+                    .chain(
                         discovered
                             .get(cfg_name)
                             .into_iter()
                             .flatten()
                             .map(|m| (m.clone(), ModelSource::Discovered)),
                     )
+                    .chain(
+                        catalog
+                            .iter()
+                            .map(|m| (m.to_string(), ModelSource::PresetCatalog)),
+                    )
                     .collect();
 
-            // First mention wins, so an id keeps its most authoritative
-            // provenance (default ▸ fallback ▸ aux ▸ configured ▸ discovered).
+            // Reference-only entries come after configured and discovered IDs.
             let mut seen = std::collections::HashSet::new();
             for (model, source) in candidates {
                 let key = model.to_ascii_lowercase();
@@ -483,9 +477,10 @@ impl crate::tools::AlephTool for ListModelsTool {
                     configured,
                     is_default,
                     display_name.clone(),
-                    Some(preset.base_url),
+                    cfg.and_then(|c| c.base_url.as_deref())
+                        .or(Some(preset.base_url)),
                     source,
-                    None,
+                    cfg.and_then(|c| model_def_for(&c.model_defs, &model)),
                 ));
             }
         }
@@ -512,6 +507,11 @@ impl crate::tools::AlephTool for ListModelsTool {
                 .models
                 .iter()
                 .map(|m| (m, ModelSource::Configured))
+                .chain(
+                    cfg.model_defs
+                        .iter()
+                        .map(|def| (&def.id, ModelSource::Configured)),
+                )
                 .chain(
                     discovered
                         .get(name.as_str())
@@ -567,9 +567,8 @@ impl crate::tools::AlephTool for ListModelsTool {
             // "I refreshed and this is everything" stand for "every provider I
             // asked timed out and you are reading the built-in roster".
             message.push_str(&format!(
-                " Live refresh: {}/{} provider(s) answered.",
-                discovered.len(),
-                discovery_attempted
+                " Live refresh: {fresh_count}/{discovery_attempted} provider(s) returned fresh lists; \
+                 {cache_count} recent cached, {stale_count} stale after an error."
             ));
         }
         let deprecated = models.iter().filter(|m| m.status == "deprecated").count();

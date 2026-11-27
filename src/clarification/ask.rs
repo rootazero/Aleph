@@ -356,7 +356,8 @@ pub async fn ask(
         // Bus only — see the module doc.
         publish_to_event_bus(&turn, &request_id, &request)
     } else if let Some(first) = request.first() {
-        let RenderedQuestion { text, keyboard } = super::render::render(first, 0, request.len());
+        let RenderedQuestion { text, keyboard } =
+            super::render::render_addressed(first, 0, request.len(), &request_id);
         let mut message = OutboundMessage::text(turn.conversation_id.clone(), text);
         message.inline_keyboard = keyboard;
         match deps.channels.send(&channel, message).await {

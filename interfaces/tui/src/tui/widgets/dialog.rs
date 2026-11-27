@@ -45,21 +45,21 @@ fn input_display(input: &str, secret: bool, width: usize) -> String {
 fn hint_for(dialog: &DialogState) -> &'static str {
     if dialog.typing {
         if dialog.has_quick_pick() {
-            "Type your answer · Enter send · Tab back to the list"
-        } else if dialog.multi_select {
-            "Type numbers separated by commas, or your own answer · Enter send"
+            "Type your answer · Enter stage · Tab back to the list"
         } else {
-            "Type your answer · Enter send"
+            "Type your answer · Enter stage"
         }
+    } else if dialog.multi_select {
+        "Space/1-9 check · ↑↓ move · Enter stage · Tab text"
     } else {
-        "1-9 select · ↑↓ move · Enter confirm · Tab type your own"
+        "1-9 pick · ↑↓ move · Enter stage · Tab type your own"
     }
 }
 
 /// Render the confirmation dialog as a centered overlay.
 #[cfg(test)]
 pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
-    render_dialog_with_status(frame, dialog, area, None);
+    render_dialog_with_status(frame, dialog, area, None, false);
 }
 
 /// Render exactly the owner's card. Keyboard routing must query the same
@@ -75,20 +75,25 @@ pub fn render_active_interaction(
     let owner = controller.displayed_owner(approval)?;
     match owner {
         ModalOwner::Clarification { .. } => {
-            let dialog = controller.active_dialog()?;
             let status = match controller.active_phase()? {
-                SubmissionPhase::Editing if controller.active_was_superseded() => {
-                    Some("Previous question replaced · Enter to send · Esc hide")
-                }
-                SubmissionPhase::Editing => Some("Enter send · Esc hide · Ctrl+C cancel this run"),
-                SubmissionPhase::Submitting => Some("Sending answer…"),
+                SubmissionPhase::Editing => None,
+                SubmissionPhase::Submitting => Some("Sending questionnaire response…"),
                 SubmissionPhase::Reconciling => Some("Checking pending question…"),
                 SubmissionPhase::Error => Some("Delivery uncertain · Refresh pending before retry"),
-                SubmissionPhase::LegacyConfirmation => {
-                    Some("Legacy server: refresh pending, Ctrl+Enter confirm, then Enter send")
-                }
+                SubmissionPhase::LegacyConfirmation => Some("Waiting for question identity…"),
             };
-            render_dialog_with_status(frame, dialog, area, status);
+            if controller.in_review() {
+                render_review(frame, controller, area, status);
+            } else {
+                let dialog = controller.active_dialog()?;
+                render_dialog_with_status(
+                    frame,
+                    dialog,
+                    area,
+                    status,
+                    controller.active_was_superseded(),
+                );
+            }
         }
         ModalOwner::Approval { id, .. } => {
             let current = approval.filter(|a| &a.id == id)?;
@@ -98,14 +103,103 @@ pub fn render_active_interaction(
     Some(owner.clone())
 }
 
+/// Render the review step of a questionnaire: every staged answer, in the
+/// order the questions were asked, with the highlighted row ready to be
+/// edited again.
+///
+/// A secret answer is shown as a filled marker, never as its text: the review
+/// is a summary, not a place to read a credential back.
+fn render_review(
+    frame: &mut Frame,
+    controller: &InteractionController,
+    area: Rect,
+    status: Option<&str>,
+) {
+    let rows = controller.review_rows();
+    let cursor = controller.review_cursor();
+    let width = area.width.clamp(30, 60);
+    let row_count = u16::try_from(rows.len()).unwrap_or(u16::MAX);
+    // 2 borders + 1 blank + title (1) + 1 blank + rows + 1 hint
+    let height = (row_count.saturating_add(6)).min(area.height);
+    let rect = centered_rect(width, height, area);
+
+    crate::tui::widgets::clear_overlay(frame, rect);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme().warning))
+        .title(" Review your answers ");
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let chunks = Layout::vertical([
+        Constraint::Length(1), // blank line
+        Constraint::Length(1), // title
+        Constraint::Length(1), // blank line
+        Constraint::Min(1),    // rows
+        Constraint::Length(1), // hint line
+    ])
+    .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "These answers are sent together, as one request:",
+            Style::default().fg(theme().primary),
+        ))),
+        chunks.get(1).copied().unwrap_or_default(),
+    );
+
+    let mut lines: Vec<Line> = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let selected = index == cursor;
+            let style = if selected {
+                Style::default()
+                    .fg(theme().primary)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            } else {
+                Style::default().fg(theme().muted)
+            };
+            Line::from(Span::styled(
+                format!("  {}. {} → {}", index + 1, row.question, row.value),
+                style,
+            ))
+        })
+        .collect();
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (nothing staged yet)",
+            Style::default().fg(theme().muted),
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(lines),
+        chunks.get(3).copied().unwrap_or_default(),
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            status.unwrap_or("Enter submit · ← edit · Esc hide · Ctrl+X cancel"),
+            Style::default().fg(theme().muted),
+        ))),
+        chunks.get(4).copied().unwrap_or_default(),
+    );
+}
+
 fn render_dialog_with_status(
     frame: &mut Frame,
     dialog: &DialogState,
     area: Rect,
     status: Option<&str>,
+    superseded: bool,
 ) {
     // Calculate dialog dimensions
-    let dialog_width = area.width.clamp(20, 50);
+    let dialog_width = area.width.clamp(20, 70);
     let option_count = u16::try_from(dialog.options.len()).unwrap_or(u16::MAX);
     // Height: 2 borders + 1 blank + question lines (estimate 2) + 1 blank +
     // options + 1 input + 1 hint
@@ -120,7 +214,11 @@ fn render_dialog_with_status(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme().warning))
-        .title(" Agent needs your input ");
+        .title(if superseded {
+            " New question · Esc hide · Ctrl+X cancel "
+        } else {
+            " Agent needs your input · Esc hide · Ctrl+X cancel "
+        });
 
     let inner = block.inner(dialog_rect);
     frame.render_widget(block, dialog_rect);
@@ -167,7 +265,16 @@ fn render_dialog_with_status(
             } else {
                 Style::default().fg(theme().muted)
             };
-            Line::from(Span::styled(format!("  [{}] {}", i + 1, opt), style))
+            let mark = if dialog.multi_select {
+                if dialog.checked.contains(&(i as u32)) {
+                    "[x] "
+                } else {
+                    "[ ] "
+                }
+            } else {
+                ""
+            };
+            Line::from(Span::styled(format!("  {mark}[{}] {opt}", i + 1), style))
         })
         .collect();
 
@@ -356,11 +463,11 @@ mod tests {
     #[test]
     fn the_legend_follows_the_mode() {
         let mut dialog = DialogState {
-            session_key: "k".into(),
             question: "?".into(),
             options: vec!["a".into()],
             selected: 0,
             multi_select: false,
+            checked: Vec::new(),
             secret: false,
             input: String::new(),
             typing: false,
@@ -372,10 +479,11 @@ mod tests {
         // No menu ⇒ no mention of a list that is not there.
         dialog.options.clear();
         assert!(!hint_for(&dialog).contains("list"));
-        assert!(hint_for(&dialog).contains("Enter send"));
-
+        assert!(hint_for(&dialog).contains("Enter stage"));
+        dialog.options.push("a".into());
+        dialog.typing = false;
         dialog.multi_select = true;
-        assert!(hint_for(&dialog).contains("commas"));
+        assert!(hint_for(&dialog).contains("check"));
     }
 
     /// Render `dialog` into a `(w, h)` test backend and return the visible
@@ -491,11 +599,11 @@ mod tests {
 
     fn dialog_with(options: Vec<&'static str>) -> DialogState {
         DialogState {
-            session_key: "k".into(),
             question: "Pick one".into(),
             options: options.into_iter().map(String::from).collect(),
             selected: 0,
             multi_select: false,
+            checked: Vec::new(),
             secret: false,
             input: String::new(),
             typing: false,

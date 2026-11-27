@@ -172,50 +172,24 @@ pub fn ModeSidebar() -> impl IntoView {
     }
 }
 
-/// Brand row pinned to the top of the left column — the ℵ wordmark on the
-/// left, the theme picker + inline sidebar-collapse button on the right.
-/// Inside the macOS shell the row is padded down (via `.aleph-sidebar-head`)
-/// so it clears the overlay traffic lights and the fixed top-left toggle that
-/// lives alongside them. In a browser — macOS included, the traffic lights
-/// belong to the shell's window and not to the OS — and in the Tauri
-/// Win/Linux shells the row hugs the top and carries its own inline collapse
-/// button instead.
+/// Brand row with the wordmark, theme picker, and inline sidebar collapse.
 #[component]
 fn SidebarBrand() -> impl IntoView {
     let mem = expect_context::<MemoryState>();
     view! {
-        // Brand row carries `data-tauri-drag-region=""` so the empty
-        // space between the logo and the inline buttons drags the
-        // window on macOS Overlay-titlebar windows. Each interactive
-        // child (Aleph mark area, ThemeToggle, inline collapse button)
-        // marks itself as no-drag so the buttons stay clickable.
-        <div
-            class="aleph-sidebar-head flex items-center justify-between px-3 pb-1.5"
-            data-tauri-drag-region=""
-        >
-            <div
-                class="aleph-no-drag flex items-center gap-2"
-                data-tauri-drag-region="false"
-            >
+        <div class="aleph-sidebar-head flex items-center justify-between px-3 pb-1.5">
+            <div class="flex items-center gap-2">
                 <div class="aleph-mark w-6 h-6 rounded-lg flex items-center justify-center
                             text-text-inverse">
                     <span class="text-base font-semibold leading-none">"\u{2135}"</span>
                 </div>
                 <span class="text-sm font-semibold tracking-tight">"Aleph"</span>
             </div>
-            <div
-                class="aleph-sidebar-head-actions aleph-no-drag flex items-center"
-                data-tauri-drag-region="false"
-            >
+            <div class="aleph-sidebar-head-actions flex items-center">
                 <ThemeToggle />
-                // Inline collapse button — visible in every browser (macOS
-                // included) and in the Tauri Win/Linux shells. Hidden via CSS
-                // only inside the macOS shell, where the fixed top-left toggle
-                // next to the overlay traffic lights covers it.
                 <button
                     type="button"
-                    class="aleph-sidebar-inline-toggle aleph-no-drag"
-                    data-tauri-drag-region="false"
+                    class="aleph-sidebar-inline-toggle"
                     on:click=move |_| {
                         let s = &mem.sidebar_collapsed;
                         s.set(!s.get());

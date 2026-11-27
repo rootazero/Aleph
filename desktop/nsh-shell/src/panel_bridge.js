@@ -53,12 +53,19 @@ function installAlephShellBridge(origin, prefix) {
     if (error) entry.reject(new Error("native autostart status rejected or unavailable"));
     else entry.resolve(value);
   };
+  // One autostart read or write at a time; both are answered by
+  // `autostart-reply` with the status the host read.
   const sendStatus = () => {
     if (!ready || !statusPending || statusPending.sent || closed) return;
     statusPending.sent = true;
-    try { window.nsh.postMessage(prefix + JSON.stringify({ kind: "autostart-request",
+    try { window.nsh.postMessage(prefix + JSON.stringify({ ...statusPending.message,
       request: statusPending.request, document: documentId })); }
     catch (_) { finishStatus(true); }
+  };
+  const askStatus = (message, resolve, reject) => {
+    statusPending = { message, request: (nextRequest = (nextRequest + 1) >>> 0), resolve, reject,
+      sent: false, timer: setTimeout(() => finishStatus(true), 15000) };
+    sendStatus();
   };
   const validStatus = value => (
     keys(value, ["status"]) && ["enabled", "disabled", "requires_approval", "failed"].includes(value.status)
@@ -99,6 +106,22 @@ function installAlephShellBridge(origin, prefix) {
     finish(true);
   });
   window.addEventListener("pagehide", () => { closed = true; finish(true); finishStatus(true); });
+  // The window holds one Panel page and has no back button: a link off the
+  // Panel's origin (or to the server's artifact bytes, which are documents)
+  // goes to the host, which decides again and opens it in the system.
+  // Capture phase, so it runs before the page's own handlers.
+  document.addEventListener("click", event => {
+    if (closed || event.defaultPrevented) return;
+    const anchor = event.target?.closest?.("a[href]");
+    if (!anchor) return;
+    let url;
+    try { url = new URL(anchor.href, location.href); } catch (_) { return; }
+    if (url.origin === location.origin && !url.pathname.startsWith("/artifact/")) return;
+    event.preventDefault();
+    const payload = JSON.stringify({ kind: "open-external", document: documentId, url: url.href });
+    if (payload.length > 16384) return;
+    try { window.nsh.postMessage(prefix + payload); } catch (_) {}
+  }, true);
   Object.defineProperty(window, "__ALEPH_PANEL_KEYRING__", { value: true });
   const mark = () => document.documentElement?.setAttribute("data-shell", "aleph-nsh");
   if (document.documentElement) mark();
@@ -116,9 +139,15 @@ function installAlephShellBridge(origin, prefix) {
           if (closed || statusPending || args.length !== 0) {
             reject(new Error("native autostart status rejected or unavailable")); return;
           }
-          statusPending = { request: (nextRequest = (nextRequest + 1) >>> 0), resolve, reject,
-            sent: false, timer: setTimeout(() => finishStatus(true), 15000) };
-          sendStatus();
+          askStatus({ kind: "autostart-request" }, resolve, reject);
+        });
+      },
+      autostartSet(...args) {
+        return new Promise((resolve, reject) => {
+          if (closed || statusPending || args.length !== 1 || typeof args[0] !== "boolean") {
+            reject(new Error("native autostart status rejected or unavailable")); return;
+          }
+          askStatus({ kind: "autostart-set", enabled: args[0] }, resolve, reject);
         });
       },
       invoke(command, args) {

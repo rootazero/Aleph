@@ -12,16 +12,15 @@
 //!   6. NoteIndexer::apply_distill_action persists a feedback/ note.
 //!   7. The .md file exists on disk and contains the rule + frontmatter.
 //!
-//! This is a "component E2E": no real LLM cost, but every production code
-//! path between the tool and the note is exercised in its real form.
+//! This is a component test from the correction tool to note persistence.
+//! It uses the shared action parser on fixture JSON, not the live feedback stage.
 
 use std::sync::Arc;
 use tempfile::tempdir;
 
 use alephcore::builtin_tools::{FlagUserCorrectionArgs, FlagUserCorrectionTool};
-use alephcore::memory::dreaming::stages::feedback_distill::{
-    build_feedback_distill_prompt, parse_distill_response,
-};
+use alephcore::memory::dreaming::stages::feedback_distill::build_feedback_distill_prompt;
+use alephcore::memory::dreaming::stages::skill_distill::parse_distill_response;
 use alephcore::memory::dreaming::DistillAction;
 use alephcore::memory::notes::store::NoteStore;
 use alephcore::memory::notes::{NoteIndexer, Severity};

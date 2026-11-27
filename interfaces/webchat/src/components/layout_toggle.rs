@@ -48,11 +48,10 @@ pub fn LayoutToggle() -> impl IntoView {
         <button
             type="button"
             data-testid="layout-toggle"
-            class="aleph-layout-toggle aleph-no-drag relative flex items-center justify-center
+            class="aleph-layout-toggle relative flex items-center justify-center
                    h-7 w-7 rounded-full
                    text-text-secondary hover:text-text-primary
                    hover:bg-surface-raised transition-colors"
-            data-tauri-drag-region="false"
             title=label
             aria-label=label
             on:click=on_click

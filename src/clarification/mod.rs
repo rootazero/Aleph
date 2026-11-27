@@ -168,16 +168,9 @@ impl ClarificationQuestion {
 
 /// Request for user clarification — one or more questions parked together.
 ///
-/// # Why there is no `id` here
-///
-/// The registry is keyed by `session_key` — one live request per session —
-/// and all read paths (`list_pending`, `resolve`) address it that way. An `id`
-/// field existed, was written by every caller, and was read by **nothing**
-/// outside this module's own unit tests. Removed under P6 rather than left as
-/// "a hook for future id-addressing": the approval twin genuinely is
-/// id-addressed (`ExecApprovalManager::resolve_with_reason(id)`), so if
-/// clarifications ever need it, that shape is there to copy — a dead field is
-/// not a head start, it is a claim that something is wired when it is not.
+/// `ClarificationManager` assigns the live request identity at registration.
+/// The same question definition can be used by successive requests without
+/// letting a delayed reply to the first request answer the second.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClarificationRequest {
     /// The questions, answered in this order by sequential (plain-text)
@@ -197,12 +190,8 @@ impl ClarificationRequest {
     ///
     /// An empty list is rejected rather than silently accepted: a request with
     /// nothing to ask would register a waiter that no reply can ever complete.
-    /// Multi-question constructor.
-    ///
-    /// NOT REACHED IN PRODUCTION (2026-11-20 severed-wire audit, SW-CLAR-03):
-    /// the production ask path builds single-question requests through
-    /// [`Self::text`] / [`Self::select`]. Kept for the multi-question
-    /// flow, which has no production caller yet.
+    /// The `ask_user` tool uses this constructor for its flat and grouped forms.
+    /// Shared producers may use [`Self::text`] or [`Self::select`] for a single question.
     pub fn new(questions: Vec<ClarificationQuestion>) -> Result<Self, &'static str> {
         if questions.is_empty() {
             return Err("a clarification must carry at least one question");

@@ -52,9 +52,8 @@ impl FastPathJournal {
             svc,
             session,
             turn_id: TurnId::new_v4(),
-            // The one marker id still minted locally: a slash-command turn is not
-            // an engine run — no `execute()`, no `AssistantRunMeta` — so there is
-            // nothing for this bracket's id to join (spec 2026-09-24 §2).
+            // Legacy slash turns keep their own marker id (spec 2026-09-24 §2).
+            // Managed chat supplies its already-bound receipt id.
             run_id: format!("slash-{}", uuid::Uuid::new_v4()),
             call_id: format!("slash-{}", uuid::Uuid::new_v4()),
             tool: tool.to_string(),
@@ -142,6 +141,41 @@ impl FastPathJournal {
             at,
         };
         self.close(receipt, reply, RunOutcome::Errored).await
+    }
+
+    /// Preserve any observed tool receipt, but don't record a successful
+    /// assistant reply. No receipt means the tool's outcome is unknown.
+    pub(super) async fn close_cancelled(
+        &self,
+        result: Option<Result<serde_json::Value, String>>,
+    ) -> Result<Vec<EventSeq>, SessionError> {
+        let at = now_ms();
+        let mut events = Vec::with_capacity(2);
+        if let Some(result) = result {
+            events.push(match result {
+                Ok(value) => SessionEvent::ToolResult {
+                    turn_id: self.turn_id,
+                    call_id: self.call_id.clone(),
+                    output: ToolOutput {
+                        value,
+                        metadata: Default::default(),
+                    },
+                    at,
+                },
+                Err(error) => SessionEvent::ToolError {
+                    turn_id: self.turn_id,
+                    call_id: self.call_id.clone(),
+                    error,
+                    at,
+                },
+            });
+        }
+        events.push(SessionEvent::RunFinished {
+            run_id: self.run_id.clone(),
+            outcome: RunOutcome::Cancelled,
+            at,
+        });
+        self.svc.emit_batch(&self.session, events, None).await
     }
 
     /// `receipt` is built here rather than by the caller so the receipt, the
@@ -267,12 +301,17 @@ where
         emitter: &crate::sync_primitives::Arc<E>,
         error_msg: &str,
         task_persisted: bool,
+        cancelled: bool,
     ) -> Result<(), ExecutionError> {
         let (started_at, final_seq) = {
             let mut runs = self.active_runs.write().await;
             if let Some(run) = runs.get_mut(run_id) {
-                run.state = RunState::Failed {
-                    error: error_msg.to_string(),
+                run.state = if cancelled {
+                    RunState::Cancelled
+                } else {
+                    RunState::Failed {
+                        error: error_msg.to_string(),
+                    }
                 };
                 run.completed_at = Some(chrono::Utc::now());
                 run.cancel_tx = None;
@@ -287,53 +326,59 @@ where
         // per-agent `AgentState::Idle` reset that used to sit here is gone).
         let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
         if task_persisted {
-            self.persist_run_task_status(run_id, TaskStatus::Failed)
+            let status = if cancelled {
+                TaskStatus::Interrupted
+            } else {
+                TaskStatus::Failed
+            };
+            self.persist_run_task_status(run_id, status).await;
+        }
+        if !cancelled {
+            let error_response = format!("❌ {error_msg}");
+
+            // Transcript rows: the `FastPathJournal`'s (see the success twin).
+            // When the failure came from the tool, `execute_direct_tool` already
+            // wrote the close batch (`ToolError`, this same echo, `RunFinished {
+            // Errored }`). When it came from one of the four pre-dispatch
+            // `Failed` arms, or from the open batch itself being refused (one
+            // transaction: nothing landed), no run was ever opened and this turn
+            // leaves NO transcript row: the user still gets the echo below via
+            // `ResponseChunk` + `RunComplete`. Three of those arms (invalid mode
+            // JSON, missing `tool_id`, unknown mode type) stay unreachable
+            // through `try_resolve_slash_command` and the channel router's
+            // `serialize_parsed_command`; the fourth — the owner named by the
+            // mode JSON refused by `extension::visibility::slash_owner_admits` —
+            // is reachable from every producer, whenever a session outside the
+            // owning project sends a plugin-owned `/cmd`. A missing row, never a
+            // wrong one (criterion #17).
+            let _ = emitter
+                .emit(StreamEvent::ResponseChunk {
+                    run_id: run_id.to_string(),
+                    seq: 1,
+                    delta: error_response.clone(),
+                    full_text: String::new(),
+                    chunk_index: 0,
+                    is_final: true,
+                    is_intermediate: false,
+                })
+                .await;
+            let _ = emitter
+                .emit(StreamEvent::RunComplete {
+                    run_id: run_id.to_string(),
+                    seq: final_seq,
+                    summary: RunSummary {
+                        // 0 is correct: the L0 slash-command fast path bypasses
+                        // the agent loop and makes no LLM call.
+                        total_tokens: 0,
+                        tool_calls: 1,
+                        loops: 0,
+                        final_response: Some(error_response),
+                        ..Default::default()
+                    },
+                    total_duration_ms: duration_ms,
+                })
                 .await;
         }
-        let error_response = format!("❌ {error_msg}");
-
-        // Transcript rows: the `FastPathJournal`'s (see the success twin).
-        // When the failure came from the tool, `execute_direct_tool` already
-        // wrote the close batch (`ToolError`, this same echo, `RunFinished {
-        // Errored }`). When it came from one of the four pre-dispatch
-        // `Failed` arms, or from the open batch itself being refused (one
-        // transaction: nothing landed), no run was ever opened and this turn
-        // leaves NO transcript row: the user still gets the echo below via
-        // `ResponseChunk` + `RunComplete`. Three of those arms (invalid mode
-        // JSON, missing `tool_id`, unknown mode type) stay unreachable
-        // through `try_resolve_slash_command` and the channel router's
-        // `serialize_parsed_command`; the fourth — the owner named by the
-        // mode JSON refused by `extension::visibility::slash_owner_admits` —
-        // is reachable from every producer, whenever a session outside the
-        // owning project sends a plugin-owned `/cmd`. A missing row, never a
-        // wrong one (criterion #17).
-        let _ = emitter
-            .emit(StreamEvent::ResponseChunk {
-                run_id: run_id.to_string(),
-                seq: 1,
-                delta: error_response.clone(),
-                full_text: String::new(),
-                chunk_index: 0,
-                is_final: true,
-                is_intermediate: false,
-            })
-            .await;
-        let _ = emitter
-            .emit(StreamEvent::RunComplete {
-                run_id: run_id.to_string(),
-                seq: final_seq,
-                summary: RunSummary {
-                    // 0 is correct: the L0 slash-command fast path bypasses
-                    // the agent loop and makes no LLM call.
-                    total_tokens: 0,
-                    tool_calls: 1,
-                    loops: 0,
-                    final_response: Some(error_response),
-                    ..Default::default()
-                },
-                total_duration_ms: duration_ms,
-            })
-            .await;
         self.publish_session_updated(
             &request.session_key,
             request.metadata.get("channel_id").map(String::as_str),
@@ -357,7 +402,11 @@ where
             runs_clone.write().await.remove(&run_id_owned);
         });
 
-        Ok(())
+        if cancelled {
+            Err(ExecutionError::Cancelled)
+        } else {
+            Ok(())
+        }
     }
 }
 

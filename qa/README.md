@@ -10,11 +10,24 @@ behaviour that a unit test can only assert about a pure function.
 ./qa/busy_input/run.sh burst-drain   # §4.8 Round-9 wake edge, RPC face
 ./qa/busy_input/run.sh interrupt     # §4.8 Round-8 ①, channel inbound
 ./qa/busy_input/run.sh queue         # channel inbound, nothing cancelled
+./qa/busy_input/run.sh steer         # channel inbound folded into the running run;
+                                     # every steered text reaches a later provider request
 KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 
-./qa/plan_handoff/run.sh handoff     # §3.16 refuse -> card -> approve -> unlock
-./qa/plan_handoff/run.sh deny        # a declined plan leaves the floor engaged
-./qa/plan_handoff/run.sh floor       # explicit `allow` + `full` tier still lose
+./qa/plan_handoff/run.sh handoff     # exec_tier plan refuses -> request_approval -> approved -> same run writes
+./qa/plan_handoff/run.sh deny        # a rejected plan leaves plan mode engaged
+./qa/plan_handoff/run.sh floor       # explicit `allow` config still loses to plan mode
+                                     # (every stage also checks chat.send refuses `plan_phase`)
+
+./qa/thread_continuity/run.sh reopen      # F1: knobs, model pin and token usage survive a restart
+./qa/thread_continuity/run.sh checklist   # F2: unchecked items veto the finish; list survives a restart
+./qa/thread_continuity/run.sh two_clients # F8: two sockets, one thread, nothing lost or clobbered
+./qa/thread_continuity/run.sh fork        # F7: fork siblings share a prefix; isolated sees no parent
+
+./qa/human_gate/run.sh ask           # F4: ask_user answered through clarification.resolve
+./qa/human_gate/run.sh text          # F4: answered one question at a time over a channel
+./qa/human_gate/run.sh unattended    # F4: a cron run with nobody to ask fails at once
+./qa/human_gate/run.sh stale         # F4: an answer to a finished question is reported stale
 
 ./qa/browser_managed/run.sh open     # managed driver actually reaches a browser
 ./qa/browser_managed/run.sh ambient  # a planted cwd cli.config.json is ignored
@@ -1425,10 +1438,14 @@ reaches no network.
 **A control group, in the same process.** Every "X is absent while planning"
 claim is satisfied just as well by "X was never offered in this session mode at
 all", and the fixture cannot tell those apart from the inside. So
-`plan_handoff` opens every plan with one ordinary `building` turn and reads the
-absence claims against it: 179 tools offered to the control, 51 to the planning
-turn, and `file_write`/`bash` in the first set and not the second. Without that
-first number the whole scenario is a tautology with a green verdict.
+`plan_handoff` opens every plan with one ordinary turn at `exec_tier: "full"`
+and reads the planning claims against it. (2026-08 wording, kept for the
+principle: the old `plan_phase` design hid tools — 179 offered to the control,
+51 to the planning turn. Since the 2026-11-26 revival, `ExecTier::Plan` keeps
+the tools listed and refuses mutating calls at dispatch, so the control now
+proves the refusal comes from plan mode and not from a tool that was never
+there.) Without the control the whole scenario is a tautology with a green
+verdict.
 
 **Evidence the code under test cannot fake.** `mock_plan.py` records the
 `tools[]` array of every request. That array is assembled by the real server
@@ -1601,7 +1618,18 @@ Last run 2026-08-11, debug build, mock provider, isolated HOME.
 | `interrupt` | PASS | `busy-input interrupt: cancelled running sibling and any delegated children`, and `run_finished{outcome: cancelled}` for the run that predated the arrival. The mode travelled config → `ChannelConfig` → run metadata → engine busy branch. |
 | `queue` | PASS | Zero cancellations, and `session busy; message queued for FIFO delivery, ticket=2` — proving the arrival was *queued*, not dropped. (Check that log line: "no cancellation" alone would also be satisfied by silently discarding the message.) |
 
-Last run 2026-08-12, debug build, mock provider, isolated HOME.
+Last run 2026-11-26, debug build, mock provider, isolated HOME, against the
+revived fixture (`ExecTier::Plan` + `scratchpad{request_approval}`). Receipt:
+`docs/superpowers/runs/2026-11-26-harness-e2e-wiring-receipt.md`.
+
+| Scenario | Result | The evidence, not the verdict |
+|---|---|---|
+| `handoff` | PASS | Control run lists `file_write`. While planning, `file_write` stays listed and is refused with `GateRule::PlanMode`'s sentence (`This conversation is PLANNING`; the gate id `plan_mode` is not model-facing). `request_approval` shows up in `clarification.pending` as question `plan_approval`; `reply=approved` → the model reads `Plan approved`, and the same run's next `file_write` writes the file. Session tier leaves `plan`. |
+| `deny` | PASS | `reply=rejected` → `Plan rejected`; `file_write` still listed and still refused; tier still `plan`. |
+| `floor` | PASS | Config `bash = "allow"`, `file_write = "allow"`: `bash` still refused by plan mode; `file_ops list` admitted, `file_ops delete` refused; tier still `plan`. |
+| all three | PASS | `chat.send` carrying the removed `plan_phase` field is refused with `-32602` (defect D2 of that round: it used to be silently accepted and start an ordinary run). |
+
+Historical, the removed `plan_phase` design — last run 2026-08-12:
 
 | Scenario | Result | The evidence, not the verdict |
 |---|---|---|
@@ -1609,7 +1637,11 @@ Last run 2026-08-12, debug build, mock provider, isolated HOME.
 | `deny` | PASS (7/7) | Same card, answered `deny`. The tool result was `The user did not approve running 'scratchpad' (Denied)`, the next turn was still 51 tools, the `file_write` after it was still refused by the floor, and the session still read `plan_phase: "planning"`. A declined plan is not a lifted latch. |
 | `floor` | PASS (8/8) | Config carried `[policies.tool_permissions.overrides] bash = "allow"`, `file_write = "allow"`, session ran at `exec_tier: "full"` — the two things that beat the tier, and neither put either tool back in the 51-tool surface. `bash` refused by the floor. Same turn sequence: `file_ops list` admitted, `file_ops delete` refused — the argument-aware half, on one tool, on real hardware. |
 
-### The defect this fixture found
+### The defect this fixture found (2026-08, removed `plan_phase` design)
+
+Historical: `GateRule::PlanFloor` and its pinning test no longer exist; plan mode
+is now `ExecTier::Plan`, refused by `GateRule::PlanMode`
+(`src/tools/scoped/gate_chain.rs`). The lesson below still holds.
 
 `handoff` failed its first run on one claim, and the claim it failed was about
 *wording*: a `file_write` that reached dispatch anyway came back as
@@ -1796,6 +1828,27 @@ widened a narrowly-scoped change into that question. Tracked in
 - **`session_order`** — 改转录顺序、删除边界或任一 idle sweep 前跑。两个 backend 各驱动同一段对话，
   停机后把戳改成**降序**再重读——**生产数据上两序恒合，所以不打乱就等于没测**。断言：服务序不变 ·
   `session.truncate` 真的到达数据库 · 它留下的是**头部** · 两个 backend 销毁同一批行。
+- **`thread_continuity`** — 改会话旋钮、`sessions.patch`、scratchpad 清单、busy-input 合流或子代理
+  fork 前跑 `{reopen,checklist,two_clients,fork}`（2026-11-26 新建）。四个阶段都读 mock 的 request log：
+  「重开后设置还在」只看 `chat.history` 会被一份**没被下一次运行用上**的快照骗过。
+  - `reopen`（F1）— `sessions.patch` 设 mode/exec_tier/think_level，`select_model` 钉模型；重启前后
+    `chat.history.session` 与 `session.usage` 逐项相等，**且**重启后新运行的 `RunStarted` 信封与
+    provider 请求真的带着这些设置（对照组：未 patch 的请求 `thinking=None`）。
+  - `checklist`（F2）— 有未勾项时收尾被 `ScratchpadGoalVerifier` 拒；每次 `tool_end` 带清单快照；
+    重启后清单仍在；`clear` 后 `run_complete.summary.plan` 为空（不留旧清单）。
+  - `two_clients`（F8）— 两个 WebSocket 同一 session 同时发同样文字：两条都进转录、事件 seq 无洞、
+    无错误帧；被并入的 `chat.send` id 收到 `stream.run_joined`（指向它并入的运行）而不是永远等不到终止帧。
+  - `fork`（F7）— 同一轮的 fork 兄弟发给模型的 system + 消息前缀完全一致、以 assistant 结尾、无悬空
+    tool_use；后一轮 fork 是严格延长；isolated 子代理看不到父会话标记。比的是解析后的 JSON，**不是**真实
+    缓存命中率。
+- **`human_gate`** — 改 `src/clarification/`、`ask_user` 或通道回复匹配后，跑 `{ask,cancel,text,unattended,stale}`。
+  `ask` 先拒绝含重复下标的整批提交而不推进，再核对模型实际收到的多选下标、值与字面文本 `"1"`；
+  `cancel` 先答第一题再取消，模型只收到 `cancelled`，没有部分答案；`stale` 重发已结束的请求后返回
+  `status: stale`，且没有新增模型工具结果。`text` 走 webhook 逐题作答，中间不增加 provider 请求；
+  `unattended` 用 `cron.run` 验证无人可问时立即拒绝且 pending 为空。`run.sh` 为此启用 cron 并将检查间隔设为 1 秒。
+  / Gateway QA checks actual provider tool results, not only RPC acknowledgements: atomic typed submission,
+  cancellation without partial answers, and stale rejection. It also covers sequential webhook text and immediate
+  refusal in unattended runs. It does not exercise a browser, TUI, or third-party channel adapter.
 - **`browser_managed`** — 改 `src/browser/` 或 `src/builtin_tools/browser_tools/` 前跑。
   `{open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload,attach}`——**每个动词都有效果断言**。
   **两条 driver 轴，别混淆**：① 场景本身覆盖 `managed`（playwright-cli）与 `existing_session`

@@ -169,7 +169,7 @@ fn window_to_global(
 /// Apply the window→global mapping on every coordinate-bearing point field.
 ///
 /// Pure, so the geometry is testable without a live desktop.
-fn rescale_window_in_place(args: &mut DesktopArgs, frame: &BoundingBox, scale: f64) {
+pub(super) fn rescale_window_in_place(args: &mut DesktopArgs, frame: &BoundingBox, scale: f64) {
     let factors = args.coord_factors;
     let map = |x: &mut Option<f64>, y: &mut Option<f64>| {
         if let (Some(xv), Some(yv)) = (*x, *y) {

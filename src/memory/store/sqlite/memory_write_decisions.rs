@@ -95,24 +95,7 @@ impl MemoryWriteReason {
     }
 }
 
-/// One decision as read back out of the table.
-///
-/// `reason` is a plain `String` on the read side on purpose: it is emitted by
-/// [`MemoryWriteReason::as_str`] and consumed as a display/JSON token, so
-/// parsing it back into the enum would add a fallible step that no caller
-/// needs.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct MemoryWriteDecisionRow {
-    /// `add` / `replace` / `remove` / `batch` (`remember`), or
-    /// `flag_correction` (`flag_user_correction`).
-    pub action: String,
-    /// One of [`MemoryWriteReason::as_str`].
-    pub reason: String,
-    /// Bounded excerpt of the attempted subject — never the full content.
-    pub subject: String,
-    /// Unix seconds.
-    pub created_at: i64,
-}
+pub use aleph_protocol::memory_trace::WriteDecisionRow as MemoryWriteDecisionRow;
 
 /// Bound `subject` to [`SUBJECT_EXCERPT_CHARS`], char-safe (a byte slice would
 /// panic mid-codepoint on non-ASCII memory entries).

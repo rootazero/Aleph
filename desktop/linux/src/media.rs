@@ -27,6 +27,11 @@ use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
 
+#[cfg(target_os = "linux")]
+use crate::OfflineSttInstallation;
+#[cfg(target_os = "linux")]
+use aleph_desktop::{media_types::SpeechToTextResult, CancellationToken};
+
 /// Fallback V4L2 camera device when nothing can be enumerated.
 ///
 /// Kept as a last resort rather than as *the* answer: see [`camera_device`].
@@ -41,12 +46,25 @@ const DEFAULT_CAMERA_DEVICE: &str = "/dev/video0";
 /// wrong one. Windows discards the same way for the same reason (dshow, 2026-07).
 const CAMERA_WARMUP_FRAMES: u32 = 5;
 
-pub struct LinuxMedia;
+pub struct LinuxMedia {
+    #[cfg(target_os = "linux")]
+    offline_stt: Option<OfflineSttInstallation>,
+}
 
 impl LinuxMedia {
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self {
+            #[cfg(target_os = "linux")]
+            offline_stt: None,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn with_offline_stt(installation: OfflineSttInstallation) -> Self {
+        Self {
+            offline_stt: Some(installation),
+        }
     }
 }
 
@@ -233,6 +251,19 @@ async fn run_ffmpeg(args: &[String], deadline: Duration) -> Result<()> {
 
 #[async_trait]
 impl MediaCapability for LinuxMedia {
+    #[cfg(target_os = "linux")]
+    async fn speech_to_text_offline(
+        &self,
+        audio_path: &str,
+        language: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<SpeechToTextResult> {
+        let installation = self.offline_stt.as_ref().ok_or_else(|| {
+            DesktopError::NotImplemented("offline speech recognition not installed".into())
+        })?;
+        installation.transcribe(audio_path, language, cancel).await
+    }
+
     async fn camera_snap(&self, config: CameraSnapConfig) -> Result<CameraSnapResult> {
         let config = config.clamped();
         let device = tokio::task::spawn_blocking(camera_device)

@@ -445,7 +445,6 @@ fn show_dialog_sets_focus() {
     state.show_dialog("telegram:bot:1:u1".into(), menu_view("Approve?"));
     assert_eq!(state.focus, Focus::Dialog);
     let dialog = state.dialog.as_ref().unwrap();
-    assert_eq!(dialog.session_key, "telegram:bot:1:u1");
     assert_eq!(dialog.question, "Approve?");
     assert_eq!(dialog.options.len(), 2);
     assert_eq!(dialog.selected, 0);
@@ -473,15 +472,16 @@ fn a_free_text_question_opens_ready_to_type() {
     let dialog = state.dialog.as_ref().unwrap();
     assert!(dialog.typing, "a question with no menu must accept typing");
     assert!(!dialog.has_quick_pick());
-    // Nothing typed yet ⇒ Enter has nothing to send (rather than sending "").
-    assert_eq!(dialog.pending_reply(), None);
+    // Nothing typed yet ⇒ there is no choice to stage (rather than staging
+    // an empty answer). The text itself is staged verbatim — trimmed — by the
+    // interaction controller, which owns the answer.
+    assert_eq!(dialog.staged_choice(), None);
 }
 
 /// A single index cannot express a multi-select answer, so there is nothing to
-/// quick-pick — the same reason the server suppresses a channel's inline
-/// keyboard for these (`clarification::render::keyboard_for`).
+/// Rich clients offer a checkbox menu instead of parsing comma-separated text.
 #[test]
-fn a_multi_select_question_opens_ready_to_type() {
+fn a_multi_select_question_opens_ready_to_toggle() {
     let mut state = AppState::new("s".into(), "m".into());
     state.show_dialog(
         "telegram:bot:1:u1".into(),
@@ -491,15 +491,15 @@ fn a_multi_select_question_opens_ready_to_type() {
         },
     );
     let dialog = state.dialog.as_ref().unwrap();
-    assert!(dialog.typing);
-    assert!(!dialog.has_quick_pick());
+    assert!(!dialog.typing);
+    assert!(dialog.has_quick_pick());
 }
 
-/// A pick sends the 1-BASED INDEX. Labels carry a `— description` suffix and
-/// core matches labels exactly, so replying with the label would arrive as free
-/// text with no selected index — right to a human, `custom` to the model.
+/// A pick carries the POSITION of the choice, not its label. Labels carry a
+/// `— description` suffix, and the choice is resolved against the question
+/// that asked for it, so the position is what the answer needs.
 #[test]
-fn a_pick_replies_with_the_index_not_the_label() {
+fn a_pick_carries_the_position_not_the_label() {
     let mut state = AppState::new("s".into(), "m".into());
     state.show_dialog(
         "k".into(),
@@ -509,27 +509,26 @@ fn a_pick_replies_with_the_index_not_the_label() {
         },
     );
     let dialog = state.dialog.as_mut().unwrap();
-    assert_eq!(dialog.pending_reply().as_deref(), Some("1"));
+    assert_eq!(dialog.staged_choice(), Some(0));
     dialog.selected = 1;
-    assert_eq!(dialog.pending_reply().as_deref(), Some("2"));
+    assert_eq!(dialog.staged_choice(), Some(1));
 }
 
 /// Free text always beats the menu in text mode — a menu never forbids it,
 /// which is why `ask_user` tells the model never to add an "other" choice.
+/// The two never collapse into one another: a typed buffer is text, and only
+/// a menu highlight is a choice.
 #[test]
-fn a_typed_answer_is_sent_verbatim() {
+fn a_typed_buffer_is_text_and_only_a_highlight_is_a_choice() {
     let mut state = AppState::new("s".into(), "m".into());
     state.show_dialog("k".into(), menu_view("Approve?"));
     let dialog = state.dialog.as_mut().unwrap();
     dialog.typing = true;
     dialog.input = "  neither, wait for Ana  ".into();
-    assert_eq!(
-        dialog.pending_reply().as_deref(),
-        Some("neither, wait for Ana")
-    );
+    assert_eq!(dialog.staged_choice(), None);
     // Tabbing back to the list means the list, buffer or no buffer.
     dialog.typing = false;
-    assert_eq!(dialog.pending_reply().as_deref(), Some("1"));
+    assert_eq!(dialog.staged_choice(), Some(0));
 }
 
 #[test]
@@ -1232,8 +1231,6 @@ fn handle_ask_user_shows_dialog() {
 
     assert_eq!(state.focus, Focus::Dialog);
     let dialog = state.dialog.as_ref().unwrap();
-    // The dialog keeps the clarification key so the answer can resolve it.
-    assert_eq!(dialog.session_key, "telegram:bot:1:u1");
     assert_eq!(dialog.question, "Allow file write?");
     assert_eq!(dialog.options, vec!["Allow", "Deny"]);
 }
@@ -1885,9 +1882,44 @@ fn a_descent_keeps_the_query_that_found_the_provider() {
 
     assert_eq!(
         state.selected_provider_pick(),
-        Some(ProviderPick::Model("gpt-5.6-luna".into())),
+        Some(ProviderPick::Model {
+            provider: "openai".into(),
+            model: "gpt-5.6-luna".into()
+        }),
         "the query has to still be narrowing after the descent"
     );
+}
+
+#[test]
+fn provider_picker_confirm_keeps_provider_and_opaque_model_id() {
+    use aleph_protocol::providers::ChatModelChoice;
+    let mut state = AppState::new("s".into(), "m".into());
+    let assert_binding = |state: &AppState| {
+        let Some(ProviderPick::Model { provider, model }) = state.selected_provider_pick() else {
+            panic!("expected a selected binding");
+        };
+        assert_eq!(
+            crate::tui::commands::provider_model_command(&provider, &model),
+            "/model relay/org/model"
+        );
+    };
+    state.open_provider_picker(
+        vec![sample_catalog_entry("relay", &["org/model"])],
+        String::new(),
+    );
+    state.enter_provider(0);
+    assert_binding(&state);
+    state.open_model_choices(
+        vec![ChatModelChoice {
+            provider: "relay".into(),
+            model: "org/model".into(),
+            provider_label: "Relay".into(),
+            model_label: "Model".into(),
+        }],
+        "org/model".into(),
+    );
+    assert!(state.provider_picker_refresh_target().is_none());
+    assert_binding(&state);
 }
 
 /// Backspace climbs before it closes, and only from a level that has one above.

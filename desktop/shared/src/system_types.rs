@@ -16,6 +16,15 @@ pub struct AppInfo {
     pub is_active: bool,
 }
 
+/// Evidence for a specific live desktop process, not just a reusable PID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesktopProcessIdentity {
+    pub pid: i32,
+    pub bundle_id: String,
+    /// Opaque platform launch stamp; only compare identities from the same host.
+    pub launch_stamp: u64,
+}
+
 /// An application that exists on this machine, whether or not it is running.
 ///
 /// Distinct from [`AppInfo`], which describes a *process*. The distinction is

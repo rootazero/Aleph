@@ -28,6 +28,33 @@
     "title": "AudioDeviceInfo",
     "type": "object"
   },
+  "CancelSpeechParams": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "operation_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "operation_id"
+    ],
+    "title": "CancelSpeechParams",
+    "type": "object"
+  },
+  "CancelSpeechResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "cancelled": {
+        "description": "`true` when a live recognition for the id was stopped.",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "cancelled"
+    ],
+    "title": "CancelSpeechResult",
+    "type": "object"
+  },
   "CaptureParams": {
     "$defs": {
       "Region": {
@@ -1128,6 +1155,28 @@
     "type": "object"
   },
   "TranscribeFileParams": {
+    "$defs": {
+      "OfflineSpeechPolicy": {
+        "description": "On-device-only recognition. The helper must refuse rather than use a\nnetwork recognizer, and must stop recognizing when `operation_id` is\ncancelled via [`METHOD_SPEECH_CANCEL`].",
+        "properties": {
+          "language": {
+            "description": "BCP-47 tag; absent means the helper resolves the OS locale.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation_id": {
+            "description": "Unguessable id minted by the Rust limb for this one recognition.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id"
+        ],
+        "type": "object"
+      }
+    },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "audio_path": {
@@ -1135,13 +1184,25 @@
         "type": "string"
       },
       "language": {
-        "description": "BCP-47 language tag (e.g. \"en-US\", \"zh-Hans\"). Helper rejects unknown\nlocales with `ERR_INVALID_PARAMS`.",
-        "type": "string"
+        "description": "Legacy recognizer language. Do not send this field for an offline request:\nolder helpers would otherwise ignore the policy and might use the network.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "offline_only": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/OfflineSpeechPolicy"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
-      "audio_path",
-      "language"
+      "audio_path"
     ],
     "title": "TranscribeFileParams",
     "type": "object"

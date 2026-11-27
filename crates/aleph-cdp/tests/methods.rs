@@ -696,7 +696,10 @@ async fn dom_box_model_accepts_a_fractional_size_and_rounds_it() {
         .await
         .expect("a fractional size is still a box model")
         .expect("a box");
-    assert_eq!(model.border[2], 110.75, "the quads keep their exact geometry");
+    assert_eq!(
+        model.border[2], 110.75,
+        "the quads keep their exact geometry"
+    );
     assert_eq!((model.width, model.height), (101, 40));
 }
 

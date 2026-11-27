@@ -347,7 +347,7 @@ mod tests {
     ///
     /// Without `wrapped=true` the desktop page keeps the shell's own 16 px
     /// padding *on top of* its 24 px `p-6` gutters (40 px of the 390 px
-    /// viewport), the macOS traffic-light inset stays, and none of the
+    /// viewport), the desktop content inset stays, and none of the
     /// `.phone-wrapped` shim in `styles/ios.css` applies — the two-column
     /// settings pages go back to sitting side by side. All of that is silent:
     /// the page still renders, still scrolls, still has a back button.

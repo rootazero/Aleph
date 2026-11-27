@@ -323,21 +323,7 @@ pub async fn handle_synthesize(
         consecutive_failures: 0,
     };
 
-    // Snapshot the registry under its sync lock (no guard held across `.await`),
-    // mirroring how the inbound router wires voice TTS output. Picks up
-    // providers added since boot; provider handles are cheap Arc clones.
-    let registry = {
-        let guard = generation_registry
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
-        let mut snapshot = crate::generation::GenerationProviderRegistry::new();
-        for name in guard.names() {
-            if let Some(provider) = guard.get(&name) {
-                let _ = snapshot.register(name, provider);
-            }
-        }
-        snapshot
-    };
+    let registry = snapshot_generation_registry(&generation_registry);
     let attachment =
         crate::gateway::voice::outbound::generate_tts(text, &voice_state, &registry, &gen_cfg)
             .await;
@@ -375,6 +361,20 @@ pub async fn handle_synthesize(
     } else {
         JsonRpcResponse::error(request.id, INTERNAL_ERROR, "TTS produced no audio")
     }
+}
+
+pub(super) fn snapshot_generation_registry(
+    registry: &crate::sync_primitives::RwLock<crate::generation::GenerationProviderRegistry>,
+) -> crate::generation::GenerationProviderRegistry {
+    // Snapshot provider handles without holding the sync guard across await.
+    let guard = registry.read().unwrap_or_else(|e| e.into_inner());
+    let mut snapshot = crate::generation::GenerationProviderRegistry::new();
+    for name in guard.names() {
+        if let Some(provider) = guard.get(&name) {
+            let _ = snapshot.register(name, provider);
+        }
+    }
+    snapshot
 }
 
 // ---------------------------------------------------------------------------

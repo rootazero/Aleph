@@ -1,0 +1,55 @@
+{
+  "name": "Aleph",
+  "id": "ai.aleph.desktop",
+  "version": "26.9.1",
+  "rust": ".",
+  "root": "App",
+  "icon": {
+    "macos": "icons/aleph-macos.png",
+    "windows": "icons/aleph.png",
+    "linux": "icons/aleph.png"
+  },
+  "schemes": [
+    "aleph"
+  ],
+  "singleInstance": true,
+  "updater": {
+    "url": "https://github.com/rootazero/Aleph/releases/latest/download/aleph-update.json",
+    "publicKey": "NS2wNeIErtH/FsHmeMxn37Aii08gdMfrfj4bFYw24Uo="
+  },
+  "window": {
+    "title": "Aleph",
+    "defaultSize": {
+      "width": 1180,
+      "height": 800
+    },
+    "closeOnPress": false,
+    "restoreBounds": true
+  },
+  "capabilities": {
+    "network": {
+      "hosts": [
+        "*"
+      ]
+    },
+    "webview": {
+      "hosts": [
+        "*"
+      ],
+      "media": [
+        "microphone"
+      ]
+    },
+    "notifications": true,
+    "openUrl": {
+      "schemes": [
+        "https",
+        "http",
+        "mailto",
+        "x-apple.systempreferences"
+      ]
+    },
+    "windows": {},
+    "application": true
+  }
+}

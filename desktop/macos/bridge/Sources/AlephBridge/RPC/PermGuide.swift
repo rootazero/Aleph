@@ -6,6 +6,7 @@ import CoreLocation
 import EventKit
 import Photos
 import Foundation
+import Speech
 
 // MARK: - Wire types (match Rust schema exactly — snake_case field names)
 
@@ -32,6 +33,7 @@ enum PermissionKind: String, Codable {
     case full_disk
     case camera
     case microphone
+    case speech_recognition
     case automation
     case contacts
     case calendars
@@ -135,6 +137,15 @@ enum Perm {
 
         case .microphone:
             let s = AVCaptureDevice.authorizationStatus(for: .audio)
+            return PermissionStatus(
+                kind: kind,
+                granted: s == .authorized,
+                can_request_programmatically: s == .notDetermined,
+                restricted: s == .restricted
+            )
+
+        case .speech_recognition:
+            let s = SFSpeechRecognizer.authorizationStatus()
             return PermissionStatus(
                 kind: kind,
                 granted: s == .authorized,
@@ -280,6 +291,7 @@ enum Perm {
         case .full_disk:         anchor = "?Privacy_AllFiles"
         case .camera:            anchor = "?Privacy_Camera"
         case .microphone:        anchor = "?Privacy_Microphone"
+        case .speech_recognition: anchor = "?Privacy_SpeechRecognition"
         case .automation:        anchor = "?Privacy_Automation"
         case .contacts:          anchor = "?Privacy_Contacts"
         case .calendars:         anchor = "?Privacy_Calendars"
@@ -331,6 +343,12 @@ enum Perm {
         case .microphone:
             return [
                 "打开「系统设置」→「隐私与安全性」→「麦克风」",
+                "在列表中找到 aleph-server 或 AlephBridge",
+                "拨动开关至开启状态",
+            ]
+        case .speech_recognition:
+            return [
+                "打开「系统设置」→「隐私与安全性」→「语音识别」",
                 "在列表中找到 aleph-server 或 AlephBridge",
                 "拨动开关至开启状态",
             ]
@@ -392,6 +410,8 @@ enum Perm {
             return "Aleph 需要相机权限以拍摄照片或录制视频片段并分析其中的内容"
         case .microphone:
             return "Aleph 需要麦克风权限以录制音频并进行语音转文字识别"
+        case .speech_recognition:
+            return "Aleph 需要语音识别权限以在本机离线识别你的语音"
         case .automation:
             return "Aleph 需要自动化权限以通过 AppleScript 或 JXA 控制其他应用执行操作"
         case .contacts:

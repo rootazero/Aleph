@@ -42,12 +42,22 @@ impl std::fmt::Debug for FlowHandle {
     }
 }
 
+/// Model directives from admitted callers and trusted internal producers have
+/// different eligibility rules, even when their provider/model values match.
+#[derive(Debug, Clone)]
+pub enum RunModelDirective {
+    Selected { provider: String, model: String },
+    Internal(crate::providers::session_model_handle::SessionModelPref),
+}
+
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 // rust-doctor-disable-next-line large-enum-variant
 pub enum FlowStreamEvent {
     /// Incremental assistant text (preserved from original).
     Delta(String),
+    /// The initial model binding chosen by the runner, before any fallback walk.
+    ModelResolved(crate::providers::health::ModelInfo),
     /// Thinking/reasoning fragment. Fired when provider returns thinking content.
     Reasoning(String),
     /// Tool call started. `id` uniquely identifies this invocation for pairing
@@ -588,7 +598,7 @@ pub struct FlowRequest {
     /// switch had happened*. The turn itself was served by the agent's
     /// configured model. `None` = no per-turn pick (every non-gateway
     /// dispatcher), leaving the directive chain byte-identical.
-    pub model_directive: Option<crate::providers::session_model_handle::SessionModelPref>,
+    pub model_directive: Option<RunModelDirective>,
     /// Public-telecom provenance copied verbatim from `RunRequest::telecom_public`.
     /// `None` = legacy / non-telecom (neither deny nor grant). Forwarded to
     /// `HarnessRunner::run` as its trailing argument; consumers are later slices.
@@ -811,7 +821,7 @@ pub trait HarnessRunner: Send + Sync {
         // This turn's explicit model pick (chat-window picker / voice pin).
         // Outranks the session's sticky `select_model` pick and the flow's
         // `BrainRef` pin; `None` leaves the directive chain untouched.
-        model_directive: Option<crate::providers::session_model_handle::SessionModelPref>,
+        model_directive: Option<RunModelDirective>,
         // The engine's run id (`FlowRequest::run_id`). Implementations that
         // write run markers MUST write this id on them — see that field's doc.
         run_id: String,
@@ -1022,6 +1032,18 @@ fn fallback_spec_with_agent(base: Arc<FlowSpec>, agent_id: &str) -> Arc<FlowSpec
     }
 }
 
+use crate::gateway::execution_adapter::ChatRunCancellation;
+
+pub(super) struct ChatRunAttempt {
+    pub(super) cancellation: ChatRunCancellation,
+    pub(super) may_retry: bool,
+}
+
+tokio::task_local! {
+    // Seeded for this dispatch's harness invocation only; spawned work does not inherit it.
+    pub(super) static CHAT_RUN_ATTEMPT: Option<ChatRunAttempt>;
+}
+
 impl Orchestrator {
     pub fn new(
         flow_registry: Arc<FlowRegistry>,
@@ -1127,6 +1149,34 @@ impl Orchestrator {
     pub(crate) async fn dispatch_with_cancel(
         &self,
         req: FlowRequest,
+        cancel: CancellationToken,
+    ) -> Result<FlowHandle, FlowError> {
+        self.dispatch_inner(req, None, cancel).await
+    }
+
+    pub(crate) async fn dispatch_chat_attempt(
+        &self,
+        req: FlowRequest,
+        cancellation: &ChatRunCancellation,
+        may_retry: bool,
+        cancel: CancellationToken,
+    ) -> Result<FlowHandle, FlowError> {
+        cancellation.check().map_err(|_| FlowError::Cancelled)?;
+        self.dispatch_inner(
+            req,
+            Some(ChatRunAttempt {
+                cancellation: cancellation.clone(),
+                may_retry,
+            }),
+            cancel,
+        )
+        .await
+    }
+
+    async fn dispatch_inner(
+        &self,
+        req: FlowRequest,
+        chat_attempt: Option<ChatRunAttempt>,
         cancel: CancellationToken,
     ) -> Result<FlowHandle, FlowError> {
         if cancel.is_cancelled() {
@@ -1355,24 +1405,27 @@ impl Orchestrator {
                                                 run_origin,
                                                 crate::extension::hooks::with_transcript_source(
                                                     transcripts,
-                                                    harness.run(
-                                                        session_key,
-                                                        spec_clone,
-                                                        input_clone,
-                                                        sandbox_clone,
-                                                        event_tx,
-                                                        cancel_clone,
-                                                        tool_service_override,
-                                                        trace_sink,
-                                                        interaction_manifest,
-                                                        workspace_override,
-                                                        max_iterations_override,
-                                                        transient_context,
-                                                        think_level,
-                                                        envelope,
-                                                        model_directive,
-                                                        run_id,
-                                                        telecom_public,
+                                                    CHAT_RUN_ATTEMPT.scope(
+                                                        chat_attempt,
+                                                        harness.run(
+                                                            session_key,
+                                                            spec_clone,
+                                                            input_clone,
+                                                            sandbox_clone,
+                                                            event_tx,
+                                                            cancel_clone,
+                                                            tool_service_override,
+                                                            trace_sink,
+                                                            interaction_manifest,
+                                                            workspace_override,
+                                                            max_iterations_override,
+                                                            transient_context,
+                                                            think_level,
+                                                            envelope,
+                                                            model_directive,
+                                                            run_id,
+                                                            telecom_public,
+                                                        ),
                                                     ),
                                                 ),
                                             ),

@@ -39,9 +39,10 @@ pub use search::{
 };
 pub use wire::{
     deserialize_models, deserialize_optional_models, AuthKind, CatalogEntry, CatalogParams,
-    CatalogResult, CatalogView, CostTierJson, CreateParams, DeleteParams, DiscoveryFailureKind,
-    GetParams, ModelCompatJson, ModelCostJson, ModelDefJson, ModelInputJson, ModelsRefreshParams,
-    ModelsRefreshResult, ModelsRefreshRow, OAuthStatus, ProviderConfigJson, ProviderGetResult,
-    ProviderHealthResult, ProviderHealthRow, ProviderInfo, ProviderListResult, RefreshOutcome,
-    SetDefaultParams, TestParams, TestResult, ThinkingLevelMapJson, UpdateParams,
+    CatalogResult, CatalogView, ChatModelChoice, ChatModelsListResult, CostTierJson, CreateParams,
+    DeleteParams, DiscoveryFailureKind, GetParams, ModelCompatJson, ModelCostJson, ModelDefJson,
+    ModelInputJson, ModelsRefreshParams, ModelsRefreshResult, ModelsRefreshRow, OAuthStatus,
+    ProviderConfigJson, ProviderGetResult, ProviderHealthResult, ProviderHealthRow, ProviderInfo,
+    ProviderListResult, RefreshOutcome, SetDefaultParams, TestParams, TestResult,
+    ThinkingLevelMapJson, UpdateParams,
 };

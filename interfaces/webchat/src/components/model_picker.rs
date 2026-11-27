@@ -1,26 +1,8 @@
 //! Chat-window model picker — compact pill + popover for picking the
 //! per-turn provider/model, with an explicit session action via `/model`.
 //!
-//! Architecture (openclaw parity, Rust port):
-//! 1. Pill button shows the *current selection* (or "Default" when none).
-//! 2. Click opens a popover; on first open we fetch `providers.catalog`
-//!    with `view: "configured"` (only credentialed + verified providers).
-//! 3. Clicking a row writes `ChatState.selected_model` as
-//!    [`ModelOverride::Qualified`]. The composer reads this when sending,
-//!    so the daemon's run loop short-circuits its fallback chain.
-//! 4. The "Default" row clears the override — falls back to the agent's
-//!    configured model. The separate Session button sends `/model` through the
-//!    existing chat path, and the new session pin takes effect at the next
-//!    provider request boundary.
-//!
-//! Differences from openclaw's `<select>`:
-//! * Catalog already arrives credential-filtered → the client-side pass is a
-//!   search box, not a usability check, and there is no second round-trip.
-//! * Per-turn selection persists in `ChatState` (memory-only for now).
-//!   The separate Session button sends `/model` through the existing chat path;
-//!   only the server's model-selection tool owns the persistent pin.
-//! * Each row carries a per-model link to the provider's homepage when
-//!   available — turns the picker into a low-friction discovery surface.
+//! Each opening fetches the Gateway's usable choices. This component only
+//! filters for display; the Gateway authorizes and binds the selection.
 //!
 //! ## Keyboard walk
 //!
@@ -42,10 +24,12 @@ use leptos::html::{Div, Input};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use aleph_protocol::providers::search::filter_catalog;
+use aleph_protocol::providers::{
+    search::filter_chat_model_choices as filter_choices, ChatModelChoice,
+};
 
 use crate::api::chat::ChatApi;
-use crate::api::providers::{CatalogEntry, CatalogView, ModelOverride, ProvidersApi, RosterModel};
+use crate::api::providers::ModelOverride;
 use crate::components::picker_nav::{
     publish_more_below, row_dom_id, scroll_row_into_view, step_highlight,
 };
@@ -71,26 +55,18 @@ pub(crate) enum PickTarget {
     },
 }
 
-/// Flatten the filtered catalogue into the rows ↑/↓ walk.
-///
-/// Takes the same `filter_catalog` the renderer takes, and in the same order,
-/// so index *n* here is the *n*th button on screen. Deriving the walk from a
-/// second traversal of the same data is the failure this exists to prevent:
-/// the roster `filter_catalog` returns is already narrowed to the matching
-/// ids, and a hand-written "all models of the matching providers" would be a
-/// longer list than the one being drawn.
-#[must_use]
-pub(crate) fn walk_targets(entries: &[CatalogEntry], query: &str) -> Vec<PickTarget> {
-    let mut out = vec![PickTarget::Default];
-    for entry in filter_catalog(entries, query) {
-        for model in roster(&entry) {
-            out.push(PickTarget::Model {
-                provider: entry.id.clone(),
-                model: model.id,
-            });
-        }
-    }
-    out
+/// Linear keyboard order matches the rendered rows, with Default first.
+fn walk_targets(entries: &[ChatModelChoice]) -> Vec<PickTarget> {
+    std::iter::once(PickTarget::Default)
+        .chain(entries.iter().map(|entry| PickTarget::Model {
+            provider: entry.provider.clone(),
+            model: entry.model.clone(),
+        }))
+        .collect()
+}
+
+fn request_is_current(open: bool, issued: u64, current: u64, same_conversation: bool) -> bool {
+    open && issued == current && same_conversation
 }
 
 /// Format the existing slash syntax without interpreting the model id.
@@ -113,33 +89,59 @@ pub fn ModelPicker() -> impl IntoView {
     let session_sending = RwSignal::new(false);
     let session_notice: RwSignal<Option<String>> = RwSignal::new(None);
     let open = RwSignal::new(false);
-    let entries: RwSignal<Vec<CatalogEntry>> = RwSignal::new(Vec::new());
+    let entries: RwSignal<Vec<ChatModelChoice>> = RwSignal::new(Vec::new());
+    let generation = RwSignal::new(0u64);
+    let opened_for = RwSignal::new(sessions.active_conv());
+    let same_conversation = move || opened_for.get_untracked() == sessions.active_conv();
+    let can_pick = move || open.get_untracked() && same_conversation();
     let loading = RwSignal::new(false);
-    let load_error: RwSignal<Option<String>> = RwSignal::new(None);
+    let load_failed = RwSignal::new(false);
     // Live filter term for the popover's search box. Order-preserving substring
     // match (`aleph_protocol::providers::search`); reset when the popover closes.
     let search = RwSignal::new(String::new());
 
-    // Fetch catalog on first open. Generation-counter staleness is the next
-    // step — for the inaugural cut, we cache forever within the session.
-    let load_catalog = move || {
-        if !entries.get_untracked().is_empty() || loading.get_untracked() {
-            return;
-        }
+    let load_choices = move || {
+        let issued = generation.get_untracked() + 1;
+        generation.set(issued);
+        opened_for.set(sessions.active_conv());
+        entries.set(Vec::new());
         loading.set(true);
-        load_error.set(None);
+        load_failed.set(false);
         spawn_local(async move {
-            match ProvidersApi::catalog(&dashboard, CatalogView::Configured).await {
-                Ok(items) => entries.set(items),
-                Err(e) => load_error.set(Some(
-                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
-                        e.to_string()
-                    }),
-                )),
+            let result = ChatApi::models(&dashboard).await;
+            let Some((opened_for, active)) = opened_for
+                .try_get_untracked()
+                .zip(sessions.active.try_get_untracked())
+            else {
+                return;
+            };
+            if !generation.try_get_untracked().is_some_and(|current| {
+                request_is_current(
+                    open.try_get_untracked() == Some(true),
+                    issued,
+                    current,
+                    opened_for == active,
+                )
+            }) {
+                return;
             }
-            loading.set(false);
+            match result {
+                Ok(items) => {
+                    let _ = entries.try_set(items);
+                }
+                Err(_) => {
+                    let _ = load_failed.try_set(true);
+                }
+            }
+            let _ = loading.try_set(false);
         });
     };
+
+    Effect::new(move |_| {
+        if open.get() && opened_for.get() != sessions.active.get() {
+            open.set(false);
+        }
+    });
 
     // What the pill names, in the same precedence core resolves
     // (`effective_model_directive`): this turn's pick, else the conversation's
@@ -164,6 +166,9 @@ pub fn ModelPicker() -> impl IntoView {
     };
 
     let select_entry = move |provider: String, model: String| {
+        if !can_pick() {
+            return;
+        }
         chat.selected_model
             .set(Some(ModelOverride::Qualified { provider, model }));
         open.set(false);
@@ -172,7 +177,8 @@ pub fn ModelPicker() -> impl IntoView {
     // A distinct action: never alter `selected_model` or optimistically write
     // `session_model_pin`. The server's slash tool is the only pin writer.
     let select_session = move |provider: String, model: String| {
-        if session_sending.get_untracked() || chat.team_id.get_untracked().is_some() {
+        if !can_pick() || session_sending.get_untracked() || chat.team_id.get_untracked().is_some()
+        {
             return;
         }
         let Some(send_conv) = sessions.active_conv() else {
@@ -221,12 +227,14 @@ pub fn ModelPicker() -> impl IntoView {
                     // ChatSendResponse has no selection generation or applied
                     // selection. An accepted send is not proof of a changed
                     // pin: leave its projection to the existing server feed.
-                    session_notice.set(Some(
-                        t_string!(i18n, model_picker.sent_notice, command = command.clone())
-                            .to_string(),
-                    ));
+                    if sessions.active_conv() == Some(send_conv) {
+                        session_notice.set(Some(
+                            t_string!(i18n, model_picker.sent_notice, command = command.clone())
+                                .to_string(),
+                        ));
+                    }
                 }
-                Err(error) => {
+                Err(error) if sessions.active_conv() == Some(send_conv) => {
                     session_notice.set(Some(
                         crate::components::admin_refusal::settings_write_error(i18n, &error, |e| {
                             t_string!(
@@ -239,14 +247,17 @@ pub fn ModelPicker() -> impl IntoView {
                         }),
                     ));
                 }
+                Err(_) => {}
             }
             session_sending.set(false);
         });
     };
 
     let clear_selection = move || {
-        chat.selected_model.set(None);
-        open.set(false);
+        if can_pick() {
+            chat.selected_model.set(None);
+            open.set(false);
+        }
     };
 
     // Clear the filter every time the popover closes so the next open starts
@@ -264,7 +275,8 @@ pub fn ModelPicker() -> impl IntoView {
 
     // The flat walk, shared by the keyboard handler and by the per-row
     // `is_highlighted` predicates below.
-    let targets = Memo::new(move |_| walk_targets(&entries.get(), &search.get()));
+    let filtered = Memo::new(move |_| filter_choices(&entries.get(), &search.get()));
+    let targets = Memo::new(move |_| walk_targets(&filtered.get()));
 
     // A new list means a new first row (see `preset_picker` for the full
     // argument). `Default` is index 0, so a narrowed search lands the highlight
@@ -347,10 +359,10 @@ pub fn ModelPicker() -> impl IntoView {
             <button
                 on:click=move |_| {
                     let next = !open.get_untracked();
-                    open.set(next);
                     if next {
-                        load_catalog();
+                        load_choices();
                     }
+                    open.set(next);
                 }
                 class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-mono
                        text-text-secondary border border-border
@@ -398,7 +410,7 @@ pub fn ModelPicker() -> impl IntoView {
                     // different, they disagree about which row a bare Enter
                     // selects.
                     {move || (!loading.get()
-                        && load_error.get().is_none()
+                        && !load_failed.get()
                         && !entries.get().is_empty())
                         .then(|| view! {
                             <input
@@ -443,10 +455,10 @@ pub fn ModelPicker() -> impl IntoView {
                                     {t!(i18n, model_picker.loading_catalog)}
                                 </div>
                             }.into_any()
-                        } else if let Some(err) = load_error.get() {
+                        } else if load_failed.get() {
                             view! {
                                 <div class="px-2.5 py-3 text-xs text-danger/80 text-center">
-                                    {t!(i18n, model_picker.load_failed, error = err)}
+                                    {t!(i18n, model_picker.load_failed)}
                                 </div>
                             }.into_any()
                         } else if entries.get().is_empty() {
@@ -455,7 +467,7 @@ pub fn ModelPicker() -> impl IntoView {
                                     {t!(i18n, model_picker.no_providers)}
                                 </div>
                             }.into_any()
-                        } else if filter_catalog(&entries.get(), &search.get()).is_empty() {
+                        } else if filtered.with(Vec::is_empty) {
                             view! {
                                 <div class="px-2.5 py-3 text-xs text-text-tertiary text-center">
                                     {t!(i18n, model_picker.no_match)}
@@ -467,19 +479,15 @@ pub fn ModelPicker() -> impl IntoView {
                             // because the Default row above took index 0.
                             let mut flat = 1usize;
                             let mut groups: Vec<AnyView> = Vec::new();
-                            for entry in filter_catalog(&entries.get(), &search.get()) {
-                                let provider_id = entry.id.clone();
-                                let display = entry.display_name.clone();
-                                let color = entry.color.clone();
-                                // Models to show: the roster the backend
-                                // computed for this entry, already narrowed to
-                                // the matching ids by the shared matcher.
+                            let choices = filtered.get();
+                            for choices in choices.chunk_by(|left, right| left.provider == right.provider) {
+                                let display = choices[0].provider_label.clone();
                                 let mut rows: Vec<AnyView> = Vec::new();
-                                for model in roster(&entry) {
+                                for choice in choices {
                                     let idx = flat;
                                     flat += 1;
-                                    let pid = provider_id.clone();
-                                    let mid = model.id.clone();
+                                    let pid = choice.provider.clone();
+                                    let mid = choice.model.clone();
                                     let session_pid = pid.clone();
                                     let session_mid = mid.clone();
                                     let session_title = t_string!(
@@ -497,29 +505,12 @@ pub fn ModelPicker() -> impl IntoView {
                                                 if provider == pid_active && model == mid_active
                                         )
                                     };
-                                    // Retirement is per model id now, not per
-                                    // provider default: the roster carries each
-                                    // id's own lifecycle, so a live id sitting
-                                    // under a retired default is no longer
-                                    // mislabelled (and vice versa). The successor
-                                    // rides the tooltip so the fix is one hover
-                                    // away.
-                                    let is_retired = model.lifecycle.is_deprecated();
-                                    let title = if is_retired {
-                                        model.lifecycle.successor.as_ref().map_or_else(
-                                            || "Retired by the vendor".to_string(),
-                                            |s| format!("Retired by the vendor — use {s}"),
-                                        )
-                                    } else {
-                                        String::new()
-                                    };
-                                    let display_text = model.id;
+                                    let display_text = choice.model_label.clone();
                                     rows.push(view! {
                                         <div class="flex items-center gap-1">
                                         <button
                                             type="button"
                                             id=row_dom_id(LIST, idx)
-                                            title=title
                                             on:click=move |_| select_entry(pid.clone(), mid.clone())
                                             class=move || {
                                                 let base = "w-full text-left px-2.5 py-1.5 rounded-md \
@@ -535,11 +526,6 @@ pub fn ModelPicker() -> impl IntoView {
                                             }
                                         >
                                             {display_text}
-                                            {is_retired.then(|| view! {
-                                                <span class="ml-1.5 text-[9px] uppercase tracking-wider text-warning">
-                                                    "retired"
-                                                </span>
-                                            })}
                                         </button>
                                         <button
                                             type="button"
@@ -573,8 +559,6 @@ pub fn ModelPicker() -> impl IntoView {
                                 groups.push(view! {
                                     <div class="pt-1.5">
                                         <div class="flex items-center gap-1.5 px-2.5 pb-1">
-                                            <span class="w-2 h-2 rounded-full"
-                                                  style=format!("background: {}", color) />
                                             <span class="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
                                                 {display}
                                             </span>
@@ -592,44 +576,30 @@ pub fn ModelPicker() -> impl IntoView {
     }
 }
 
-/// The model ids the picker offers for one provider.
-///
-/// This is the backend-computed `roster` field rendered verbatim — the merge
-/// rules (operator list vs curated fallback rungs, base_url-moved guard) live
-/// in `presets::model_ladder` on the core side, shared with the failover
-/// walk, so the picker can never recommend ids the walk would refuse to dial.
-#[must_use]
-pub(crate) fn roster(entry: &CatalogEntry) -> Vec<RosterModel> {
-    entry.roster.clone()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aleph_protocol::providers::ModelSource;
 
-    /// A catalogue row as `providers.catalog` would report it. Built through
-    /// serde rather than a struct literal so a field added later with a serde
-    /// default does not have to be repeated here.
-    fn entry(id: &str, models: &[&str]) -> CatalogEntry {
-        let mut e: CatalogEntry = serde_json::from_value(serde_json::json!({
-            "id": id,
-            "display_name": id,
-            "default_model": models.first().copied().unwrap_or_default(),
-            "base_url": "",
-            "protocol": "openai",
-            "color": "#808080",
-            "has_api_key": true,
-            "verified": true,
-            "enabled": true,
-            "is_default": false,
-        }))
-        .expect("the ten required catalogue fields are all present");
-        e.roster = models
+    fn catalogue(groups: &[(&str, &[&str])]) -> Vec<ChatModelChoice> {
+        groups
             .iter()
-            .map(|m| RosterModel::new(*m, ModelSource::PresetFallback))
-            .collect();
-        e
+            .flat_map(|(provider, models)| {
+                models.iter().map(|model| ChatModelChoice {
+                    provider: (*provider).into(),
+                    model: (*model).into(),
+                    provider_label: (*provider).into(),
+                    model_label: (*model).into(),
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn picker_reopen_ignores_late_result() {
+        assert!(request_is_current(true, 2, 2, true));
+        assert!(!request_is_current(true, 1, 2, true));
+        assert!(!request_is_current(false, 2, 2, true));
+        assert!(!request_is_current(true, 2, 2, false));
     }
 
     #[test]
@@ -656,14 +626,14 @@ mod tests {
     fn an_empty_catalogue_still_offers_default() {
         // Loading, empty and errored popovers all draw the Default row, so the
         // walk must contain it even when there is nothing to filter.
-        assert_eq!(walk_targets(&[], ""), vec![PickTarget::Default]);
+        assert_eq!(walk_targets(&[]), vec![PickTarget::Default]);
     }
 
     #[test]
     fn default_is_index_zero_and_models_follow_in_render_order() {
-        let cat = [entry("alpha", &["a1", "a2"]), entry("beta", &["b1"])];
+        let cat = catalogue(&[("alpha", &["a1", "a2"]), ("beta", &["b1"])]);
         assert_eq!(
-            walk_targets(&cat, ""),
+            walk_targets(&cat),
             vec![
                 PickTarget::Default,
                 model("alpha", "a1"),
@@ -678,9 +648,9 @@ mod tests {
     /// keyed child holding a captured index would light the wrong row.
     #[test]
     fn narrowing_an_earlier_roster_shifts_later_indices() {
-        let cat = [entry("alpha", &["a1", "a2"]), entry("beta", &["b1"])];
-        let wide = walk_targets(&cat, "");
-        let narrow = walk_targets(&cat, "a2");
+        let cat = catalogue(&[("alpha", &["a1", "a2"]), ("beta", &["b1"])]);
+        let wide = walk_targets(&cat);
+        let narrow = walk_targets(&filter_choices(&cat, "a2"));
 
         assert_eq!(
             wide.iter().position(|t| *t == model("alpha", "a2")),
@@ -694,13 +664,12 @@ mod tests {
     }
 
     /// The walk must be the buttons on screen, not "every model of every
-    /// matching provider": `filter_catalog` narrows the roster it returns, and
-    /// the renderer draws that narrowed roster.
+    /// matching provider": the renderer and keyboard walk use the same rows.
     #[test]
     fn a_model_query_walks_only_the_matching_ids() {
-        let cat = [entry("alpha", &["gpt-4o", "gpt-4o-mini"])];
+        let cat = catalogue(&[("alpha", &["gpt-4o", "gpt-4o-mini"])]);
         assert_eq!(
-            walk_targets(&cat, "mini"),
+            walk_targets(&filter_choices(&cat, "mini")),
             vec![PickTarget::Default, model("alpha", "gpt-4o-mini")]
         );
     }
@@ -709,7 +678,7 @@ mod tests {
     fn an_empty_query_offers_every_row() {
         // Same contract the settings picker's `offer` closure owes: browsing
         // must not require knowing a vendor's name first.
-        let cat = [entry("alpha", &["a1"]), entry("beta", &["b1", "b2"])];
-        assert_eq!(walk_targets(&cat, "").len(), 4);
+        let cat = catalogue(&[("alpha", &["a1"]), ("beta", &["b1", "b2"])]);
+        assert_eq!(walk_targets(&filter_choices(&cat, "")).len(), 4);
     }
 }

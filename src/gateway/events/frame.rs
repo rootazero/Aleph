@@ -31,6 +31,11 @@ pub enum GatewayEventFrame {
         session_key: String,
         ahead: u16,
     },
+    RunJoined {
+        run_id: String,
+        session_key: String,
+        joined_run_id: String,
+    },
     Reasoning {
         run_id: String,
         seq: u64,
@@ -601,6 +606,15 @@ impl From<StreamEvent> for GatewayEventFrame {
                 session_key,
                 ahead,
             },
+            StreamEvent::RunJoined {
+                run_id,
+                session_key,
+                joined_run_id,
+            } => Self::RunJoined {
+                run_id,
+                session_key,
+                joined_run_id,
+            },
             StreamEvent::Reasoning {
                 run_id,
                 seq,
@@ -781,6 +795,7 @@ impl GatewayEventFrame {
         match self {
             Self::RunAccepted { .. } => "run.accepted",
             Self::RunQueued { .. } => "run.queued",
+            Self::RunJoined { .. } => "run.joined",
             Self::Reasoning { .. } => "agent.reasoning",
             Self::ToolStart { .. } => "agent.tool.start",
             Self::ToolUpdate { .. } => "agent.tool.update",
@@ -845,6 +860,7 @@ impl GatewayEventFrame {
         match self {
             Self::RunAccepted { .. } => Some("stream.run_accepted"),
             Self::RunQueued { .. } => Some("stream.run_queued"),
+            Self::RunJoined { .. } => Some("stream.run_joined"),
             Self::Reasoning { .. } => Some(aleph_protocol::STREAM_REASONING_TOPIC),
             Self::ToolStart { .. } => Some("stream.tool_start"),
             Self::ToolUpdate { .. } => Some("stream.tool_update"),
@@ -1001,6 +1017,31 @@ mod tests {
             session_key, "agent/main",
             "the frame must name its session: it is the FIRST frame of a run, \
              so nothing has seeded the run→session index yet"
+        );
+    }
+
+    #[test]
+    fn run_joined_has_a_wire_method_and_names_both_runs() {
+        let frame = GatewayEventFrame::from(StreamEvent::RunJoined {
+            run_id: "run-folded".to_string(),
+            session_key: "agent/main".to_string(),
+            joined_run_id: "run-live".to_string(),
+        });
+        assert_eq!(frame.stream_method(), Some("stream.run_joined"));
+
+        let GatewayEventFrame::RunJoined {
+            run_id,
+            session_key,
+            joined_run_id,
+        } = frame
+        else {
+            panic!("conversion dropped the variant");
+        };
+        assert_eq!(run_id, "run-folded");
+        assert_eq!(joined_run_id, "run-live");
+        assert_eq!(
+            session_key, "agent/main",
+            "the folded id was never admitted, so the frame must seed its own session"
         );
     }
 }

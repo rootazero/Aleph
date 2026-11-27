@@ -9,95 +9,41 @@
 //! Answering does NOT start a run: it unblocks the `ask_user` tool call inside
 //! the turn that is still in flight, and the model carries on by itself.
 //!
-//! The reply is whatever core interprets it as (R4): a choice click sends the
-//! 1-based index — byte-for-byte the payload Telegram's `clarify:<idx>` inline
-//! button produces — and free text is sent verbatim. The panel never maps a
-//! click to an option value itself; core's `interpret_reply` is the only
-//! interpreter, so the two surfaces can never disagree.
+//! # One request, one ticket
 //!
-//! # Two shapes, one interpreter
+//! The card stages the answers of every outstanding question and sends them
+//! as ONE `submit` action, or as ONE `cancel` action. A click never answers
+//! on its own: an answer that was meant for a superseded request would
+//! otherwise land on its successor.
 //!
-//! A request carries one or more questions. With one outstanding, a choice
-//! click answers immediately — the one-click interaction this card has always
-//! had. With several, the card becomes a short form and submits every answer
-//! at once (`clarification.resolve { answers }`); core walks them across
-//! consecutive questions using the same per-question rules. Neither shape
-//! interprets anything locally.
+//! Every action carries the identity of the request and of the question it
+//! addresses (`expected_request_id` / `expected_question_id`), so core can
+//! refuse an action that was meant for a superseded request instead of
+//! answering the wrong one.
 //!
-//! A core that predates the structured `questions` view sends none, and the
-//! card falls back to the flat `question` / `options` pair — the same
-//! degradation a plain-text channel gets, for the same reason.
+//! # The card is not the conversation
+//!
+//! A question the agent is parked on is answered IN the card. The composer
+//! never answers it implicitly, never echoes the answer into the transcript
+//! and never falls back to sending it as a chat message — a fallback would
+//! answer a question nobody asked and bury the answer in the conversation.
+//!
+//! # Secrets
+//!
+//! A secret question is typed into a masked field, and its review line says
+//! only that something was entered. The contents never reach the transcript,
+//! an error message or a log.
+
+use std::rc::Rc;
 
 use crate::api::ClarificationApi;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
+use crate::state::clarification::{build_cancel_params, build_submit_params, draft_summary};
 use crate::state::notifications::{AskOptionView, AskQuestionView, PendingAskView};
+use aleph_protocol::clarification::{ClarificationActionStatus, ClarificationInput};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-
-/// Post `answers` back for `session_key` and drop the question from the pending
-/// list once the whole request is over.
-///
-/// The card goes on two different facts, and conflating them is the bug this
-/// function exists to avoid:
-///
-/// * `accepted == false` — nobody was waiting any more (expired / superseded /
-///   run cancelled). The question is dead, so the card goes.
-/// * `is_finished()` — every question was answered and the parked tool
-///   resumed. Also done.
-///
-/// `accepted && !is_finished()` is neither: the answer landed and there is more
-/// to ask. The card stays, and the `stream.ask_user` frame core publishes on
-/// advance re-renders it at the new cursor.
-fn answer(
-    dashboard: DashboardState,
-    session_key: String,
-    request_id: String,
-    answers: Vec<String>,
-    submitting: RwSignal<bool>,
-    error: RwSignal<Option<String>>,
-) {
-    submitting.set(true);
-    error.set(None);
-    spawn_local(async move {
-        let expected = crate::api::expected_request_id(&request_id);
-        let outcome = if answers.len() == 1 {
-            let single_answer = answers.first().map(|s| s.as_str()).unwrap_or("");
-            ClarificationApi::resolve(&dashboard, &session_key, single_answer, expected).await
-        } else {
-            ClarificationApi::resolve_all(&dashboard, &session_key, &answers, expected).await
-        };
-        match outcome {
-            Ok(outcome) => {
-                if !outcome.accepted {
-                    // A stale answer is a different fact from "nobody was
-                    // waiting": the request was superseded while the answer was
-                    // in flight, and saying so is the difference between a
-                    // confused user and a correct one.
-                    // (2026-11-20 severed-wire audit SD-CLAR-01.)
-                    let message = if outcome.stale {
-                        "Question was superseded — answer discarded"
-                    } else {
-                        "Question was no longer pending — answer discarded"
-                    };
-                    web_sys::console::warn_1(&message.into());
-                    error.set(Some(message.to_string()));
-                }
-                if !outcome.accepted || outcome.is_finished() {
-                    dashboard
-                        .pending_clarifications
-                        .update(|l| l.retain(|x| x.session_key != session_key));
-                }
-            }
-            Err(e) => {
-                let msg = format!("Failed to answer question: {e:?}");
-                web_sys::console::warn_1(&msg.clone().into());
-                error.set(Some(msg));
-            }
-        }
-        submitting.set(false);
-    });
-}
 
 /// The questions this card must render.
 ///
@@ -125,32 +71,29 @@ fn questions_of(ask: &PendingAskView) -> Vec<AskQuestionView> {
     }]
 }
 
-/// Toggle `index` (1-based, as a string) into a comma-separated multi-select
-/// answer, preserving pick order.
-///
-/// Comma-separated indices are exactly what a user types into a channel for the
-/// same question, so the panel is not inventing a second encoding — core's
-/// `interpret_reply` parses this string identically from either surface.
-fn toggle_index(current: &str, index: usize) -> String {
-    let token = index.to_string();
-    let mut picks: Vec<&str> = current
-        .split(',')
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .collect();
-    match picks.iter().position(|p| *p == token) {
-        Some(at) => {
-            picks.remove(at);
-        }
-        None => picks.push(&token),
-    }
-    picks.join(", ")
+/// Which action the card is about to send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CardAction {
+    /// Send the staged answers of every outstanding question.
+    Submit,
+    /// Discard the whole request.
+    Cancel,
 }
 
-/// Whether `answer` currently selects the 1-based `index`.
-fn is_selected(answer: &str, index: usize) -> bool {
-    let token = index.to_string();
-    answer.split(',').map(str::trim).any(|p| p == token)
+/// The text a staged answer holds, if it holds text.
+fn staged_text(input: &ClarificationInput) -> String {
+    match input {
+        ClarificationInput::Text { text } => text.clone(),
+        ClarificationInput::Choices { .. } => String::new(),
+    }
+}
+
+/// The indices a staged answer selects.
+fn staged_choices(input: &ClarificationInput) -> Vec<u32> {
+    match input {
+        ClarificationInput::Choices { indices } => indices.clone(),
+        ClarificationInput::Text { .. } => Vec::new(),
+    }
 }
 
 #[component]
@@ -162,51 +105,169 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
     };
 
     let questions = questions_of(&ask);
-    // One draft per outstanding question. Created here (not in a signal of
-    // signals) because the parent re-runs this component whenever the pending
-    // view changes, which is exactly when the question set changes.
-    let drafts: Vec<RwSignal<String>> = questions
-        .iter()
-        .map(|_| RwSignal::new(String::new()))
-        .collect();
-    // A single question is answered the moment a choice is clicked — that is
-    // the interaction this card has always had, and it is still right when
-    // there is nothing else to fill in.
-    let instant = questions.len() == 1 && questions.first().is_some_and(|q| !q.multi_select);
-    let session_key = StoredValue::new(ask.session_key.clone());
-    let request_id = StoredValue::new(ask.request_id.clone());
-    let drafts_store = StoredValue::new(drafts.clone());
-    let answering = RwSignal::new(false);
-    let answer_error = RwSignal::new(Option::<String>::None);
+    let session_key = ask.session_key.clone();
+    let request_id = ask.request_id.clone();
+    // The question the action addresses: the one at the cursor.
+    let current_question_id = questions.first().map(|q| q.id.clone()).unwrap_or_default();
 
-    let submit_all = move || {
-        let answers: Vec<String> = drafts_store
-            .get_value()
+    // The board owns the staged answers — they must survive a re-render of
+    // this card. The local signals are only an echo that keeps the field
+    // focused while the card renders.
+    let staged: Vec<RwSignal<ClarificationInput>> = {
+        let board = dashboard.clarifications.get_untracked();
+        let drafts = board.drafts(&request_id);
+        questions
             .iter()
-            .map(|d| d.get_untracked().trim().to_string())
-            .collect();
-        if answers.iter().any(String::is_empty) {
-            return;
-        }
-        answer(
-            dashboard,
-            session_key.get_value(),
-            request_id.get_value(),
-            answers,
-            answering,
-            answer_error,
-        );
+            .map(|question| {
+                RwSignal::new(drafts.get(&question.id).cloned().unwrap_or(
+                    ClarificationInput::Text {
+                        text: String::new(),
+                    },
+                ))
+            })
+            .collect()
     };
-    let all_answered = {
-        let drafts_store = drafts_store;
-        move || {
-            drafts_store
-                .get_value()
+
+    let answering = RwSignal::new(false);
+    let action_error = RwSignal::new(Option::<String>::None);
+
+    // Stage one answer. The board keeps it; the local signal keeps the field
+    // in sync.
+    let stage: Rc<dyn Fn(String, ClarificationInput)> = {
+        let dashboard = dashboard;
+        let request_id = request_id.clone();
+        Rc::new(move |question_id: String, input: ClarificationInput| {
+            dashboard
+                .clarifications
+                .update_untracked(|board| board.set_draft(&request_id, &question_id, input));
+        })
+    };
+    // Stage a typed answer. An emptied field is no answer at all, so its
+    // staged value is dropped instead of sent as an empty text.
+    let stage_text: Rc<dyn Fn(String, String)> = {
+        let dashboard = dashboard;
+        let request_id = request_id.clone();
+        let stage = stage.clone();
+        Rc::new(move |question_id: String, text: String| {
+            let trimmed_empty = text.trim().is_empty();
+            stage(
+                question_id.clone(),
+                ClarificationInput::Text { text: text.clone() },
+            );
+            if trimmed_empty {
+                dashboard
+                    .clarifications
+                    .update_untracked(|board| board.clear_draft(&request_id, &question_id));
+            }
+        })
+    };
+
+    // Send one action. The latch is taken synchronously, before anything is
+    // spawned, so a double click cannot produce two tickets.
+    let send: Rc<dyn Fn(CardAction)> = {
+        let dashboard = dashboard;
+        let i18n = i18n;
+        let questions = questions.clone();
+        let session_key = session_key.clone();
+        let request_id = request_id.clone();
+        let current_question_id = current_question_id.clone();
+        Rc::new(move |kind: CardAction| {
+            if answering.get_untracked() {
+                return;
+            }
+            let board = dashboard.clarifications.get_untracked();
+            if !board.acquire_submission(&request_id) {
+                // A ticket is already on its way.
+                return;
+            }
+            let drafts = board.drafts(&request_id);
+            let params = match kind {
+                CardAction::Submit => build_submit_params(
+                    &session_key,
+                    &request_id,
+                    &current_question_id,
+                    &questions,
+                    &drafts,
+                ),
+                CardAction::Cancel => {
+                    build_cancel_params(&session_key, &request_id, &current_question_id)
+                }
+            };
+            let Some(params) = params else {
+                board.release_submission(&request_id);
+                action_error.set(Some(
+                    t_string!(i18n, chat.ask_user_unaddressable).to_string(),
+                ));
+                return;
+            };
+            answering.set(true);
+            action_error.set(None);
+            let dashboard = dashboard;
+            let session_key = session_key.clone();
+            let request_id = request_id.clone();
+            spawn_local(async move {
+                match ClarificationApi::resolve_action(&dashboard, params).await {
+                    Ok(response) => match response.status {
+                        ClarificationActionStatus::Answered
+                        | ClarificationActionStatus::Cancelled => {
+                            // Terminal: the card goes — but only if it is
+                            // still the owner of this request.
+                            dashboard.clarifications.update(|board| {
+                                board.apply_ended(&session_key, &request_id);
+                            });
+                        }
+                        ClarificationActionStatus::Advanced => {
+                            // More to ask: the card stays. The advance push
+                            // moves the cursor and releases the answers of the
+                            // questions it passed.
+                        }
+                        ClarificationActionStatus::Stale => {
+                            let _ = action_error
+                                .try_set(Some(t_string!(i18n, chat.ask_user_stale).to_string()));
+                            // Read-only recovery: reconcile with a snapshot,
+                            // never resend.
+                            let _ = ClarificationApi::refresh_pending(&dashboard).await;
+                        }
+                    },
+                    Err(_) => {
+                        let _ = action_error
+                            .try_set(Some(t_string!(i18n, chat.ask_user_failed).to_string()));
+                        // Read-only recovery: reconcile with a snapshot, never
+                        // resend and never fall back to the conversation.
+                        let _ = ClarificationApi::refresh_pending(&dashboard).await;
+                    }
+                }
+                // Release the latch. The read is the sanctioned `try_` form:
+                // this runs after an await, where the owning component may
+                // already be gone.
+                if let Some(board) = dashboard.clarifications.try_get_untracked() {
+                    board.release_submission(&request_id);
+                }
+                let _ = answering.try_set(false);
+            });
+        })
+    };
+
+    let addressable = !request_id.is_empty() && !current_question_id.is_empty();
+    let review = {
+        let questions = questions.clone();
+        let staged = staged.clone();
+        Memo::new(move |_| {
+            let drafts = questions
                 .iter()
-                .all(|d| !d.get().trim().is_empty())
-        }
+                .zip(&staged)
+                .map(|(question, staged)| {
+                    let answer = staged.get();
+                    let ready = match &answer {
+                        ClarificationInput::Text { text } => !text.trim().is_empty(),
+                        ClarificationInput::Choices { indices } => !indices.is_empty(),
+                    };
+                    ready.then(|| (question.id.clone(), answer))
+                })
+                .collect::<Option<std::collections::HashMap<_, _>>>()?;
+            (!drafts.is_empty()).then(|| draft_summary(&questions, &drafts))
+        })
     };
-    let total = questions.len();
 
     view! {
         <div class="rounded-lg border border-primary/40 bg-primary/5 px-3 py-2">
@@ -216,46 +277,21 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                     {t!(i18n, chat.ask_user_header)}
                 </span>
             </div>
-            {questions.into_iter().zip(drafts).enumerate().map(|(qi, (question, draft))| {
+            {questions.into_iter().zip(staged).enumerate().map(|(qi, (question, staged_signal))| {
                 let has_options = !question.options.is_empty();
                 let multi = question.multi_select;
                 let secret = question.secret;
                 let header = question.header.clone();
                 let prompt = question.prompt.clone();
-                // `StoredValue` so the closure stays `Copy` — the text field's
-                // Enter handler and the Answer button both need it.
-                let session_key_q = StoredValue::new(ask.session_key.clone());
-                let request_id_q = StoredValue::new(ask.request_id.clone());
-                // Enter in a text field. On a one-question card it answers
-                // outright. On a form it submits the WHOLE set once every
-                // question has something in it — pressing Enter used to do
-                // nothing at all there, silently, which reads as a broken
-                // field rather than as "there is a button below". Incomplete
-                // is still a no-op, and visibly so: the submit button is
-                // disabled by the same predicate.
-                let submit_text = move || {
-                    if !instant {
-                        submit_all();
-                        return;
-                    }
-                    let reply = draft.get_untracked().trim().to_string();
-                    if reply.is_empty() {
-                        return;
-                    }
-                    draft.set(String::new());
-                    answer(
-                        dashboard,
-                        session_key_q.get_value(),
-                        request_id_q.get_value(),
-                        vec![reply],
-                        answering,
-                        answer_error,
-                    );
-                };
+                let question_id = question.id.clone();
+                let options = question.options.clone();
+                let request_id = request_id.clone();
+                let stage = stage.clone();
+                let stage_text = stage_text.clone();
                 view! {
                     <div class=move || if qi == 0 { "mt-1" } else { "mt-3 pt-3 border-t border-border/60" }>
                         {header.map(|h| view! {
-                            <span class="inline-block px-1.5 py-0.5 mb-1 rounded bg-surface-raised
+                            <span class="inline-block px-1.5 mb-1 rounded bg-surface-raised
                                          text-[10px] uppercase tracking-wide text-text-tertiary">
                                 {h}
                             </span>
@@ -267,57 +303,64 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                             </p>
                         })}
                         {has_options.then(|| {
-                            let session_key_o = ask.session_key.clone();
-                            let request_id_o = ask.request_id.clone();
                             view! {
                                 <div class="flex flex-wrap gap-2 mt-2">
-                                    {question.options.into_iter().enumerate().map(|(i, opt)| {
-                                        let session_key_o = session_key_o.clone();
-                                        let request_id_o = request_id_o.clone();
-                                        // 1-based index — the string core's
-                                        // `interpret_reply` maps to this option,
-                                        // exactly as for a typed number.
-                                        let idx = i + 1;
-                                        let reply = idx.to_string();
-                                        let label = opt.label.clone();
-                                        let description = opt.description.clone();
+                                    {options.into_iter().enumerate().map(|(index, option)| {
+                                        // Zero-based, as the wire contract says.
+                                        let choice = index as u32;
+                                        let label = option.label.clone();
+                                        let description = option.description.clone();
+                                        let staged_signal = staged_signal;
+                                        let question_id = question_id.clone();
+                                        let stage = stage.clone();
+                                        let dashboard = dashboard;
+                                        let request_id = request_id.clone();
                                         view! {
                                             <button
                                                 type="button"
                                                 class=move || {
                                                     let base = "px-3 py-1.5 rounded text-left text-xs font-medium \
                                                                 border transition-colors";
-                                                    if is_selected(&draft.get(), idx) {
+                                                    if staged_choices(&staged_signal.get()).contains(&choice) {
                                                         format!("{base} bg-primary text-white border-primary")
                                                     } else {
                                                         format!("{base} bg-surface-raised hover:bg-primary \
                                                                  hover:text-white text-text-primary border-border")
                                                     }
                                                 }
+                                                aria-pressed=move || staged_choices(&staged_signal.get()).contains(&choice).to_string()
+                                                disabled=move || answering.get() || !addressable
                                                 on:click=move |_| {
-                                                    if instant {
-                                                        answer(
-                                                            dashboard,
-                                                            session_key_o.clone(),
-                                                            request_id_o.clone(),
-                                                            vec![reply.clone()],
-                                                            answering,
-                                                            answer_error,
-                                                        );
-                                                    } else if multi {
-                                                        draft.update(|d| *d = toggle_index(d, idx));
+                                                    let mut next = staged_choices(&staged_signal.get_untracked());
+                                                    if let Some(at) = next.iter().position(|c| *c == choice) {
+                                                        next.remove(at);
                                                     } else {
-                                                        draft.set(reply.clone());
+                                                        if !multi {
+                                                            next.clear();
+                                                        }
+                                                        next.push(choice);
+                                                    }
+                                                    if next.is_empty() {
+                                                        // Un-picking leaves the
+                                                        // question unanswered.
+                                                        staged_signal.set(ClarificationInput::Text {
+                                                            text: String::new(),
+                                                        });
+                                                        dashboard.clarifications.update_untracked(|board| {
+                                                            board.clear_draft(&request_id, &question_id)
+                                                        });
+                                                    } else {
+                                                        staged_signal.set(ClarificationInput::Choices {
+                                                            indices: next.clone(),
+                                                        });
+                                                        stage(
+                                                            question_id.clone(),
+                                                            ClarificationInput::Choices { indices: next },
+                                                        );
                                                     }
                                                 }
                                             >
-                                                <span class="block">{format!("{idx}. {label}")}</span>
-                                                // The description a channel has
-                                                // rendered since the option type
-                                                // gained the field. The panel used
-                                                // to show a bare label because it
-                                                // read the flat label array, which
-                                                // structurally cannot carry one.
+                                                <span class="block">{format!("{}. {label}", index + 1)}</span>
                                                 {description.map(|d| view! {
                                                     <span class="block mt-0.5 font-normal opacity-70">{d}</span>
                                                 })}
@@ -328,8 +371,7 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                             }
                         })}
                         // Always offered: a choice list is a shortcut, not a
-                        // constraint — core takes an unmatched reply as free
-                        // text either way.
+                        // constraint — free text is an answer too.
                         <div class="flex gap-2 mt-2">
                             <input
                                 type=if secret { "password" } else { "text" }
@@ -341,54 +383,56 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                                 } else {
                                     t_string!(i18n, chat.ask_user_placeholder).to_string()
                                 }
-                                prop:value=move || draft.get()
-                                on:input=move |ev| draft.set(event_target_value(&ev))
-                                on:keydown=move |ev: web_sys::KeyboardEvent| {
-                                    if ev.key() == "Enter" {
-                                        ev.prevent_default();
-                                        if !answering.get_untracked() {
-                                            submit_text();
-                                        }
-                                    }
+                                prop:value=move || staged_text(&staged_signal.get())
+                                on:input=move |ev| {
+                                    let text = event_target_value(&ev);
+                                    staged_signal.set(ClarificationInput::Text { text: text.clone() });
+                                    stage_text(question_id.clone(), text);
                                 }
-                                disabled=move || answering.get()
+                                disabled=move || answering.get() || !addressable
                             />
-                            {instant.then(|| view! {
-                                <button
-                                    type="button"
-                                    class="px-3 py-1.5 rounded bg-primary hover:bg-primary-hover text-white text-xs
-                                           font-semibold disabled:opacity-35 disabled:cursor-not-allowed transition-colors"
-                                    disabled=move || answering.get() || draft.get().trim().is_empty()
-                                    on:click=move |_| submit_text()
-                                >
-                                    {t!(i18n, chat.ask_user_answer)}
-                                </button>
-                            })}
                         </div>
                     </div>
                 }
             }).collect::<Vec<_>>()}
-            {move || answer_error.get().map(|e| view! {
+            {move || action_error.get().map(|e| view! {
                 <div class="mt-2 text-xs text-danger break-words">{e}</div>
             })}
-            // One submit for the whole set. Present exactly when a single
-            // click cannot finish the request — a multi-select question needs
-            // its picks confirmed, and several questions need every one filled.
-            {(!instant).then(|| view! {
-                <button
-                    type="button"
-                    class="mt-3 px-3 py-1.5 rounded bg-primary hover:bg-primary-hover text-white text-xs
-                           font-semibold disabled:opacity-35 disabled:cursor-not-allowed transition-colors"
-                    disabled=move || answering.get() || !all_answered()
-                    on:click=move |_| submit_all()
-                >
-                    {move || if total > 1 {
-                        t_string!(i18n, chat.ask_user_submit).to_string()
-                    } else {
-                        t_string!(i18n, chat.ask_user_answer).to_string()
-                    }}
-                </button>
+            {move || review.get().map(|summary| view! {
+                <p class="mt-3 text-xs text-text-secondary break-words">{summary}</p>
             })}
+            // One submit for the whole set, and one cancel. Exactly one of
+            // them can produce a ticket: the latch admits a single action.
+            <div class="flex gap-2 mt-3">
+                {
+                    let send_submit = send.clone();
+                    view! {
+                        <button
+                            type="button"
+                            class="px-3 py-1.5 rounded bg-primary hover:bg-primary-hover text-white text-xs
+                                   font-semibold disabled:opacity-35 disabled:cursor-not-allowed transition-colors"
+                            disabled=move || answering.get() || !addressable || review.get().is_none()
+                            on:click=move |_| send_submit(CardAction::Submit)
+                        >
+                            {t!(i18n, chat.ask_user_submit)}
+                        </button>
+                    }
+                }
+                {
+                    let send_cancel = send.clone();
+                    view! {
+                        <button
+                            type="button"
+                            class="px-3 py-1.5 rounded bg-surface-raised hover:bg-surface-hover text-text-primary text-xs
+                                   font-semibold disabled:opacity-35 disabled:cursor-not-allowed transition-colors"
+                            disabled=move || answering.get() || !addressable
+                            on:click=move |_| send_cancel(CardAction::Cancel)
+                        >
+                            {t!(i18n, chat.ask_user_cancel)}
+                        </button>
+                    }
+                }
+            </div>
         </div>
     }
     .into_any()
@@ -450,20 +494,19 @@ mod tests {
         assert_eq!(rendered[0].prompt, "legacy prompt");
     }
 
+    /// The card must not invent a second encoding: the staged answer is a
+    /// typed input, and a choice is a list of zero-based indices.
     #[test]
-    fn multi_select_toggle_preserves_pick_order_and_removes() {
-        assert_eq!(toggle_index("", 2), "2");
-        assert_eq!(toggle_index("2", 1), "2, 1");
-        assert_eq!(toggle_index("2, 1", 2), "1");
-        assert_eq!(toggle_index("2, 1", 3), "2, 1, 3");
-    }
+    fn the_card_stages_typed_inputs_and_zero_based_choices() {
+        let text = ClarificationInput::Text { text: "1".into() };
+        assert_eq!(staged_text(&text), "1");
+        assert!(staged_choices(&text).is_empty());
 
-    #[test]
-    fn selection_test_matches_whole_tokens_only() {
-        assert!(is_selected("1, 2", 2));
-        assert!(!is_selected("1, 2", 3));
-        // "12" must not read as a selection of 1 or 2.
-        assert!(!is_selected("12", 1));
-        assert!(is_selected("12", 12));
+        let choices = ClarificationInput::Choices {
+            indices: vec![0, 2],
+        };
+        assert!(staged_choices(&choices).contains(&0));
+        assert!(!staged_choices(&choices).contains(&1));
+        assert_eq!(staged_text(&choices), "");
     }
 }

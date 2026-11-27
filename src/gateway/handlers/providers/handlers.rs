@@ -1,9 +1,10 @@
 //! Provider RPC handler functions.
 
+use crate::providers::model_catalog::discovery_authority;
 use crate::sync_primitives::Arc;
 use serde_json::json;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use super::helpers::{
     build_provider_config_for_persistence, normalize_optional_string, provider_info_row,
@@ -12,9 +13,9 @@ use super::helpers::{
 use super::parse_params;
 use super::types::{
     failure_kind, AuthKind, CatalogEntry, CatalogParams, CatalogResult, CatalogView, CreateParams,
-    DeleteParams, DiscoveryFailureKind, GetParams, ModelsRefreshParams, ModelsRefreshResult,
-    ModelsRefreshRow, ProviderGetResult, ProviderHealthResult, ProviderHealthRow, ProviderInfo,
-    ProviderListResult, SetDefaultParams, TestParams, TestResult, UpdateParams,
+    DeleteParams, GetParams, ModelsRefreshParams, ModelsRefreshResult, ModelsRefreshRow,
+    ProviderGetResult, ProviderHealthResult, ProviderHealthRow, ProviderInfo, ProviderListResult,
+    SetDefaultParams, TestParams, TestResult, UpdateParams,
 };
 use crate::config::{Config, ProviderConfig};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
@@ -23,43 +24,33 @@ use crate::gateway::security::SharedTokenManager;
 use crate::providers::model_catalog::ModelSource;
 use crate::providers::probe::probe_provider_bounded;
 
-/// Refresh the selector's existing projection after a provider registry write.
-/// A failed reconstruction must not advertise the newly saved model roster on
-/// an older live instance. Unrelated writes must not re-enable that provider.
+/// Refresh configured model IDs after a registry write. Construction in the
+/// thinker registry can narrow availability but cannot certify a named run
+/// transport or re-enable one that a config/credential mutation revoked.
 async fn refresh_selectable_publication(
     config: &Arc<RwLock<Config>>,
     registry: Option<&Arc<crate::thinker::MultiProviderRegistry>>,
-    vault: Option<&Arc<SharedTokenManager>>,
     changed: &str,
     constructed: bool,
 ) {
     use crate::providers::session_model_handle as selection;
-    let Some(previous) = selection::selectable_models() else {
-        return;
-    };
     let config = config.read().await;
-    let available: std::collections::BTreeSet<String> = registry
-        .map(|registry| registry.list_providers())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|name| {
-            if name == changed {
-                constructed
-            } else {
-                previous.provider_is_available(name)
-            }
-        })
-        .collect();
-    // Authentication is only a selectable-model validation input. It must not
-    // synthesize routing availability or restore learned/semantic routing.
-    let env_provider = crate::gateway::available_provider_from_env();
-    selection::refresh_selectable_models(&config, &available, |name| {
-        vault.is_some_and(|vault| resolve_api_key(name, vault).is_some())
-            || config
-                .providers
-                .get(name)
-                .is_some_and(|pc| pc.protocol() == "ollama")
-            || (name != changed && available.contains(name) && env_provider == Some(name))
+    selection::refresh_selectable_models(&config, |previous, routable| {
+        let available: std::collections::BTreeSet<String> = registry
+            .map(|registry| registry.list_providers())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|name| {
+                if name == changed {
+                    constructed
+                } else {
+                    previous.provider_is_available(name)
+                }
+            })
+            .collect();
+        // The publication carries forward mounted authentication; no credential
+        // lookup can attest the old named transport after a config change.
+        selection::SelectableModelsSnapshot::from_config(&config, routable, &available, |_| false)
     });
 }
 
@@ -268,7 +259,7 @@ async fn update_provider_inner(
                 format!("Failed to save config: {e}"),
             );
         }
-        *cfg = cfg_candidate;
+        discovery_authority::replace_config(&mut cfg, cfg_candidate);
 
         // Publish the provider we already validated into the live registry.
         if let (Some(registry), Some((name, provider))) = (&multi_registry, built_provider) {
@@ -278,14 +269,8 @@ async fn update_provider_inner(
         }
     }
 
-    refresh_selectable_publication(
-        &config,
-        multi_registry.as_ref(),
-        Some(&vault),
-        &params.name,
-        constructed,
-    )
-    .await;
+    refresh_selectable_publication(&config, multi_registry.as_ref(), &params.name, constructed)
+        .await;
 
     // Broadcast event
     let timestamp = std::time::SystemTime::now()
@@ -346,13 +331,7 @@ async fn create_provider_inner(
         Err(e) => return e,
     };
 
-    // Snapshot (name + the built provider) for live registration. The
-    // provider is built unconditionally (the build is the protocol
-    // validation); it is only handed to a registry when one is attached.
-    let registration: (String, Arc<dyn crate::providers::AiProvider>);
-
-    // Create provider
-    {
+    let constructed = {
         let mut cfg = config.write().await;
 
         // Check if provider already exists
@@ -383,19 +362,18 @@ async fn create_provider_inner(
         // the registry cannot serve — the caller has to learn about it now.
         // The build is the protocol validation, so it runs even in config-only
         // mode (no live registry attached).
-        match crate::providers::create_provider(&params.name, provider_config.clone()) {
-            Ok(provider) => {
-                registration = (params.name.clone(), provider);
-            }
-            Err(e) => {
-                error!(name = %params.name, error = %e, "Failed to build provider");
-                return JsonRpcResponse::error(
-                    request.id,
-                    INTERNAL_ERROR,
-                    format!("Failed to build provider: {e}"),
-                );
-            }
-        }
+        let transport =
+            match crate::providers::create_provider(&params.name, provider_config.clone()) {
+                Ok(provider) => provider,
+                Err(e) => {
+                    error!(name = %params.name, error = %e, "Failed to build provider");
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INTERNAL_ERROR,
+                        format!("Failed to build provider: {e}"),
+                    );
+                }
+            };
 
         // Store API key in vault (then clear from config so it's never persisted)
         if let Some(ref api_key) = provider_config.api_key {
@@ -426,29 +404,21 @@ async fn create_provider_inner(
                 format!("Failed to save config: {e}"),
             );
         }
-        *cfg = cfg_candidate;
-    }
+        discovery_authority::replace_config(&mut cfg, cfg_candidate);
 
-    let mut constructed = false;
-    // Hot-register into the live registry so the provider is usable and an
-    // auto-derived failover fallback without a restart (mirrors set_default's
-    // runtime swap). The provider was already built above — a build failure
-    // aborted the request before the credential or the config was touched.
-    if let Some(registry) = &multi_registry {
-        let (name, provider) = registration;
-        registry.register(name.clone(), provider);
-        constructed = true;
-        info!(name = %name, "Provider registered in live registry");
-    }
+        // Like update and default promotion, publish before another Config
+        // writer or OAuth renewal can install a newer transport.
+        if let Some(registry) = &multi_registry {
+            registry.register(params.name.clone(), transport);
+            info!(name = %params.name, "Provider registered in live registry");
+            true
+        } else {
+            false
+        }
+    };
 
-    refresh_selectable_publication(
-        &config,
-        multi_registry.as_ref(),
-        Some(&vault),
-        &params.name,
-        constructed,
-    )
-    .await;
+    refresh_selectable_publication(&config, multi_registry.as_ref(), &params.name, constructed)
+        .await;
 
     // Broadcast event
     let timestamp = std::time::SystemTime::now()
@@ -560,7 +530,7 @@ async fn delete_provider_inner(
                 format!("Failed to save config: {e}"),
             );
         }
-        *cfg = cfg_candidate;
+        discovery_authority::replace_config(&mut cfg, cfg_candidate);
 
         // Config is durably committed; now remove the API key from the vault.
         // A failure here is logged but does not roll back — the provider is
@@ -569,26 +539,15 @@ async fn delete_provider_inner(
         if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
             tracing::warn!(provider = %params.name, error = %e, "Failed to delete API key from vault");
         }
-    }
 
-    // Drop the provider from the live registry so it stops being dialed (as an
-    // auto-derived failover fallback) without a restart. The registry refuses
-    // to remove its last provider — harmless here since the default provider
-    // (guarded above) can never be the one being deleted.
-    if let Some(registry) = &multi_registry {
-        if let Err(e) = registry.remove(&params.name) {
-            tracing::warn!(provider = %params.name, error = %e, "Failed to remove provider from live registry");
+        // replace_config already withdrew selectable rows. Remove the live
+        // transport before a concurrent create can reuse the same name.
+        if let Some(registry) = &multi_registry {
+            if let Err(e) = registry.remove(&params.name) {
+                tracing::warn!(provider = %params.name, error = %e, "Failed to remove provider from live registry");
+            }
         }
     }
-
-    refresh_selectable_publication(
-        &config,
-        multi_registry.as_ref(),
-        Some(&vault),
-        &params.name,
-        false,
-    )
-    .await;
 
     // Broadcast event
     let timestamp = std::time::SystemTime::now()
@@ -829,7 +788,7 @@ pub async fn handle_healthcheck(
 /// indistinguishable from "the sweep did nothing": they asked to refresh a
 /// specific provider and got an empty array back. Skipping a bad record is
 /// usually right; doing it *silently* is what costs — so the skip is now a row
-/// carrying [`DiscoveryFailureKind::MissingCredential`], which is also the one
+/// carrying `MissingCredential`, which is also the one
 /// state the UI can actually act on ("link this provider first").
 ///
 /// The same is true one step earlier: a named id with **no config section at
@@ -857,164 +816,77 @@ pub async fn handle_models_refresh(
     };
     let only = params.provider;
 
-    /// One provider to sweep, or a reason it cannot be swept.
-    enum Target {
-        Probe {
-            name: String,
-            base_url: String,
-            protocol: String,
-            api_key: String,
-        },
-        Blocked(ModelsRefreshRow),
-    }
-
-    /// A row saying why a provider could not be probed at all.
-    fn blocked(name: &str, kind: DiscoveryFailureKind, error: String) -> Target {
-        Target::Blocked(ModelsRefreshRow {
-            provider: name.to_string(),
-            ok: false,
-            stale: false,
-            fetched_at: None,
-            models: Vec::new(),
-            kind: Some(kind),
-            error: Some(error),
-        })
-    }
-
-    // Same discipline as `handle_healthcheck`: snapshot under the read lock,
-    // release before any network I/O.
-    let targets: Vec<Target> = {
-        let cfg = config.read().await;
-        let mut targets: Vec<Target> = cfg
-            .providers
-            .iter()
-            .filter(|(name, pc)| match only.as_ref() {
-                // Naming a provider is saying "go look at this one" — an
-                // explicit request outranks the blanket sweep's opt-out.
-                Some(o) => o.eq_ignore_ascii_case(name),
-                None => pc.enabled,
-            })
-            .map(|(name, pc)| {
-                // Ordering, not a second gate. `refresh_models` already refuses
-                // these at the leaf, so nothing was ever dialled — but the
-                // credential check below runs *first*, so an unlinked preset
-                // that publishes no listing was reported as
-                // `MissingCredential`. That answer is worse than useless here:
-                // it is actionable ("paste a key") and the action changes
-                // nothing, because no key makes an endpoint grow a `/models`
-                // route. Asking the same predicate earlier is what puts the two
-                // refusals in the order that describes reality.
-                if !crate::providers::probe::supports_model_listing(name) {
-                    return blocked(
-                        name,
-                        DiscoveryFailureKind::Unsupported,
-                        format!("provider '{name}' publishes no model listing endpoint"),
-                    );
-                }
-                let preset = crate::providers::presets::get_preset(name);
-                let Some(base_url) = pc
-                    .base_url
-                    .clone()
-                    .or_else(|| preset.map(|p| p.base_url.to_string()))
-                else {
-                    warn!(provider = %name, "modelsRefresh: no base URL resolvable");
-                    return blocked(
-                        name,
-                        DiscoveryFailureKind::Unsupported,
-                        format!("provider '{name}' has no base URL to probe"),
-                    );
-                };
-                let protocol = pc
-                    .protocol
-                    .clone()
-                    .or_else(|| preset.map(|p| p.protocol.to_string()))
-                    .unwrap_or_else(|| "openai".to_string());
-                let Some(api_key) = pc.api_key.clone().or_else(|| resolve_api_key(name, &vault))
-                else {
-                    warn!(provider = %name, "modelsRefresh: no API key resolvable");
-                    return blocked(
-                        name,
-                        DiscoveryFailureKind::MissingCredential,
-                        format!("no credential configured for provider '{name}'"),
-                    );
-                };
-                Target::Probe {
-                    name: name.clone(),
-                    base_url,
-                    protocol,
-                    api_key,
-                }
-            })
-            .collect();
-
-        // A named id with no config section at all — an unlinked preset, or a
-        // typo. Silence here is the same lie as every other skipped record:
-        // the caller asked about one thing and got an empty list back.
-        if let Some(name) = only.as_deref() {
-            if targets.is_empty() {
-                targets.push(blocked(
-                    name,
-                    DiscoveryFailureKind::MissingCredential,
-                    format!("provider '{name}' is not configured"),
-                ));
-            }
-        }
-        targets
+    use crate::providers::model_catalog::{
+        refresh_configured_models, DiscoveryError, RefreshMode, RefreshOutcome,
     };
+    let mode = if only.is_some() {
+        RefreshMode::ForceNamed
+    } else {
+        RefreshMode::Force
+    };
+    let mut names: Vec<_> = config
+        .read()
+        .await
+        .providers
+        .iter()
+        .filter(|(name, pc)| {
+            only.as_ref()
+                .map_or(pc.enabled, |only| only.eq_ignore_ascii_case(name))
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    if names.is_empty() {
+        names.extend(only);
+    }
+    let outcomes = futures::future::join_all(names.into_iter().map(|name| {
+        let config = &config;
+        let vault = &vault;
+        async move {
+            let outcome = refresh_configured_models(config, &name, mode, |provider, _| {
+                resolve_api_key(provider, vault)
+            })
+            .await;
+            (name, outcome)
+        }
+    }))
+    .await;
 
-    let sweeps = targets.into_iter().map(|target| async move {
-        let (name, base_url, protocol, api_key) = match target {
-            Target::Blocked(row) => return row,
-            Target::Probe {
-                name,
-                base_url,
-                protocol,
-                api_key,
-            } => (name, base_url, protocol, api_key),
-        };
-        match crate::providers::model_catalog::refresh_models(&name, &base_url, &protocol, &api_key)
-            .await
-        {
-            Ok(listing) => ModelsRefreshRow {
-                provider: name,
-                ok: true,
-                stale: false,
-                fetched_at: Some(listing.fetched_at),
-                models: listing.models,
-                kind: None,
-                error: None,
-            },
-            Err(e) => {
-                let kind = failure_kind(&e);
-                // Stale snapshot beats an error row: report what the provider
-                // served last time, marked so the picker can show it as dated
-                // rather than live. The `kind` rides along either way — on a
-                // stale row it explains why the data is old.
-                match crate::providers::model_catalog::cached_models_async(&name, &base_url).await {
-                    Some(stale) => ModelsRefreshRow {
-                        provider: name,
-                        ok: true,
-                        stale: true,
-                        fetched_at: Some(stale.fetched_at),
-                        models: stale.models,
-                        kind: Some(kind),
-                        error: Some(e.to_string()),
-                    },
-                    None => ModelsRefreshRow {
-                        provider: name,
-                        ok: false,
-                        stale: false,
-                        fetched_at: None,
-                        models: Vec::new(),
-                        kind: Some(kind),
-                        error: Some(e.to_string()),
-                    },
+    // A fast provider can change scope while another provider is still fetching.
+    let guard = config.read().await;
+    let mut providers: Vec<_> = outcomes
+        .into_iter()
+        .map(|(name, outcome)| {
+            let (mut listing, mut stale, mut error) = match outcome {
+                Ok(RefreshOutcome::Fresh(listing) | RefreshOutcome::CacheHit(listing)) => {
+                    (Some(listing), false, None)
+                }
+                Ok(RefreshOutcome::Stale { listing, cause }) => (Some(listing), true, Some(cause)),
+                Err(error) => (None, false, Some(error)),
+            };
+            if let Some(accepted) = listing.as_ref() {
+                let current = crate::providers::model_catalog::discovery::configured_inventory(
+                    &config,
+                    &guard,
+                    &name,
+                    |provider, _| resolve_api_key(provider, &vault),
+                );
+                if !current.is_some_and(|current| current.same_acceptance(accepted)) {
+                    listing = None;
+                    stale = false;
+                    error = Some(DiscoveryError::Superseded(name.clone()));
                 }
             }
-        }
-    });
-
-    let mut providers = futures::future::join_all(sweeps).await;
+            ModelsRefreshRow {
+                provider: name,
+                ok: listing.is_some(),
+                stale,
+                fetched_at: listing.as_ref().map(|listing| listing.fetched_at),
+                models: listing.map(|listing| listing.models).unwrap_or_default(),
+                kind: error.as_ref().map(failure_kind),
+                error: error.map(|error| error.to_string()),
+            }
+        })
+        .collect();
     providers.sort_by(|a, b| a.provider.cmp(&b.provider));
 
     JsonRpcResponse::success(
@@ -1039,7 +911,16 @@ pub async fn handle_set_default_config_only(
         Err(e) => return e,
     };
 
-    set_default_provider_inner(&request, &params, &config, &event_bus, None, None).await
+    set_default_provider_inner(
+        &request,
+        &params,
+        &config,
+        &event_bus,
+        None,
+        None,
+        save_default_config,
+    )
+    .await
 }
 
 /// Set the default provider with runtime hot-swap
@@ -1062,8 +943,13 @@ pub async fn handle_set_default(
         &event_bus,
         Some(&multi_registry),
         Some(&vault),
+        save_default_config,
     )
     .await
+}
+
+async fn save_default_config(config: &Config) -> Result<(), String> {
+    save_config(config, &["general"]).await
 }
 
 /// Shared implementation for setting the default provider
@@ -1074,6 +960,7 @@ async fn set_default_provider_inner(
     event_bus: &Arc<GatewayEventBus>,
     multi_registry: Option<&Arc<crate::thinker::MultiProviderRegistry>>,
     vault: Option<&Arc<SharedTokenManager>>,
+    persist: impl AsyncFnOnce(&Config) -> Result<(), String>,
 ) -> JsonRpcResponse {
     // Resolve canonical name through the preset alias table (e.g. "codex" →
     // "chatgpt"). An exact config key match wins first (applied below against
@@ -1087,8 +974,7 @@ async fn set_default_provider_inner(
     // Set default provider and build new provider instance
     // H5-05: the provider built for the runtime swap, produced before the
     // switch is persisted so a build failure aborts the request.
-    let mut built_provider: Option<(String, Arc<dyn crate::providers::AiProvider>)> = None;
-    {
+    let (constructed, promoted) = {
         let mut cfg = config.write().await;
 
         // An exact (case-insensitive) config key beats the alias resolution:
@@ -1143,23 +1029,21 @@ async fn set_default_provider_inner(
         // persisted — a provider that cannot be constructed must not leave a
         // saved "new default" that the runtime never adopts, and the caller
         // must learn about it now.
-        if multi_registry.is_some() {
-            if let Some((provider_name, pc)) = provider_config_for_swap.as_ref() {
-                match crate::providers::create_provider(provider_name.as_str(), pc.clone()) {
-                    Ok(provider) => {
-                        built_provider = Some((provider_name.clone(), provider));
-                    }
-                    Err(e) => {
-                        error!(name = %provider_name, error = %e, "Failed to build provider for the default switch");
-                        return JsonRpcResponse::error(
-                            request.id.clone(),
-                            INTERNAL_ERROR,
-                            format!("Failed to build provider: {e}"),
-                        );
-                    }
+        let built_provider = if let Some((provider_name, pc)) = provider_config_for_swap {
+            match crate::providers::create_provider(&provider_name, pc) {
+                Ok(provider) => Some(provider),
+                Err(e) => {
+                    error!(name = %provider_name, error = %e, "Failed to build provider for the default switch");
+                    return JsonRpcResponse::error(
+                        request.id.clone(),
+                        INTERNAL_ERROR,
+                        format!("Failed to build provider: {e}"),
+                    );
                 }
             }
-        }
+        } else {
+            None
+        };
 
         // H5-04: same candidate-then-publish discipline as create/update — the
         // default switch is only published to the shared config once the file
@@ -1175,7 +1059,7 @@ async fn set_default_provider_inner(
         }
 
         // Save to file (redact resolved secrets before write)
-        if let Err(e) = save_config(&cfg_candidate, &["general"]).await {
+        if let Err(e) = persist(&cfg_candidate).await {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id.clone(),
@@ -1183,34 +1067,38 @@ async fn set_default_provider_inner(
                 format!("Failed to save config: {e}"),
             );
         }
-        *cfg = cfg_candidate;
-    }
+        discovery_authority::replace_config(&mut cfg, cfg_candidate);
 
-    let mut constructed = false;
-    // Hot-swap the runtime provider using MultiProviderRegistry
-    if let (Some(registry), Some((name, new_provider))) = (multi_registry, built_provider) {
-        registry.register(name.clone(), new_provider);
-        constructed = true;
-        if let Err(e) = registry.set_default(&name) {
-            error!(name = %name, error = %e, "Failed to set default in multi-registry");
-        } else {
-            // Clear the breaker that gates dialing, so a provider
-            // promoted to default is actually tried. This used to reset
-            // the registry's own health map instead — which fed only the
-            // `ModelResolved` badge and gated nothing — so promoting a
-            // provider whose circuit was open left it skipped for the
-            // rest of the cooldown. Same fix, and same reason, as the
-            // connection-test path above.
-            if let Some(health) = crate::providers::failover::global_health() {
-                if health.reset(&name).await {
-                    info!(name = %name, "set as default; failover circuit reset");
+        // OAuth renewal takes a Config read guard before replacing the bearer
+        // and transport. Publish the transport built under this write guard
+        // before releasing it, or an older bearer could overwrite a renewal.
+        if let (Some(registry), Some(new_provider)) = (multi_registry, built_provider) {
+            #[cfg(test)]
+            default_promotion_tests::assert_promotion_holds_write_lock(config);
+            registry.register(name.clone(), new_provider);
+            match registry.set_default(&name) {
+                Ok(()) => (true, Some((registry, name))),
+                Err(e) => {
+                    error!(name = %name, error = %e, "Failed to set default in multi-registry");
+                    (true, None)
                 }
             }
-            info!(name = %name, providers = ?registry.list_providers(), "Provider set as default in multi-registry");
+        } else {
+            (false, None)
         }
+    };
+
+    if let Some((registry, name)) = promoted {
+        // Reset the breaker that gates dialing, not the registry's badge state.
+        if let Some(health) = crate::providers::failover::global_health() {
+            if health.reset(&name).await {
+                info!(name = %name, "set as default; failover circuit reset");
+            }
+        }
+        info!(name = %name, providers = ?registry.list_providers(), "Provider set as default in multi-registry");
     }
 
-    refresh_selectable_publication(config, multi_registry, vault, &params.name, constructed).await;
+    refresh_selectable_publication(config, multi_registry, &params.name, constructed).await;
 
     // Broadcast event
     let timestamp = std::time::SystemTime::now()
@@ -1272,11 +1160,27 @@ pub async fn handle_catalog(
 
     let config_guard = config.read().await;
     let default_provider = config_guard.general.default_provider.clone();
-    // Snapshot the provider map and release the read guard before the
-    // discovery-cache reads below. Those are file I/O; holding a config lock
-    // across an await would block every writer of the config for the whole
-    // catalogue build, and the map is the only thing the two arms need.
+    // Read inventory against the same configuration as the roster; the
+    // process-local lookup never fetches from the vendor.
     let providers = config_guard.providers.clone();
+    let preset_overrides = config_guard.presets_override.clone();
+    let discovered: std::collections::HashMap<_, Vec<_>> = providers
+        .keys()
+        .filter_map(|name| {
+            crate::providers::model_catalog::discovery::configured_inventory(
+                &config,
+                &config_guard,
+                name,
+                |provider, _| resolve_api_key(provider, &vault),
+            )
+            .map(|listing| {
+                (
+                    name.clone(),
+                    listing.models.into_iter().map(|model| model.id).collect(),
+                )
+            })
+        })
+        .collect();
     drop(config_guard);
 
     let entries = catalog::presets_for_modality(Modality::Chat);
@@ -1339,37 +1243,7 @@ pub async fn handle_catalog(
             None,
         );
 
-        // The picker roster merges through the same leaf the failover
-        // walk uses (`presets::model_roster`), seeded with the operator's
-        // `models` or, when none are listed, the preset default. This is
-        // what stops the picker from recommending curated ids on a relay
-        // whose base_url the operator moved — they would 400 there.
-        //
-        // Live-discovered ids join here too, read from the on-disk cache
-        // only: `providers.catalog` is a read RPC and must not dial a
-        // vendor. `list_models` has folded discovered ids in since the
-        // round that added discovery, so until now the model could see a
-        // freshly fetched id and the human could not — one cache, one TTL,
-        // two different answers.
-        //
-        // Gated on `has_api_key`: `cached_models` is a synchronous file
-        // read, and discovery refuses to run without a credential, so a
-        // preset that has never had one cannot have a cache entry. Without
-        // this the catalogue would stat 56 files on every call — a page
-        // the Panel opens on every settings visit and every picker click.
-        let discovered = if has_api_key {
-            let effective_base_url = cfg
-                .and_then(|c| c.base_url.as_deref())
-                .unwrap_or(preset.base_url);
-            crate::providers::model_catalog::cached_models_async(cfg_name, effective_base_url)
-                .await
-                .map(|d| d.models.into_iter().map(|m| m.id).collect::<Vec<_>>())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        let roster = chat_presets::model_roster(
+        let mut roster = chat_presets::model_roster(
             entry.name,
             if models.is_empty() {
                 let d = preset.default_model;
@@ -1386,9 +1260,23 @@ pub async fn handle_catalog(
             } else {
                 ModelSource::Configured
             },
-            &discovered,
+            discovered
+                .get(cfg_name)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
             cfg.and_then(|c| c.base_url.as_deref()),
+            cfg.map_or(&[], |c| c.model_defs.as_slice()),
         );
+        if let Some(effective) = chat_presets::get_merged_preset(entry.name, &preset_overrides) {
+            chat_presets::append_catalog_models(
+                &mut roster,
+                entry.name,
+                cfg.and_then(|c| c.base_url.as_deref())
+                    .or(Some(&effective.base_url)),
+                cfg.and_then(|c| c.protocol.as_deref())
+                    .or(Some(&effective.protocol)),
+            );
+        }
 
         items.push(CatalogEntry {
             id: entry.name.to_string(),
@@ -1483,21 +1371,9 @@ pub async fn handle_catalog(
                 name,
                 cfg.models.clone(),
                 ModelSource::Configured,
-                // Same credential gate as the preset arm above: no key
-                // means discovery never ran, so there is no cache file to
-                // read.
-                &if has_api_key {
-                    crate::providers::model_catalog::cached_models_async(
-                        name,
-                        cfg.base_url.as_deref().unwrap_or_default(),
-                    )
-                    .await
-                    .map(|d| d.models.into_iter().map(|m| m.id).collect::<Vec<_>>())
-                    .unwrap_or_default()
-                } else {
-                    Vec::new()
-                },
+                discovered.get(name).map(Vec::as_slice).unwrap_or_default(),
                 cfg.base_url.as_deref(),
+                &cfg.model_defs,
             ),
         });
     }
@@ -1514,4 +1390,118 @@ pub async fn handle_catalog(
         request.id,
         serde_json::to_value(CatalogResult { items }).unwrap_or_else(|_| json!({ "items": [] })),
     )
+}
+
+#[cfg(test)]
+mod default_promotion_tests {
+    use super::*;
+    use crate::gateway::security::store::SecurityStore;
+    use crate::providers::DefaultProviderHandle;
+
+    tokio::task_local! {
+        static CHECK_PROMOTION_LOCK: ();
+    }
+
+    pub(super) fn assert_promotion_holds_write_lock(config: &RwLock<Config>) {
+        if CHECK_PROMOTION_LOCK.try_with(|_| ()).is_ok() {
+            assert!(
+                config.try_read().is_err(),
+                "transport published outside Config write lock"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn waiting_renewal_observes_promotion_before_installing_new_bearer() {
+        const PROVIDER: &str = "chatgpt";
+        const BEARER_KEY: &str = "ai:chatgpt";
+        const GRANT_KEY: &str = "ai:chatgpt:oauth";
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(SharedTokenManager::new(
+            Arc::new(SecurityStore::in_memory().unwrap()),
+            dir.path().join("test.vault"),
+        ));
+        vault.generate_token().unwrap();
+        vault
+            .store_secret_batch([(BEARER_KEY, "old-fixture"), (GRANT_KEY, "old-grant")])
+            .unwrap();
+        let mut provider = crate::config::ProviderConfig::test_config("org/model");
+        provider.api_key = None;
+        provider.protocol = Some("openai".into());
+        provider.base_url = Some("http://127.0.0.1:1/v1".into());
+        provider.verified = true;
+        let transport = |bearer: &str| {
+            let mut pc = provider.clone();
+            pc.api_key = Some(bearer.into());
+            crate::providers::create_provider(PROVIDER, pc).unwrap()
+        };
+        let boot = transport("boot-fixture");
+        let registry = Arc::new(crate::thinker::MultiProviderRegistry::new(
+            PROVIDER.into(),
+            boot.clone(),
+        ));
+        let mut cfg = Config::default();
+        cfg.providers.insert(PROVIDER.into(), provider.clone());
+        let config = Arc::new(RwLock::new(cfg));
+        let bus = Arc::new(GatewayEventBus::new());
+        let request = JsonRpcRequest::new("providers.setDefault", None, Some(json!(1)));
+        let params = SetDefaultParams {
+            name: PROVIDER.into(),
+        };
+        let (persisting, persisted) = tokio::sync::oneshot::channel();
+        let (release, resume) = tokio::sync::oneshot::channel();
+        let promote = set_default_provider_inner(
+            &request,
+            &params,
+            &config,
+            &bus,
+            Some(&registry),
+            Some(&vault),
+            async move |_| {
+                persisting.send(()).unwrap();
+                resume.await.unwrap();
+                Ok(())
+            },
+        );
+        let verify_and_renew = async {
+            persisted.await.unwrap();
+            assert!(config.try_read().is_err());
+            assert!(Arc::ptr_eq(&registry.current(), &boot));
+            release.send(()).unwrap();
+            // With no queued readers or writers, the registration probe
+            // distinguishes the write guard from an unlocked Config.
+            tokio::task::yield_now().await;
+            let config = config.read().await;
+            let mounted = registry.current();
+            assert!(mounted
+                .as_http_provider()
+                .unwrap()
+                .matches_configured_transport(PROVIDER, "openai", "old-fixture", |_| true,));
+            let (_, _, epoch) = vault
+                .oauth_refresh_snapshot(&config, PROVIDER, BEARER_KEY, GRANT_KEY)
+                .unwrap()
+                .unwrap();
+            let renewed = transport("new-fixture");
+            assert_eq!(
+                vault
+                    .refresh_secrets_if_current(
+                        PROVIDER,
+                        epoch,
+                        [(BEARER_KEY, "old-fixture"), (GRANT_KEY, "old-grant")],
+                        [(BEARER_KEY, "new-fixture"), (GRANT_KEY, "new-grant")],
+                        || registry.register(PROVIDER.into(), renewed),
+                    )
+                    .unwrap(),
+                Some(())
+            );
+        };
+        let (response, ()) =
+            tokio::join!(biased; CHECK_PROMOTION_LOCK.scope((), promote), verify_and_renew);
+        assert!(response.error.is_none(), "{:?}", response.error);
+        assert!(registry
+            .current()
+            .as_http_provider()
+            .unwrap()
+            .matches_configured_transport(PROVIDER, "openai", "new-fixture", |_| true,));
+    }
 }

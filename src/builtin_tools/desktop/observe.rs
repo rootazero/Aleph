@@ -1,58 +1,72 @@
-//! Post-action observation — closes the act→observe loop in one tool call.
-//!
-//! After a successful mutating action the model usually needs to see what
-//! happened before it can plan the next step. Without this it burns a whole
-//! extra round-trip on `screenshot` / `ax_snapshot`. orca returns a fresh
-//! snapshot from every action; UI-TARS re-screenshots after every action.
-//! Aleph makes it opt-in per call via `observe: "state" | "screenshot"`.
+//! Opt-in observation of the subject actually reached by an action.
 
 use std::time::Duration;
 
+use aleph_desktop::DesktopPlatform;
 use aleph_protocol::desktop_bridge::methods::ax::QueryFocusedParams;
-use serde_json::json;
+use serde_json::{json, Value};
 
-use crate::sync_primitives::Arc;
-
-/// Settle delay before observing — UI needs a beat to react (UI-TARS
-/// `loopIntervalInMs` parity).
 const SETTLE_MS: u64 = 300;
 
-/// Gather a lightweight textual post-action state: frontmost app and the
-/// focused element. Every part is best-effort — a missing capability or a
-/// query error just omits that field (this must never fail the action that
-/// already succeeded).
-pub(super) async fn gather_post_state(
-    platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
-) -> serde_json::Value {
+#[derive(Clone, Copy)]
+pub(super) enum PostTarget {
+    Global,
+    Process { pid: i32, window_id: Option<u32> },
+    Unavailable,
+}
+
+impl PostTarget {
+    pub(super) fn process(pid: i32, window_id: Option<u32>) -> Self {
+        if pid > 0 {
+            Self::Process {
+                pid,
+                window_id: window_id.filter(|id| *id != 0),
+            }
+        } else {
+            Self::Unavailable
+        }
+    }
+}
+
+/// Report observations separately from action success. An unavailable scope
+/// never interrogates the system foreground or the screen.
+pub(super) async fn gather_post_state(platform: &dyn DesktopPlatform, target: PostTarget) -> Value {
+    let (mut state, pid) = match target {
+        PostTarget::Global => (json!({"scope": "global"}), None),
+        PostTarget::Process { pid, .. } => {
+            (json!({"scope": "process", "target_pid": pid}), Some(pid))
+        }
+        PostTarget::Unavailable => {
+            return json!({"scope": "unavailable", "focus_status": "unavailable"})
+        }
+    };
+
     tokio::time::sleep(Duration::from_millis(SETTLE_MS)).await;
-
-    let mut state = serde_json::Map::new();
-
-    if let Some(system) = platform.system() {
-        if let Ok(apps) = system.list_running_apps().await {
-            if let Some(front) = apps.iter().find(|a| a.is_active) {
-                state.insert("frontmost_app".into(), json!(front.name));
+    if pid.is_none() {
+        if let Some(system) = platform.system() {
+            if let Ok(apps) = system.list_running_apps().await {
+                if let Some(front) = apps.iter().find(|a| a.is_active) {
+                    state["frontmost_app"] = json!(front.name);
+                }
             }
         }
     }
 
-    if let Some(ax) = platform.ax() {
-        if let Ok(Some(el)) = ax.query_focused(QueryFocusedParams::default()).await {
-            state.insert(
-                "focused_element".into(),
-                json!({
-                    "role": el.role,
-                    "title": el.title,
-                    // Through `safe_value`, not `el.value`: post-action state is
-                    // reported for whatever holds focus, which may well be the
-                    // password box the user just filled.
-                    "value": super::interactable::safe_value(&el).map(|v| {
-                        v.chars().take(200).collect::<String>()
-                    }),
-                }),
-            );
+    let focused = match platform.ax() {
+        Some(ax) => ax.query_focused(QueryFocusedParams { pid }).await.ok(),
+        None => None,
+    };
+    match focused {
+        Some(Some(el)) if pid.is_none_or(|expected| el.pid == expected) => {
+            state["focused_element"] = json!({
+                "role": el.role,
+                "title": el.title,
+                "value": super::interactable::safe_value(&el)
+                    .map(|value| value.chars().take(200).collect::<String>()),
+            });
         }
+        Some(None) => state["focus_status"] = json!("not_found"),
+        None | Some(Some(_)) => state["focus_status"] = json!("unavailable"),
     }
-
-    serde_json::Value::Object(state)
+    state
 }

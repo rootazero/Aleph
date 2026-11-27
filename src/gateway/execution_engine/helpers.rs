@@ -288,6 +288,7 @@ pub async fn run_dispatch_and_drain(
         // Never withholds the terminal frame: this wrapper has no retry loop
         // above it, so an attempt of its is always the run's last word.
         false,
+        None,
     )
     .await
     .map_err(ExecutionError::from)
@@ -306,6 +307,7 @@ pub async fn run_dispatch_and_drain_classified(
     locale: Locale,
     occupancy_out: &std::sync::Mutex<Option<RunContextOccupancy>>,
     may_retry: bool,
+    chat_cancellation: Option<&crate::gateway::execution_adapter::ChatRunCancellation>,
 ) -> Result<String, DispatchFailure> {
     // Session this run's provider dials are witnessed under. Captured before
     // `req` moves into the dispatch; the drain below reads the witness at the
@@ -316,11 +318,16 @@ pub async fn run_dispatch_and_drain_classified(
     // rust-doctor-disable-next-line excessive-clone
     let witness_session_for_fallback = witness_session.clone();
 
-    // Give the harness its child token before it can start, including on retries.
-    let handle = orchestrator
-        .dispatch_with_cancel(req, cancel_token.child_token())
-        .await
-        .map_err(map_flow_error)?;
+    let child_cancel = cancel_token.child_token();
+    let handle = match chat_cancellation {
+        Some(cancellation) => {
+            orchestrator
+                .dispatch_chat_attempt(req, cancellation, may_retry, child_cancel)
+                .await
+        }
+        None => orchestrator.dispatch_with_cancel(req, child_cancel).await,
+    }
+    .map_err(map_flow_error)?;
     // 2. Drain task. Resolves to the *prepared but unsent* terminal frame
     //    (`Some`) when the harness broadcast `Complete`, and to `None` when it
     //    never did — so step 4 can emit a safety-net `RunComplete` in the rare
@@ -350,7 +357,13 @@ pub async fn run_dispatch_and_drain_classified(
                         // their fallback notice while flushing on `Complete`, so
                         // a `ModelResolved` emitted after this point sets
                         // `fallback_info` that nothing will ever read.
-                        emit_route_correction(&emitter, &run_id, witness_session.as_deref()).await;
+                        emit_route_correction(
+                            &emitter,
+                            &run_id,
+                            witness_session.as_deref(),
+                            &drain_state,
+                        )
+                        .await;
                         return match hold_complete(&emitter, &run_id, &drain_state, outcome).await {
                             Ok(held) => Some(held),
                             Err(e) => {
@@ -399,7 +412,13 @@ pub async fn run_dispatch_and_drain_classified(
             // that never comes. `complete_forwarded` is the discriminator —
             // the drain reports whether it actually forwarded the frame.
             let held = drain.await.ok().flatten();
-            emit_route_correction(&emitter, run_id, witness_session_for_fallback.as_deref()).await;
+            emit_route_correction(
+                &emitter,
+                run_id,
+                witness_session_for_fallback.as_deref(),
+                &drain_state,
+            )
+            .await;
             // Both halves of this line were fixed independently and both are
             // load-bearing: the `held` guard stops a synthetic zeroed frame
             // from overwriting the real one the drain prepared, and the receipt
@@ -414,7 +433,8 @@ pub async fn run_dispatch_and_drain_classified(
             // report the run as whatever the final, instant, zeroed retry did.
             let superseded_by_a_retry =
                 may_retry && matches!(failure, DispatchFailure::Transient { .. });
-            if !superseded_by_a_retry {
+            // Managed failures get their one scoped RunError from execute().
+            if chat_cancellation.is_none() && !superseded_by_a_retry {
                 match held {
                     Some(held) => {
                         if let Err(err) = emit_held_complete(&emitter, run_id, &held).await {
@@ -436,15 +456,19 @@ pub async fn run_dispatch_and_drain_classified(
             // `settle_dropped_completion`'s doc, next to the code that does it.
 
             let failure = DispatchFailure::Fatal(format!("completion dropped: {e}"));
-            settle_dropped_completion(
-                &emitter,
-                run_id,
-                drain,
-                &failure,
-                locale,
-                TERMINAL_DRAIN_GRACE,
-            )
-            .await;
+            if chat_cancellation.is_some() {
+                drain.abort();
+            } else {
+                settle_dropped_completion(
+                    &emitter,
+                    run_id,
+                    drain,
+                    &failure,
+                    locale,
+                    TERMINAL_DRAIN_GRACE,
+                )
+                .await;
+            }
             return Err(failure);
         }
     };
@@ -492,6 +516,13 @@ pub async fn run_dispatch_and_drain_classified(
     //    and Panel consumers still observe the run end — with the full
     //    enriched summary instead of an all-zeros placeholder.
     let held = drain.await.ok().flatten();
+    // The real harness settles before its durable marker. This also fences
+    // runners that produce only a FlowOutcome, with no durable marker.
+    if let Some(cancellation) = chat_cancellation {
+        cancellation
+            .begin_terminal_commit()
+            .map_err(|_| DispatchFailure::Cancelled)?;
+    }
     if let Some(held) = held {
         // A successful attempt always speaks: `may_retry` is irrelevant here
         // because there is nothing left to supersede it.
@@ -502,7 +533,13 @@ pub async fn run_dispatch_and_drain_classified(
         // The drain never reached its correction either, so make it here — still
         // ahead of the terminal frame, which is the ordering channel replies
         // depend on. A no-op if the drain already took the witness.
-        emit_route_correction(&emitter, run_id, witness_session_for_fallback.as_deref()).await;
+        emit_route_correction(
+            &emitter,
+            run_id,
+            witness_session_for_fallback.as_deref(),
+            &drain_state,
+        )
+        .await;
         // No plan: this fallback fires precisely when the drain never saw the
         // `Complete` frame, so its latched execution list is unavailable here.
         let summary = super::event_drain::build_run_summary(&outcome, None);
@@ -590,9 +627,8 @@ async fn settle_dropped_completion(
 /// Emit the `ModelResolved` correction, if this run's provider dials ended up
 /// somewhere other than where the walk set out for.
 ///
-/// The run-start `ModelResolved` states what was *asked for*; it is emitted
-/// before anything has been dialed, so it cannot know about a migration. This is
-/// the other half: the failover walk records what actually answered
+/// The runner's `ModelResolved` states which initial binding it acquired,
+/// before any dial. The failover walk records what actually answered
 /// ([`route_witness`](crate::providers::route_witness)) and this turns that into
 /// the `is_fallback` flag every user-visible fallback notice gates on — Panel,
 /// TUI, CLI and the channel reply line.
@@ -607,6 +643,7 @@ async fn emit_route_correction(
     emitter: &Arc<dyn EventEmitter>,
     run_id: &str,
     session: Option<&str>,
+    state: &Arc<Mutex<DrainState>>,
 ) {
     let Some(session) = session else {
         return;
@@ -614,7 +651,8 @@ async fn emit_route_correction(
     let Some(witness) = crate::providers::route_witness::take(session) else {
         return;
     };
-    let Some(model_info) = correction_for(&witness) else {
+    let initial_model = state.lock().await.initial_model.clone();
+    let Some(model_info) = correction_for(&witness, initial_model.as_ref()) else {
         return;
     };
     tracing::info!(
@@ -622,7 +660,7 @@ async fn emit_route_correction(
         original = %witness.first.label(),
         served_provider = %witness.served.provider,
         served_model = %witness.served.label(),
-        "run was served by a fallback endpoint"
+        "run serving model differs from initial route attribution"
     );
     if let Err(e) = emitter
         .emit(crate::gateway::event_emitter::StreamEvent::ModelResolved {
@@ -647,16 +685,27 @@ async fn emit_route_correction(
 /// system, and every user-visible fallback notice hangs off it.
 fn correction_for(
     witness: &crate::providers::route_witness::RouteWitness,
+    initial: Option<&crate::providers::health::ModelInfo>,
 ) -> Option<crate::providers::health::ModelInfo> {
-    if !witness.deviated() {
+    if !witness.answered {
         return None;
     }
+    let model = witness.served.label();
+    let provider = &witness.served.provider;
+    let deviated = witness.deviated();
+    let changed =
+        initial.is_some_and(|initial| initial.provider != *provider || initial.model != model);
+    if !deviated && !changed {
+        return None;
+    }
+    let ignored_pin = initial
+        .filter(|info| info.is_fallback)
+        .and_then(|info| info.original_model.clone());
     Some(crate::providers::health::ModelInfo {
-        model: witness.served.label(),
-        // rust-doctor-disable-next-line excessive-clone
-        provider: witness.served.provider.clone(),
-        is_fallback: true,
-        original_model: Some(witness.first.label()),
+        model,
+        provider: provider.clone(),
+        is_fallback: deviated || ignored_pin.is_some(),
+        original_model: ignored_pin.or_else(|| deviated.then(|| witness.first.label())),
     })
 }
 
@@ -771,11 +820,17 @@ fn map_flow_error(err: FlowError) -> DispatchFailure {
 
 #[cfg(test)]
 mod route_correction_tests {
-    use super::correction_for;
+    fn correction_for(witness: &RouteWitness) -> Option<crate::providers::health::ModelInfo> {
+        super::correction_for(witness, None)
+    }
     use crate::providers::route_witness::{Dialed, RouteWitness};
 
     fn witness(first: Dialed, served: Dialed) -> RouteWitness {
-        RouteWitness { first, served }
+        RouteWitness {
+            first,
+            served,
+            answered: true,
+        }
     }
 
     #[test]
@@ -787,6 +842,33 @@ mod route_correction_tests {
             Dialed::new("openai", Some("gpt-5".into())),
         );
         assert!(correction_for(&w).is_none());
+    }
+
+    #[test]
+    fn a_promotion_before_the_first_dial_corrects_the_banner_and_keeps_the_ignored_pin() {
+        let dial = Dialed::new("new-primary", Some("new-model".into()));
+        let mut w = witness(dial.clone(), dial);
+        let mut initial = crate::providers::health::ModelInfo {
+            model: "old-model".into(),
+            provider: "old-primary".into(),
+            is_fallback: true,
+            original_model: Some("ignored-pin".into()),
+        };
+        assert!(!w.deviated());
+        let corrected = super::correction_for(&w, Some(&initial)).unwrap();
+        assert_eq!(corrected.provider, "new-primary");
+        assert_eq!(corrected.model, "new-model");
+        assert!(corrected.is_fallback);
+        assert_eq!(corrected.original_model.as_deref(), Some("ignored-pin"));
+        initial.is_fallback = false;
+        initial.original_model = None;
+        assert!(
+            !super::correction_for(&w, Some(&initial))
+                .unwrap()
+                .is_fallback
+        );
+        w.answered = false;
+        assert!(super::correction_for(&w, Some(&initial)).is_none());
     }
 
     #[test]

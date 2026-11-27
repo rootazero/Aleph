@@ -72,11 +72,10 @@ pub fn PhoneChat() -> impl IntoView {
             }
             // `stream.ask_user` is a one-shot push: seed from the registry so a
             // surface that connects mid-question still finds the parked tool.
-            match crate::api::ClarificationApi::list_pending(&dash).await {
-                Ok(list) => dash.pending_clarifications.set(list),
-                Err(e) => web_sys::console::error_1(
+            if let Err(e) = crate::api::ClarificationApi::refresh_pending(&dash).await {
+                web_sys::console::error_1(
                     &format!("phone chat pending clarifications failed: {e}").into(),
-                ),
+                );
             }
         });
     }

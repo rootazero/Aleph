@@ -30,6 +30,7 @@ use aleph_protocol::TokenBreakdownView;
 #[derive(Debug, Default)]
 pub(crate) struct DrainState {
     assembler: crate::gateway::message_assembly::MessageAssembler,
+    pub(super) initial_model: Option<crate::providers::health::ModelInfo>,
     /// `scratchpad` invocations seen this run: call id → "this call clears the
     /// plan". Populated on `ToolCallStart` because that is the only event
     /// carrying the tool name and its arguments.
@@ -88,6 +89,16 @@ pub(crate) async fn emit_flow_event(
                     })
                     .await?;
             }
+        }
+
+        FlowStreamEvent::ModelResolved(model_info) => {
+            state.lock().await.initial_model = Some(model_info.clone());
+            emitter
+                .emit(StreamEvent::ModelResolved {
+                    run_id: run_id.to_string(),
+                    model_info,
+                })
+                .await?;
         }
 
         FlowStreamEvent::Reasoning(text) => {

@@ -13,6 +13,21 @@ import Foundation
 /// from handlers (`router`) is itself an actor, and stdout writes are
 /// serialized by `stdoutLock`.
 final class Server {
+    struct RequestIngress: Sendable {
+        let receivedAt: ContinuousClock.Instant
+        let input: InputLifetime
+    }
+
+    final class InputLifetime: @unchecked Sendable {
+        private let lock = NSLock()
+        private var closed = false
+
+        var isClosed: Bool { lock.withLock { closed } }
+        func close() { lock.withLock { closed = true } }
+    }
+
+    @TaskLocal static var requestIngress: RequestIngress?
+
     let router: Router
     private let stderr = FileHandle.standardError
     private let stdoutLock = NSLock()
@@ -21,17 +36,22 @@ final class Server {
         self.router = router
     }
 
-    func run() async {
+    func run(onInputClosed: () async -> Void) async {
         let reader = LineReader(fileDescriptor: FileHandle.standardInput.fileDescriptor)
+        let input = InputLifetime()
         // TaskGroup so all in-flight handlers finish before run() returns —
         // guarantees responses flush before the process exits on stdin close.
         await withTaskGroup(of: Void.self) { group in
             while let line = reader.nextLine() {
-                let snapshot = line
+                let ingress = RequestIngress(receivedAt: ContinuousClock().now, input: input)
                 group.addTask { [weak self] in
-                    await self?.handleLine(snapshot)
+                    await Self.$requestIngress.withValue(ingress) {
+                        await self?.handleLine(line)
+                    }
                 }
             }
+            input.close()
+            await onInputClosed()
             await group.waitForAll()
         }
         stderr.write("aleph-bridge: stdin closed, exiting\n".data(using: .utf8)!)

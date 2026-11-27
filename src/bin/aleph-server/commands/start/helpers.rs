@@ -252,8 +252,9 @@ pub(super) async fn initialize_session_store(
                 // from macOS (':' separators) onto Windows (':'→'_'), where the
                 // transferred dir names no longer resolve so history lookups
                 // miss. Idempotent; a no-op when names already match. Runs
-                // before the legacy SQLite import (which always writes canonical
-                // names). Best-effort: never blocks startup.
+                // before the legacy SQLite import, which writes canonical dir
+                // names and folds its own per-peer `dm:` rows when it finishes.
+                // Best-effort: never blocks startup.
                 let normalized =
                     alephcore::gateway::session_store::migration::normalize_session_dir_names(
                         store.config().base_dir.as_path(),

@@ -61,6 +61,8 @@ pub struct ProviderPreset {
     /// `deps_builder::provider_chain` appends any rungs the operator did not
     /// list to the provider's failover model catalog.
     pub fallback_models: &'static [&'static str],
+    /// Reference-only direct models; never implicit selection or failover rungs.
+    pub catalog_models: &'static [&'static str],
     /// Cheap auxiliary model for memory summarization, vision, classification.
     /// `None` → the preset has no cheap tier; consumers (summary routing)
     /// deliberately do **not** fall back to `default_model` — background jobs
@@ -114,6 +116,7 @@ impl Default for ProviderPreset {
             default_model: "",
             aliases: &[],
             fallback_models: &[],
+            catalog_models: &[],
             default_aux_model: None,
             models_url: None,
             signup_url: None,
@@ -144,6 +147,7 @@ impl ProviderPreset {
             default_model,
             aliases: &[],
             fallback_models: &[],
+            catalog_models: &[],
             default_aux_model: None,
             models_url: None,
             signup_url: None,
@@ -167,6 +171,29 @@ impl ProviderPreset {
     pub const fn with_fallback_models(mut self, models: &'static [&'static str]) -> Self {
         self.fallback_models = models;
         self
+    }
+
+    #[must_use]
+    pub const fn with_catalog_models(mut self, models: &'static [&'static str]) -> Self {
+        self.catalog_models = models;
+        self
+    }
+
+    /// Reference entries apply only to the preset transport, not to relocated
+    /// endpoints or a different wire protocol configured under this name.
+    #[must_use]
+    pub fn catalog_models_for(
+        &self,
+        base_url: Option<&str>,
+        protocol: Option<&str>,
+    ) -> &'static [&'static str] {
+        if base_url.is_none_or(|url| url.trim_end_matches('/') == self.base_url)
+            && protocol.is_none_or(|protocol| protocol.eq_ignore_ascii_case(self.protocol))
+        {
+            self.catalog_models
+        } else {
+            &[]
+        }
     }
 
     #[must_use]
@@ -306,10 +333,17 @@ pub fn get_preset(name: &str) -> Option<&'static ProviderPreset> {
 /// background jobs, not a failover candidate for the main loop.
 #[must_use]
 pub fn model_ladder(name: &str, base: Vec<String>, operator_base_url: Option<&str>) -> Vec<String> {
-    model_roster(name, base, ModelSource::Configured, &[], operator_base_url)
-        .into_iter()
-        .map(|m| m.id)
-        .collect()
+    model_roster(
+        name,
+        base,
+        ModelSource::Configured,
+        &[],
+        operator_base_url,
+        &[],
+    )
+    .into_iter()
+    .map(|m| m.id)
+    .collect()
 }
 
 /// The same merge, with each rung's provenance and lifecycle attached.
@@ -341,35 +375,18 @@ pub fn model_roster(
     base_source: ModelSource,
     discovered: &[String],
     operator_base_url: Option<&str>,
+    model_defs: &[crate::config::types::ModelDef],
 ) -> Vec<RosterModel> {
     let mut out: Vec<RosterModel> = Vec::with_capacity(base.len() + discovered.len() + 4);
-    let push = |id: String, source: ModelSource, out: &mut Vec<RosterModel>| {
-        if id.is_empty() || out.iter().any(|m| m.id.eq_ignore_ascii_case(&id)) {
-            return;
-        }
-        // Through the one join point, not a direct `lifecycle_for`. This
-        // function used to reach past `ModelRecord::resolve` for the single
-        // dimension it had a use for, which is precisely how the roster
-        // shipped with a lifecycle and without the window and the price —
-        // a hand-picked join only carries what its author needed that day.
-        let record = crate::providers::model_catalog::ModelRecord::resolve(
-            name,
-            &id,
-            operator_base_url,
-            source,
-            None,
-        );
-        out.push(RosterModel {
-            id,
-            source,
-            lifecycle: record.lifecycle,
-            capabilities: record.capabilities,
-            cost: record.cost,
-        });
+    let push = |id, source, out: &mut Vec<RosterModel>| {
+        push_roster_model(out, name, id, source, operator_base_url, model_defs);
     };
 
     for id in base {
         push(id, base_source, &mut out);
+    }
+    for def in model_defs {
+        push(def.id.clone(), ModelSource::Configured, &mut out);
     }
     if let Some(preset) = get_preset(name) {
         let unmoved = operator_base_url.is_none_or(|u| u == preset.base_url);
@@ -383,6 +400,59 @@ pub fn model_roster(
         push(id.clone(), ModelSource::Discovered, &mut out);
     }
     out
+}
+
+/// Append reference-only choices after authoritative configured/discovered rows.
+pub(crate) fn append_catalog_models(
+    roster: &mut Vec<RosterModel>,
+    name: &str,
+    base_url: Option<&str>,
+    protocol: Option<&str>,
+) {
+    let Some(preset) = get_preset(name) else {
+        return;
+    };
+    for &model in preset.catalog_models_for(base_url, protocol) {
+        push_roster_model(
+            roster,
+            name,
+            model.to_owned(),
+            ModelSource::PresetCatalog,
+            base_url,
+            &[],
+        );
+    }
+}
+
+fn push_roster_model(
+    roster: &mut Vec<RosterModel>,
+    provider: &str,
+    id: String,
+    source: ModelSource,
+    base_url: Option<&str>,
+    model_defs: &[crate::config::types::ModelDef],
+) {
+    if id.is_empty()
+        || roster
+            .iter()
+            .any(|model| model.id.eq_ignore_ascii_case(&id))
+    {
+        return;
+    }
+    let record = crate::providers::model_catalog::ModelRecord::resolve(
+        provider,
+        &id,
+        base_url,
+        source,
+        model_defs.iter().find(|def| def.id == id),
+    );
+    roster.push(RosterModel {
+        id,
+        source,
+        lifecycle: record.lifecycle,
+        capabilities: record.capabilities,
+        cost: record.cost,
+    });
 }
 
 /// Get a preset with override support.
@@ -497,4 +567,32 @@ pub fn parse_temperature_policy(raw: &str) -> Option<TemperaturePolicy> {
 /// the wider coverage is strictly additive.
 pub fn resolve_provider_from_model(model: &str) -> Option<String> {
     crate::providers::model_catalog::infer_vendor(model).map(String::from)
+}
+
+#[cfg(test)]
+#[test]
+fn configured_model_def_reaches_preset_and_custom_rosters() {
+    let def: crate::config::types::ModelDef = serde_json::from_value(serde_json::json!({
+        "id": "operator-only-model",
+        "context_window": 64_000,
+    }))
+    .expect("valid model definition");
+    for provider in ["openai", "custom"] {
+        let roster = model_roster(
+            provider,
+            vec!["first-model".to_owned()],
+            ModelSource::Configured,
+            &["discovered-only-model".to_owned()],
+            None,
+            std::slice::from_ref(&def),
+        );
+        assert_eq!(roster[0].id, "first-model");
+        assert_eq!(roster[1].id, def.id);
+        assert_eq!(
+            roster[1].capabilities.as_ref().unwrap().context_window,
+            64_000
+        );
+        assert_eq!(roster.last().unwrap().id, "discovered-only-model");
+        assert!(!model_ladder(provider, vec!["first-model".to_owned()], None).contains(&def.id));
+    }
 }

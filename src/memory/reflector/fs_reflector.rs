@@ -214,6 +214,7 @@ mod tests {
                 raw_store: raw,
                 session_store: None,
                 provider: Some(crate::providers::create_mock_provider()),
+                provider_secrets: None,
                 extensions: Arc::new(MemoryExtensionRegistry::new()),
                 state_db: None,
                 default_agent_id: "callback-boundary".into(),

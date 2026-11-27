@@ -93,6 +93,7 @@ pub mod forward;
 #[cfg(any(unix, windows))]
 pub(super) mod local_ipc;
 pub mod off_loop;
+mod reply_writer;
 mod rpc;
 #[cfg(test)]
 mod transcript_fixture;
@@ -113,8 +114,12 @@ pub(super) const V1_METHODS: &[&str] = &[
     aleph_protocol::memory_graph::GRAPH_SEARCH_METHOD,
     aleph_protocol::memory_graph::GRAPH_NODE_DETAIL_METHOD,
     "chat.history",
+    "chat.models.list",
     "chat.send",
     "chat.abort",
+    aleph_protocol::panel_voice::VOICE_TURN_TRANSCRIBE_METHOD,
+    aleph_protocol::panel_voice::VOICE_TURN_SYNTHESIZE_METHOD,
+    aleph_protocol::panel_voice::VOICE_TURN_CANCEL_METHOD,
     aleph_protocol::chat_transcript::CHAT_TRANSCRIPT_DETAILS_METHOD,
     "trace.tool_output",
     "context.breakdown",
@@ -144,6 +149,10 @@ pub(super) const V1_EVENT_TOPICS: &[&str] = &[
     "stream.response_chunk",
     "stream.run_complete",
     "stream.run_error",
+    // The only frame a send's id ever gets when the message was folded into
+    // a run already live on its session; without it Chat waits on that id
+    // forever.
+    "stream.run_joined",
     aleph_protocol::chat_transcript::CHAT_TOOL_TOPIC,
     "connection.warning",
 ];

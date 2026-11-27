@@ -166,6 +166,8 @@ pub struct FailoverProvider {
     primary: Arc<dyn DefaultProviderHandle>,
     /// Static fallback chain, tried after the primary in order.
     fallbacks: Vec<FailoverNode>,
+    /// Reuse the named route's credential mount without changing slot order.
+    renewable_fallback: Option<(String, Arc<super::super::CredentialMount>)>,
     /// Provider name → model list. Boot snapshot; lets the live primary
     /// resolve its model list by name.
     model_catalog: HashMap<String, Vec<String>>,
@@ -216,6 +218,7 @@ impl FailoverProvider {
         Self {
             primary,
             fallbacks,
+            renewable_fallback: None,
             model_catalog,
             health,
             config,
@@ -223,6 +226,16 @@ impl FailoverProvider {
             provider_cooldown: None,
             derive_fallbacks_live: false,
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_renewable_fallback(
+        mut self,
+        name: String,
+        mount: Arc<super::super::CredentialMount>,
+    ) -> Self {
+        self.renewable_fallback = Some((name, mount));
+        self
     }
 
     /// Derive the fallback set live from the primary handle's registry on every
@@ -348,7 +361,15 @@ impl FailoverProvider {
                 }
             }
             // rust-doctor-disable-next-line excessive-clone
-            self.fallbacks.iter().find(|fb| fb.name == name).cloned()
+            let mut node = self.fallbacks.iter().find(|fb| fb.name == name).cloned()?;
+            if let Some((_, mount)) = self
+                .renewable_fallback
+                .as_ref()
+                .filter(|(key, _)| key == &name)
+            {
+                node.provider = mount.current();
+            }
+            Some(node)
         })
         .collect()
     }
@@ -767,8 +788,9 @@ impl FailoverProvider {
                         if first_attempt.is_none() && cand.name != super::NESTED_CHAIN_NODE {
                             let dialed = crate::providers::route_witness::Dialed::new(
                                 &cand.name,
-                                // rust-doctor-disable-next-line excessive-clone
-                                model.clone(),
+                                model.clone().or_else(|| {
+                                    cand.provider.serving_model_hint().map(Cow::into_owned)
+                                }),
                             );
                             if let Some(session) = witness_session {
                                 // rust-doctor-disable-next-line excessive-clone
@@ -827,8 +849,11 @@ impl FailoverProvider {
                                     if let Some(session) = witness_session {
                                         let served = crate::providers::route_witness::Dialed::new(
                                             &cand.name,
-                                            // rust-doctor-disable-next-line excessive-clone
-                                            model.clone(),
+                                            model.clone().or_else(|| {
+                                                cand.provider
+                                                    .serving_model_hint()
+                                                    .map(Cow::into_owned)
+                                            }),
                                         );
                                         crate::providers::route_witness::record_success(
                                             session,
@@ -1101,7 +1126,33 @@ impl FailoverProvider {
     }
 }
 
+impl FailoverProvider {
+    /// Resolve the requested name without traversing the fallback ladder.
+    pub(crate) fn initial_route(&self) -> (String, Option<String>) {
+        let primary = self.primary.current();
+        let provider = primary
+            .serving_provider_hint()
+            .unwrap_or_else(|| Cow::Borrowed(primary.name()));
+        (
+            provider.into_owned(),
+            primary.serving_model_hint().map(Cow::into_owned),
+        )
+    }
+
+    pub fn exact_transport(&self, name: &str) -> Option<Arc<dyn AiProvider>> {
+        let provider = self
+            .primary
+            .provider_by_name(name)
+            .unwrap_or_else(|| self.primary.current());
+        (provider.serving_provider_hint().as_deref() == Some(name)).then_some(provider)
+    }
+}
+
 impl AiProvider for FailoverProvider {
+    fn as_failover_provider(&self) -> Option<&FailoverProvider> {
+        Some(self)
+    }
+
     fn process<'a>(
         &'a self,
         payload: RequestPayload<'a>,

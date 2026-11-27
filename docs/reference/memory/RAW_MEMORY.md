@@ -226,7 +226,7 @@ Operational implication: owner-authorized raw deletion is exposed through the ra
 
 ## 9. Retention Invariant (Provenance Chain Protection)
 
-**Any future time-based or size-based garbage-collection sweep of Markdown raw memory must exclude records referenced by the provenance chain.** Concretely: before deleting a row, verify that `notes_citing(raw_id)` is empty — i.e. the row is not cited as a `source_notes` entry in any note, and is not referenced in any `notes_provenance` or `notes_sources` table. If a row is still referenced, it must be retained even if it falls outside the retention window.
+**Any future time-based or size-based garbage-collection sweep of Markdown raw memory must exclude records referenced by the provenance chain.** Concretely: before deleting a row, verify that `notes_citing(agent_id, raw_id, 1)` returns no projected match in the same partition and that the projection is current. An empty bounded lookup alone does not prove that manually edited Markdown has been reindexed. / 删除前用同分区、有界反查检查引用，并确认投影已追上 Markdown。 If a row is still referenced, it must be retained even if it falls outside the retention window.
 
 Today (as of 2026-06-27) no time-based sweep exists; this invariant documents the pin to honor when one is added.
 

@@ -14,8 +14,9 @@ readme = "README.md"
 aleph-desktop = { path = "../shared" }
 aleph-protocol = { path = "../../shared/protocol" }
 async-trait = "0.1"
-tokio = { version = "1.53.3", features = ["rt", "process"] }
+tokio = { version = "1.53.3", features = ["rt", "process", "sync", "io-util", "time"] }
 chrono = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 # Camera-frame base64 encoding + JPEG dimension probing (workspace deps,
@@ -41,8 +42,13 @@ windows = { version = "0.62", features = [
     # macOS Swift-bridge AX layer). COM is needed to instantiate CUIAutomation.
     "Win32_UI_Accessibility",
     "Win32_System_Com",
+    # Offline SAPI dictation: locale mapping and a finite PCM IStream.
+    "Win32_Globalization",
+    "Win32_Media_Audio",
+    "Win32_Media_Speech",
+    "Win32_System_Com_StructuredStorage",
 ] }
-# Removed 2026-07-28: `Win32_Globalization`, `Foundation` and `UI_Notifications`
+# Removed 2026-07-28: `Foundation` and `UI_Notifications`
 # had no consumer in this crate. The toast path drives WinRT *through
 # PowerShell*, never through these bindings; the WinRT OCR code that does use
 # `Globalization`/`Foundation` lives in `desktop/shared`, which declares them
@@ -52,3 +58,6 @@ windows = { version = "0.62", features = [
 
 # Clipboard operations
 clipboard-win = "5"
+
+[dev-dependencies]
+tokio = { version = "1.53.3", features = ["test-util"] }

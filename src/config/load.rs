@@ -9,6 +9,25 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, error, info, warn};
 
+fn without_snapshot_installation(path: &Path, contents: String) -> Result<String> {
+    let mut document = contents.parse::<toml::Table>().map_err(|err| {
+        AlephError::invalid_config(format!(
+            "Failed to parse config file {}: {err}",
+            path.display()
+        ))
+    })?;
+    let installation = document
+        .get_mut("desktop")
+        .and_then(toml::Value::as_table_mut)
+        .and_then(|desktop| desktop.remove("offline_stt"));
+    if installation.is_none() {
+        return Ok(contents);
+    }
+    toml::to_string(&document).map_err(|err| {
+        AlephError::invalid_config(format!("Failed to read rollback snapshot: {err}"))
+    })
+}
+
 /// The config file this process was told to use, if `--config` named one.
 /// Write-once so that no code path can move the file out from under a
 /// consumer that already cached it (`ConfigPatcher`, `AgentManager`, the
@@ -44,6 +63,9 @@ pub(crate) const fn effective_config_path_slot() -> &'static dyn SlotStatus {
 struct SecuritySsrfOverrides {
     enabled: Option<bool>,
     allow_tool_private_network: Option<bool>,
+    // Retired webhook policy from older desktop configs. It never grants
+    // access under the current policy, even if the old value was true.
+    allow_webhook_private_network: Option<bool>,
     max_redirects: Option<i64>,
     allowed_hosts: Option<Vec<String>>,
     blocked_hosts: Option<Vec<String>>,
@@ -171,8 +193,14 @@ impl Config {
     pub fn load_from_file_reporting_dead_keys<P: AsRef<Path>>(
         path: P,
     ) -> Result<(Self, Vec<String>)> {
-        let path = path.as_ref();
+        Self::load_file(path.as_ref(), false)
+    }
 
+    pub(super) fn load_rollback_snapshot(path: &Path) -> Result<Self> {
+        Self::load_file(path, true).map(|(config, _)| config)
+    }
+
+    fn load_file(path: &Path, rollback_snapshot: bool) -> Result<(Self, Vec<String>)> {
         debug!(path = %path.display(), "Attempting to load config from file");
 
         // Check if file exists
@@ -228,10 +256,13 @@ impl Config {
         // comparing against the intermediate (post-mcp-builtin) string would
         // miss the case where only the [mcp.builtin] migration fired, leaving
         // it unpersisted and re-run on every load.
-        let migrated_mcp_contents = Self::migrate_mcp_builtin_in_toml(&contents)?;
-        let migrated_contents = migrated_mcp_contents;
+        let migrated_contents = Self::migrate_mcp_builtin_in_toml(&contents)?;
         let migrated = migrated_contents != contents;
-        let contents = migrated_contents;
+        let contents = if rollback_snapshot {
+            without_snapshot_installation(path, migrated_contents)?
+        } else {
+            migrated_contents
+        };
 
         // Parse TOML. Routed through `dead_keys` rather than `toml::from_str`
         // so that the keys serde discards are named instead of vanishing —
@@ -290,7 +321,7 @@ impl Config {
 
         config.validate()?;
 
-        if migrated {
+        if migrated && !rollback_snapshot {
             // Persist only the sections the migrations touch. A full
             // `save_to_file` re-serializes `Config` and silently drops
             // top-level sections that are not `Config` fields (e.g.
@@ -439,6 +470,11 @@ impl Config {
         }
         if let Some(v) = overrides.allow_tool_private_network {
             config.ssrf.allow_private_network = v;
+        }
+        if overrides.allow_webhook_private_network.is_some() {
+            warn!(
+                "security.ssrf.allow_webhook_private_network is retired and ignored; remove it from the config file"
+            );
         }
         if let Some(v) = overrides.max_redirects {
             // Validate rather than silently clamp: a 9999 (or negative) value
@@ -612,6 +648,18 @@ allow_tool_private_network = true
 "#,
         );
         assert!(cfg.ssrf.allow_private_network);
+    }
+
+    #[test]
+    fn retired_webhook_private_network_setting_does_not_block_upgrade_or_change_policy() {
+        for old_value in [false, true] {
+            let cfg = load_with_toml(&format!(
+                "[security.ssrf]\nallow_webhook_private_network = {old_value}\nmax_redirects = 2\n"
+            ));
+            assert!(cfg.ssrf.enabled);
+            assert!(!cfg.ssrf.allow_private_network);
+            assert_eq!(cfg.ssrf.max_redirects, 2);
+        }
     }
 
     #[test]

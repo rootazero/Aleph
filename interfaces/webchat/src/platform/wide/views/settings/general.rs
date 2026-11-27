@@ -1,4 +1,5 @@
 use super::desktop_autostart::DesktopAutostartSection;
+use crate::components::token_wall::PairThisDevice;
 use crate::api::{ConfigApi, GeneralConfig, GeneralConfigApi};
 use crate::context::{DashboardState, GATEWAY_NOT_READY};
 use crate::i18n::{t, t_string, use_i18n, Locale};
@@ -87,6 +88,8 @@ pub fn GeneralView() -> impl IntoView {
                     {t!(i18n, settings.general.description)}
                 </p>
             </div>
+
+            <PairThisDevice />
 
             // Hoisted out of the config branch below. A failed load now leaves
             // `config` at `None`, so an error rendered *inside* that branch

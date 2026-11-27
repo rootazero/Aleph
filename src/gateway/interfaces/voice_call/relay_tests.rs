@@ -309,7 +309,7 @@ impl HarnessRunner for Runner {
         _: Option<String>,
         _: Option<crate::agents::thinking::ThinkLevel>,
         _: crate::thinker::TurnEnvelope,
-        _: Option<crate::providers::session_model_handle::SessionModelPref>,
+        _: Option<crate::orchestrator::dispatch::RunModelDirective>,
         _: String,
         _: Option<TelecomPublicContext>,
     ) -> Result<FlowOutcome, FlowError> {

@@ -1032,9 +1032,29 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
     generation_registry: Option<
         Arc<alephcore::sync_primitives::RwLock<alephcore::generation::GenerationProviderRegistry>>,
     >,
+    shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
+    #[cfg(target_os = "macos")] offline_speech_root: Option<std::path::PathBuf>,
+    #[cfg(target_os = "linux")] installation: Option<aleph_desktop_linux::OfflineSttInstallation>,
 ) {
     use alephcore::gateway::handlers::voice;
     use alephcore::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, SERVICE_UNAVAILABLE};
+
+    #[cfg(target_os = "linux")]
+    let offline_stt_mounted = installation.is_some();
+    #[cfg(target_os = "windows")]
+    let offline_worker = match std::env::current_exe() {
+        Ok(executable) if executable.is_absolute() => Some(executable),
+        Ok(_) => {
+            tracing::warn!("offline speech unavailable: server executable path is not absolute");
+            None
+        }
+        Err(error) => {
+            tracing::warn!(%error, "could not locate server executable for offline speech");
+            None
+        }
+    };
+    #[cfg(target_os = "windows")]
+    let offline_stt_mounted = offline_worker.is_some();
 
     // A fresh platform handle — cheap, and mirrors how the presence / mic-level
     // reporters and the builtin tool registry each construct their own.
@@ -1045,11 +1065,19 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
         }
         #[cfg(target_os = "linux")]
         {
-            Arc::new(aleph_desktop_linux::LinuxPlatform::new())
+            use aleph_desktop_linux::LinuxPlatform;
+            Arc::new(match installation {
+                Some(installation) => LinuxPlatform::with_offline_stt(installation),
+                None => LinuxPlatform::new(),
+            })
         }
         #[cfg(target_os = "windows")]
         {
-            Arc::new(aleph_desktop_windows::WindowsPlatform::new())
+            use aleph_desktop_windows::WindowsPlatform;
+            Arc::new(offline_worker.map_or_else(
+                WindowsPlatform::new,
+                WindowsPlatform::with_offline_stt_worker,
+            ))
         }
     };
 
@@ -1064,6 +1092,42 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
         "voice.record_stop",
         voice::handle_record_stop,
         platform
+    );
+
+    // Whole-turn STT. With no configured provider, owner Desktop IPC may use the
+    // host's installed recognizer, reading a clip staged under the media root
+    // the platform bridge permits.
+    #[cfg(not(target_os = "macos"))]
+    let offline_speech_root = if offline_stt_mounted {
+        match crate::commands::start::resolve_offline_speech_root() {
+            Ok(root) => Some(root),
+            Err(error) => {
+                tracing::warn!(%error, "offline speech unavailable");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let offline = offline_speech_root.map(|root| {
+        alephcore::gateway::handlers::voice_turn::OfflineSpeechAdapter::new(platform.clone(), root)
+    });
+    alephcore::gateway::handlers::voice_turn::register_transcription(
+        server.handlers_mut(),
+        config.clone(),
+        shared_token_mgr,
+        offline,
+    );
+    alephcore::gateway::handlers::voice_turn::register_cancel(server.handlers_mut());
+    alephcore::gateway::handlers::voice_turn::register_capture(
+        server.handlers_mut(),
+        Some(platform.clone()),
+    );
+
+    alephcore::gateway::handlers::voice_turn::register_synthesis(
+        server.handlers_mut(),
+        config.clone(),
+        generation_registry.clone(),
     );
 
     // Registered unconditionally: a boot path that resolves no generation

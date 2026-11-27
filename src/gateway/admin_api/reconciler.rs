@@ -145,6 +145,7 @@ mod tests {
                 raw_store: Arc::new(raw_store),
                 session_store: None,
                 provider: None,
+                provider_secrets: None,
                 extensions: Arc::new(MemoryExtensionRegistry::new()),
                 state_db: Some(state_db.clone()),
                 default_agent_id: crate::routing::DEFAULT_AGENT_ID.into(),

@@ -684,7 +684,7 @@ mod tests {
                 team_id: None,
             },
         );
-        assert_eq!(route.session_key.to_key_string(), "agent:main:dm:user123");
+        assert_eq!(route.session_key.to_key_string(), "agent:main:peer:user123");
     }
 
     #[test]
@@ -765,7 +765,7 @@ mod tests {
             },
         );
         // Should resolve to canonical "john" instead of "123"
-        assert_eq!(route.session_key.to_key_string(), "agent:main:dm:john");
+        assert_eq!(route.session_key.to_key_string(), "agent:main:peer:john");
     }
 
     #[test]

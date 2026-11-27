@@ -21,7 +21,6 @@ mod loop_origin_race;
 /// Test event emitter that collects events
 pub(super) struct TestEmitter {
     events: Arc<RwLock<Vec<StreamEvent>>>,
-    event_count: AtomicUsize,
     seq_counter: AtomicU64,
 }
 
@@ -29,7 +28,6 @@ impl TestEmitter {
     pub(super) fn new() -> Self {
         Self {
             events: Arc::new(RwLock::new(Vec::new())),
-            event_count: AtomicUsize::new(0),
             seq_counter: AtomicU64::new(0),
         }
     }
@@ -43,7 +41,6 @@ impl TestEmitter {
 impl EventEmitter for TestEmitter {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
         self.events.write().await.push(event);
-        self.event_count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -560,6 +557,7 @@ async fn two_sessions_same_agent_run_in_parallel() {
             tx_a,
             &mut rx_a,
             tokio_util::sync::CancellationToken::new(),
+            None,
         )
         .await
         .expect("run A must be admitted");
@@ -582,6 +580,7 @@ async fn two_sessions_same_agent_run_in_parallel() {
             tx_b,
             &mut rx_b,
             tokio_util::sync::CancellationToken::new(),
+            None,
         )
         .await
         .expect("run B on a different session of the SAME agent must be admitted");
@@ -627,12 +626,13 @@ async fn a_run_waiting_for_a_concurrency_permit_can_still_be_cancelled() {
             tx_a,
             &mut rx_a,
             tokio_util::sync::CancellationToken::new(),
+            None,
         )
         .await
         .expect("run A must be admitted")
     {
         GateOutcome::Admitted(slot) => slot,
-        GateOutcome::HandledInline => panic!("an idle session must not be handled inline"),
+        GateOutcome::HandledInline { .. } => panic!("an idle session must not be handled inline"),
     };
 
     // Run B is on a different session (its own slot is free) but the agent's
@@ -650,6 +650,7 @@ async fn a_run_waiting_for_a_concurrency_permit_can_still_be_cancelled() {
                 tx_b,
                 &mut rx_b,
                 tokio_util::sync::CancellationToken::new(),
+                None,
             )
             .await
             .map(|outcome| matches!(outcome, GateOutcome::Admitted(_)))
@@ -689,6 +690,104 @@ async fn a_run_waiting_for_a_concurrency_permit_can_still_be_cancelled() {
     );
 }
 
+#[tokio::test]
+async fn execute_chat_run_cancels_at_ticket_handoff_and_while_waiting_for_a_permit() {
+    use crate::gateway::{busy_queue, ExecutionAdapter};
+
+    let temp = tempfile::tempdir().unwrap();
+    let agent_id = "exact-capped-agent";
+    let agent = gate_test_agent(&temp, agent_id).await;
+    let engine = Arc::new(test_engine_with_config(ExecutionEngineConfig {
+        max_runs_global: 8,
+        max_runs_per_agent: 1,
+        ..Default::default()
+    }));
+    // Keep this permit for both attempts. Neither cancellation may need it to be released.
+    let _held_permit = engine.concurrency.try_acquire(agent_id).unwrap();
+    let session = SessionKey::peer(agent_id, "conv");
+    let key = session.to_key_string();
+    let wait = std::time::Duration::from_secs(3);
+
+    for (run_id, block_registration) in [("exact-handoff", true), ("exact-parked", false)] {
+        let request = gate_test_request(&session, run_id);
+        let _ticket =
+            busy_queue::register_run(&request.session_key, &request.metadata, 8, run_id).unwrap();
+        let registration_lock = if block_registration {
+            Some(engine.active_runs.write().await)
+        } else {
+            None
+        };
+        let cancellation = engine.chat_run_cancellation().unwrap();
+        let emitter = Arc::new(TestEmitter::new());
+        let parked = tokio::spawn({
+            let engine = engine.clone();
+            let agent = agent.clone();
+            let emitter = emitter.clone();
+            let cancellation = cancellation.clone();
+            async move {
+                engine
+                    .execute_chat_run(request, agent, emitter, cancellation)
+                    .await
+            }
+        });
+
+        tokio::time::timeout(wait, async {
+            loop {
+                let reached_boundary = if block_registration {
+                    busy_queue::pending_for(&key).is_empty()
+                } else {
+                    engine.get_status(run_id).await.is_some()
+                };
+                if reached_boundary {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("run must reach its admission boundary");
+        if let Some(rows) = &registration_lock {
+            assert!(
+                !rows.contains_key(run_id),
+                "ticket disappeared before registration"
+            );
+        } else {
+            assert!(busy_queue::pending_for(&key).is_empty());
+        }
+        assert!(cancellation.request().await.unwrap());
+        drop(registration_lock);
+        assert!(matches!(
+            tokio::time::timeout(wait, parked).await.unwrap().unwrap(),
+            Err(ExecutionError::Cancelled)
+        ));
+        assert!(engine.get_status(run_id).await.is_none());
+        let events = emitter.get_events().await;
+        assert!(
+            matches!(
+                events.as_slice(),
+                [StreamEvent::RunError {
+                    run_id: terminal_run,
+                    error_code: Some(code),
+                    session_key: Some(scope),
+                    ..
+                }] if terminal_run == run_id && code == "CANCELLED" && scope == &key
+            ),
+            "expected one scoped cancellation, got {events:?}"
+        );
+        assert!(agent
+            .session_store()
+            .get_metadata(&session)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(
+            !cancellation.request().await.unwrap(),
+            "terminal cancellation is not acknowledged again"
+        );
+    }
+    assert!(engine.session_run_registry.try_claim(&session, "successor"));
+}
+
 /// Task 6 regression: a second message on the SAME session while a run is
 /// still active must still take the busy-input path (`try_claim` returns
 /// `false`) — the session-scoped claim must not accidentally admit two runs
@@ -716,6 +815,7 @@ async fn second_message_same_session_takes_busy_path() {
             tx1,
             &mut rx1,
             tokio_util::sync::CancellationToken::new(),
+            None,
         )
         .await
         .expect("first run must be admitted");
@@ -734,6 +834,7 @@ async fn second_message_same_session_takes_busy_path() {
             tx2,
             &mut rx2,
             tokio_util::sync::CancellationToken::new(),
+            None,
         )
         .await;
     match outcome2 {
@@ -771,6 +872,7 @@ async fn run_slot_drop_releases_session_for_reclaim() {
             tx1,
             &mut rx1,
             tokio_util::sync::CancellationToken::new(),
+            None,
         )
         .await
         .expect("first run must be admitted");
@@ -789,6 +891,7 @@ async fn run_slot_drop_releases_session_for_reclaim() {
             tx2,
             &mut rx2,
             tokio_util::sync::CancellationToken::new(),
+            None,
         )
         .await
         .expect("run after release must be admitted");
@@ -839,6 +942,7 @@ async fn cancel_session_cancels_in_flight_delegated_child() {
             member_tx,
             &mut member_rx,
             tokio_util::sync::CancellationToken::new(),
+            None,
         )
         .await
         .expect("member run must be admitted");
@@ -915,6 +1019,7 @@ async fn cancel_session_cancels_own_run_and_in_flight_delegated_child() {
             leader_tx,
             &mut leader_rx,
             tokio_util::sync::CancellationToken::new(),
+            None,
         )
         .await
         .expect("leader run must be admitted");
@@ -933,6 +1038,7 @@ async fn cancel_session_cancels_own_run_and_in_flight_delegated_child() {
             member_tx,
             &mut member_rx,
             tokio_util::sync::CancellationToken::new(),
+            None,
         )
         .await
         .expect("member run must be admitted");
@@ -1004,6 +1110,7 @@ async fn interrupt_on_fanout_session_cancels_parent_and_children() {
             leader_tx,
             &mut leader_rx,
             tokio_util::sync::CancellationToken::new(),
+            None,
         )
         .await
         .expect("leader run must be admitted");
@@ -1022,6 +1129,7 @@ async fn interrupt_on_fanout_session_cancels_parent_and_children() {
             member_tx,
             &mut member_rx,
             tokio_util::sync::CancellationToken::new(),
+            None,
         )
         .await
         .expect("member run must be admitted");
@@ -1059,6 +1167,7 @@ async fn interrupt_on_fanout_session_cancels_parent_and_children() {
             int_tx,
             &mut int_rx,
             tokio_util::sync::CancellationToken::new(),
+            None,
         )
         .await;
     assert!(
@@ -1786,6 +1895,7 @@ async fn guest_slash_command_for_a_dangerous_tool_never_reaches_the_registry() {
                 &request,
                 Arc::clone(&agent),
                 Arc::clone(&emitter),
+                None,
             )
             .await
             .expect_err("a guest must not fast-path a dangerous tool");
@@ -1822,7 +1932,7 @@ async fn a_slash_command_owned_by_an_invisible_plugin_is_refused_before_dispatch
     })
     .to_string();
     let err = engine
-        .execute_slash_command_fast_path("slash-run", &mode, &request, agent, emitter)
+        .execute_slash_command_fast_path("slash-run", &mode, &request, agent, emitter, None)
         .await
         .expect_err("an invisible owner must be refused");
     match err {
@@ -1852,6 +1962,7 @@ async fn guest_slash_command_for_an_operator_tool_falls_through() {
             &request,
             agent,
             emitter,
+            None,
         )
         .await
         .expect_err("cron_manage is an operator tool");
@@ -1880,6 +1991,7 @@ async fn confirmation_gated_tool_falls_through_even_for_an_operator() {
                 &request,
                 Arc::clone(&agent),
                 Arc::clone(&emitter),
+                None,
             )
             .await
             .expect_err("a confirm-gated tool must not fast-path");
@@ -1912,6 +2024,7 @@ async fn auto_tier_destructive_file_ops_argument_falls_through_but_a_read_does_n
             &request,
             Arc::clone(&agent),
             Arc::clone(&emitter),
+            None,
         )
         .await
         .expect_err("a destructive file_ops call asks under Auto");
@@ -1926,6 +2039,7 @@ async fn auto_tier_destructive_file_ops_argument_falls_through_but_a_read_does_n
             &request,
             agent,
             emitter,
+            None,
         )
         .await
         .expect("a read-shaped file_ops call still takes the fast path");
@@ -1956,6 +2070,7 @@ async fn configured_slash_target_falls_through_and_unconfigured_target_fast_path
             &slash_request(&session, None),
             Arc::clone(&agent),
             Arc::clone(&emitter),
+            None,
         )
         .await
         .expect_err("configured canonical target must leave the raw shortcut");
@@ -1972,6 +2087,7 @@ async fn configured_slash_target_falls_through_and_unconfigured_target_fast_path
             &slash_request(&session, None),
             agent,
             emitter,
+            None,
         )
         .await
         .expect("unconfigured target retains the fast path");
@@ -2005,6 +2121,7 @@ async fn operator_slash_command_for_an_ungated_tool_still_fast_paths() {
                 &request,
                 Arc::clone(&agent),
                 Arc::clone(&emitter),
+                None,
             )
             .await
             .unwrap_or_else(|e| panic!("`/{tool}` must fast-path for an operator, got {e:?}"));
@@ -2034,6 +2151,7 @@ struct WitnessToolRegistry {
     session: SessionKey,
     calls: AtomicUsize,
     seen: std::sync::Mutex<Option<Vec<crate::session::SessionEventRecord>>>,
+    result: serde_json::Value,
 }
 
 impl WitnessToolRegistry {
@@ -2042,6 +2160,7 @@ impl WitnessToolRegistry {
             session,
             calls: AtomicUsize::new(0),
             seen: std::sync::Mutex::new(None),
+            result: serde_json::json!({"_display": "ran"}),
         }
     }
     fn calls(&self) -> usize {
@@ -2074,7 +2193,7 @@ impl crate::executor::ToolRegistry for WitnessToolRegistry {
                 .await
                 .expect("the log is readable from inside the tool body");
             *self.seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(log);
-            Ok(serde_json::json!({"_display": "ran"}))
+            Ok(self.result.clone())
         })
     }
 }
@@ -2181,6 +2300,7 @@ async fn the_open_batch_is_in_the_log_when_the_tool_body_runs_and_carries_the_ga
             &request,
             Arc::clone(&agent),
             emitter,
+            None,
         )
         .await
         .expect("an operator's /search fast-paths");
@@ -2262,6 +2382,7 @@ async fn a_refused_open_batch_means_the_tool_never_runs() {
             &agent,
             emitter,
             Some(refusing),
+            None,
         )
         .await
         .expect_err("a dispatch the log refused to record must not run");
@@ -2274,6 +2395,89 @@ async fn a_refused_open_batch_means_the_tool_never_runs() {
         0,
         "the tool ran over an unrecorded dispatch — the defect §5.3 exists to close"
     );
+}
+
+#[tokio::test]
+async fn exact_stop_in_the_slash_media_window_closes_the_journal_as_cancelled() {
+    use crate::gateway::execution_adapter::ChatRunCancellation;
+    use crate::session::events::{RunOutcome, SessionEvent};
+    use crate::session::SessionService;
+    use std::future::{poll_fn, Future};
+    use std::task::Poll;
+
+    let svc = crate::session::in_process::install_test_session_service();
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "slash-media-stop").await;
+    let session = SessionKey::main("slash-media-stop");
+    let mut registry = WitnessToolRegistry::new(session.clone());
+    registry.result = serde_json::json!({
+        "_display": "tool effects already happened",
+        "_media": [{"url": "data:text/plain;base64,aGk=", "media_type": "document"}]
+    });
+    let registry = Arc::new(registry);
+    let engine = slash_engine(registry.clone());
+    let emitter = Arc::new(TestEmitter::new());
+    let request = slash_request(&session, None);
+    let mode: serde_json::Value = serde_json::from_str(&slash_mode("search", "hello")).unwrap();
+    let cancellation = ChatRunCancellation::default();
+    let run_id = format!("slash-media-stop-{}", uuid::Uuid::new_v4().simple());
+    let media = request.pending_media.lock().await;
+    let tool = engine.execute_direct_tool(
+        &run_id,
+        &mode,
+        &request,
+        &agent,
+        emitter.clone(),
+        Some(svc.clone()),
+        Some(&cancellation),
+    );
+    tokio::pin!(tool);
+    let wait = std::time::Duration::from_secs(3);
+    tokio::time::timeout(
+        wait,
+        poll_fn(|cx| match tool.as_mut().poll(cx) {
+            Poll::Ready(result) => panic!("terminal before media was released: {result:?}"),
+            Poll::Pending if registry.seen().is_some() => Poll::Ready(()),
+            Poll::Pending => Poll::Pending,
+        }),
+    )
+    .await
+    .unwrap();
+    // The tool future returned its result while the real media harvest is
+    // suspended. Acknowledged stop must win before the success journal.
+    assert!(cancellation.request().await.unwrap());
+    assert!(matches!(
+        tokio::time::timeout(wait, &mut tool).await.unwrap(),
+        Err(ExecutionError::Cancelled)
+    ));
+    drop(media);
+    let log = svc.get_events(&session, None, None).await.unwrap();
+    let outcomes: Vec<_> = log
+        .iter()
+        .filter_map(|record| match record.event {
+            SessionEvent::RunFinished {
+                run_id: ref id,
+                outcome,
+                ..
+            } => {
+                assert_eq!(id, &run_id);
+                Some(outcome)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(outcomes, [RunOutcome::Cancelled]);
+    assert!(log
+        .iter()
+        .any(|r| matches!(r.event, SessionEvent::ToolResult { .. })));
+    assert!(!log
+        .iter()
+        .any(|r| matches!(r.event, SessionEvent::AssistantMessage { .. })));
+    assert!(!emitter.get_events().await.iter().any(|e| matches!(
+        e,
+        StreamEvent::ResponseChunk { .. } | StreamEvent::RunComplete { .. }
+    )));
+    let _ = crate::media::cache::MediaCache::cleanup_session(&run_id);
 }
 
 /// Captures the `RunRequest` a continuation is actually dispatched with, so the

@@ -1,23 +1,53 @@
 use crate::credentials::CredentialService;
+use crate::external_link::external_target;
+use aleph_client::ConnectionTarget;
 use aleph_protocol::panel_shell::{
     valid_document, valid_notification, CredentialCall, CredentialReply, PanelReply, ShellRequest,
 };
 use nsh_core::element::desktop::WindowRef;
 use nsh_core::notifications::{Notification, NotificationPermission};
 use nsh_core::prelude::{
-    next_notification_press, next_url_scheme_open, notification_permission, set_timeout,
-    show_notification, spawn, ElementRef,
+    notification_permission, open_url, set_timeout, show_notification, spawn, ElementRef,
 };
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::cell::{Cell, RefCell};
+use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Notify};
 
-const CHAT_NOTIFICATION: &str = "aleph-panel-chat";
+/// The id of the notifications the Panel asks for; pressing one opens the
+/// chat.
+pub(crate) const CHAT_NOTIFICATION: &str = "aleph-panel-chat";
 const MESSAGE_LIMIT: usize = 16 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct Bridge(Rc<Inner>);
+
+thread_local! {
+    /// The Panel the window shows now: the last bridge started. Switching
+    /// servers starts a new one, which takes its place here.
+    static CURRENT: RefCell<Weak<Inner>> = const { RefCell::new(Weak::new()) };
+    /// A chat asked for while no Panel showed (a link that launched the
+    /// app, say, while the local server was starting): the next Panel
+    /// opens it.
+    static CHAT_PENDING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Opens the chat in the Panel the window shows, or in the next one when
+/// none shows yet (the connect form, the local server's progress).
+pub(crate) fn open_chat_in_current_panel() {
+    match CURRENT.with(|current| current.borrow().upgrade()) {
+        Some(inner) => Bridge(inner).open_chat(),
+        None => CHAT_PENDING.set(true),
+    }
+}
+
+/// Reloads the Panel the window shows; with none shown (the connect form,
+/// the local server's progress) there is nothing to reload.
+pub(crate) fn reload_current_panel() {
+    if let Some(inner) = CURRENT.with(|current| current.borrow().upgrade()) {
+        inner.view.reload();
+    }
+}
 
 struct Inner {
     view: ElementRef,
@@ -28,10 +58,15 @@ struct Inner {
     notifications: mpsc::Sender<(String, String)>,
     credentials: CredentialService,
     autostart: crate::autostart::Reader,
+    /// The server this Panel comes from: its pages stay in the window.
+    gateway: ConnectionTarget,
 }
 
 #[derive(Default)]
 struct Page {
+    /// The web view is gone (the window shows another server or the
+    /// connect form): the worker stops.
+    retired: bool,
     loading: bool,
     needs_probe: bool,
     open_chat: bool,
@@ -63,6 +98,7 @@ impl Bridge {
         window: WindowRef,
         credentials: CredentialService,
         autostart: crate::autostart::Reader,
+        gateway: ConnectionTarget,
     ) -> Self {
         let (notifications, mut pending) = mpsc::channel::<(String, String)>(1);
         let bridge = Self(Rc::new(Inner {
@@ -74,34 +110,15 @@ impl Bridge {
             notifications,
             credentials,
             autostart,
+            gateway,
         }));
         let worker = bridge.clone();
         spawn(async move { worker.navigate().await });
 
-        let intents = bridge.clone();
-        let intent_window = window.clone();
-        spawn(async move {
-            let mut next_url = next_url_scheme_open();
-            let mut next_press = next_notification_press();
-            loop {
-                tokio::select! {
-                    url = &mut next_url => {
-                        if url == "aleph://open" {
-                            intents.open_chat();
-                        }
-                        next_url = next_url_scheme_open();
-                    }
-                    press = &mut next_press => {
-                        if press == CHAT_NOTIFICATION {
-                            intent_window.show();
-                            intent_window.focus();
-                            intents.open_chat();
-                        }
-                        next_press = next_notification_press();
-                    }
-                }
-            }
-        });
+        CURRENT.with(|current| *current.borrow_mut() = Rc::downgrade(&bridge.0));
+        if CHAT_PENDING.take() {
+            bridge.open_chat();
+        }
         spawn(async move {
             while let Some((title, body)) = pending.recv().await {
                 if window
@@ -155,7 +172,24 @@ impl Bridge {
         if state.loading {
             return true;
         }
-        if let PanelReply::AutostartRequest { request, document } = message {
+        if let PanelReply::OpenExternal { document, url } = &message {
+            if state.document.as_deref() == Some(document.as_str()) {
+                self.open_external(url);
+            }
+            return true;
+        }
+        let autostart = match &message {
+            PanelReply::AutostartRequest { request, document } => {
+                Some((*request, document.clone(), None))
+            }
+            PanelReply::AutostartSet {
+                request,
+                document,
+                enabled,
+            } => Some((*request, document.clone(), Some(*enabled))),
+            _ => None,
+        };
+        if let Some((request, document, write)) = autostart {
             let generation = state.generation;
             let accepted =
                 state.document.as_deref() == Some(document.as_str()) && valid_document(&document);
@@ -163,7 +197,10 @@ impl Bridge {
             if accepted {
                 let bridge = self.clone();
                 spawn(async move {
-                    let status = bridge.0.autostart.query().await;
+                    let status = match write {
+                        Some(enabled) => bridge.0.autostart.set(enabled).await,
+                        None => bridge.0.autostart.query().await,
+                    };
                     let page = bridge.0.state.borrow();
                     if !page.loading
                         && page.generation == generation
@@ -216,9 +253,10 @@ impl Bridge {
                 }
                 return true;
             }
-            PanelReply::CredentialRequest { .. } | PanelReply::AutostartRequest { .. } => {
-                unreachable!()
-            }
+            PanelReply::CredentialRequest { .. }
+            | PanelReply::AutostartRequest { .. }
+            | PanelReply::AutostartSet { .. }
+            | PanelReply::OpenExternal { .. } => unreachable!(),
         };
         if let Some(exchange) = &mut state.exchange {
             if exchange.request == request
@@ -234,6 +272,22 @@ impl Bridge {
             }
         }
         true
+    }
+
+    /// Opens a link the Panel followed off its pages in the system, when
+    /// [`external_target`] agrees it is one.
+    fn open_external(&self, raw: &str) {
+        let Some(url) = external_target(raw, &self.0.gateway) else {
+            // The supplied URL may contain credentials; do not log it.
+            eprintln!("NSH refused to open a link outside the Panel");
+            return;
+        };
+        let opened = open_url(url.as_str());
+        spawn(async move {
+            if !opened.await {
+                eprintln!("NSH could not open a {}: link", url.scheme());
+            }
+        });
     }
 
     fn invoke_credential(
@@ -276,6 +330,19 @@ impl Bridge {
             .post_message(serde_json::to_string(&message).expect("fixed credential reply"));
     }
 
+    /// Called when the web view goes: the bridge stops working and stops
+    /// being the Panel links and notification presses go to.
+    pub(crate) fn retire(&self) {
+        self.0.state.borrow_mut().retired = true;
+        self.0.work.notify_one();
+        CURRENT.with(|current| {
+            let mut current = current.borrow_mut();
+            if current.as_ptr() == Rc::as_ptr(&self.0) {
+                *current = Weak::new();
+            }
+        });
+    }
+
     fn open_chat(&self) {
         self.0.state.borrow_mut().open_chat = true;
         self.0.work.notify_one();
@@ -284,6 +351,9 @@ impl Bridge {
     async fn navigate(&self) {
         loop {
             self.0.work.notified().await;
+            if self.0.state.borrow().retired {
+                return;
+            }
             loop {
                 let (generation, document) = {
                     let mut state = self.0.state.borrow_mut();

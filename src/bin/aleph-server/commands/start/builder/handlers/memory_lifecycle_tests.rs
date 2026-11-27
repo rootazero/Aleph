@@ -39,6 +39,7 @@ async fn off_graph_and_memory_rpc_fail_explicitly() {
             raw_store: raw.clone(),
             session_store: None,
             provider: None,
+            provider_secrets: None,
             extensions: Arc::new(MemoryExtensionRegistry::new()),
             state_db: None,
             default_agent_id: DEFAULT_AGENT_ID.to_string(),

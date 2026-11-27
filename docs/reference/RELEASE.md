@@ -2,6 +2,22 @@
 
 > 由根 `CLAUDE.md` 的「发版流程」一行指针指向本文。
 
+## 桌面切换与回退 / Desktop cutover and rollback
+
+最后一个 Tauri 完整桌面版是 [v26.9.1](https://github.com/rootazero/Aleph/releases/tag/v26.9.1)。保留对应平台的整包和同名 `.sig`；不要用新版本的 Panel 或 `aleph-server` 替换旧包内的文件。这里的签名是 Tauri 更新包签名，不代表安装包已通过操作系统签名或公证。 / Keep the platform archive and its matching `.sig` from the last full Tauri release. The signature authenticates the Tauri update asset, not its OS signing or notarization status.
+
+| 平台 / Platform | v26.9.1 回退资产 / Rollback asset | SHA-256 |
+| --- | --- | --- |
+| macOS | `Aleph.app.tar.gz` | `7abe7e87a5ac484ac47bc72b1c5d1d5df8bc944827c134cd30612df89dd88e48` |
+| Windows x64 | `Aleph_26.9.1_x64-setup.exe` | `75329d2c1d40a0e0b15028e78f70315df2aecd7fe5b8d8022d9d9a5f364d7d21` |
+| Linux x64 | `Aleph_26.9.1_amd64.AppImage` | `8c7b94e15d29333aa7261b25c6f792c627cf8237f668c1afa1d7fcefae60b8d4` |
+
+签名格式是 Base64 封装的 minisign 文件。先核对 SHA-256，再用 `v26.9.1` 标签的 `desktop/shell/tauri.conf.json` 中 `plugins.updater.pubkey` 验签：对 `.sig` 和 `pubkey` 分别做 Base64 解码，将输出存为 `<asset>.minisig` 与 `key.pub`，运行 `minisign -Vm <asset> -x <asset>.minisig -p key.pub`。 / Check the SHA-256 first. Base64-decode the matching `.sig` and the tagged `plugins.updater.pubkey` before verifying with minisign.
+
+**切换到 NSH / Move to NSH:** 在 Tauri 中选择 **Quit & Stop Aleph**，确认旧本地 Gateway 已退出，再备份 Aleph 数据目录（默认 `~/.aleph`，包括配置和会话库）。手动安装新版 NSH 完整包。两版共用数据目录；已获准的回环连接不需要启动配对。旧版自动更新不会跨到 NSH。 / Quit and stop Tauri, back up Aleph data, then install the NSH desktop package manually. NSH reuses the data directory; an authorized loopback connection does not show startup pairing. The Tauri updater does not perform this migration.
+
+**装回 Tauri / Reinstall Tauri:** 在 NSH 中选择 **Quit Aleph and Stop Server**，确认本地 Gateway 已退出。macOS 解开旧归档，用其中的 `Aleph.app` 替换 NSH 应用；Windows 用已验签的旧安装程序重装；Linux 给旧 AppImage 加执行权限后使用它。保留现有数据，不要把卸载当作清库步骤。如果旧版无法读取升级后的数据，先另存现状，再从切换前的备份恢复；不要直接覆盖唯一一份会话库。 / Quit NSH and stop its local Gateway before reinstalling the verified old package. Keep the current data. If the old version cannot read it, preserve a copy and restore the pre-cutover backup rather than overwriting the only session database.
+
 **由 AI (Claude) 驱动的两步流程：**
 
 1. **AI 写版本日志** — 读取**上一个 release 版本到 HEAD 之间**的 git log（通过 `git log <上次release commit>..HEAD`），总结 10-20 条有价值的内容，分为 Added（新增功能）和 Fixed（修复）两个分类，写入 CHANGELOG.md

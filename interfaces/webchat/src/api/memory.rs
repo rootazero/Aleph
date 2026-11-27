@@ -1,5 +1,7 @@
 use crate::context::DashboardState;
 use crate::memory_graph::adapter::SearchResultDto;
+use aleph_protocol::memory_trace::TraceRequest;
+pub use aleph_protocol::memory_trace::{EvidenceItem, TraceKind, TraceResult, WriteDecisionRow};
 use serde::{Deserialize, Serialize};
 
 /// Raw memory entry (Layer 1 — one conversation record).
@@ -167,66 +169,6 @@ pub struct MemoryStats {
     pub scope: String,
 }
 
-/// Which kind of target `memory.trace` walks. Mirrors the server's `TraceKind`.
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TraceKind {
-    /// A note path: walk DOWN to the raw rows it was distilled from.
-    Note,
-    /// A raw memory id: walk UP to the notes citing it.
-    Raw,
-    /// A curated hot-tier fact: one row per write ATTEMPT, refusals included.
-    /// The answer to "why was this never remembered" — the server has
-    /// serialised these all along, and no client could ask for them.
-    WriteDecision,
-}
-
-/// One piece of ground-truth evidence.
-#[derive(Debug, Clone, Deserialize)]
-pub struct EvidenceItem {
-    pub raw_id: String,
-    #[serde(default)]
-    pub via_note: Option<String>,
-    #[serde(default)]
-    pub via_session: Option<String>,
-    /// First 800 chars of raw content; `None` when `pruned`.
-    #[serde(default)]
-    pub content: Option<String>,
-    /// The raw id was cited but its row is gone from the store.
-    #[serde(default)]
-    pub pruned: bool,
-}
-
-/// Result of walking the evidence chain.
-#[derive(Debug, Clone, Deserialize)]
-pub struct TraceResult {
-    #[serde(default)]
-    pub notes: Vec<String>,
-    #[serde(default)]
-    pub evidence: Vec<EvidenceItem>,
-    /// Curated write attempts matching the target, newest first. Only
-    /// populated for [`TraceKind::WriteDecision`] (the server omits the field
-    /// entirely when empty, hence `default`).
-    #[serde(default)]
-    pub write_decisions: Vec<WriteDecisionRow>,
-}
-
-/// One curated-memory write attempt, as recorded in `memory_write_decisions`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct WriteDecisionRow {
-    /// `add` / `replace` / `remove` / `batch`, or `flag_correction`.
-    #[serde(default)]
-    pub action: String,
-    /// Why it landed or did not — a server-side enum, never free text.
-    #[serde(default)]
-    pub reason: String,
-    /// Bounded excerpt of what was attempted.
-    #[serde(default)]
-    pub subject: String,
-    #[serde(default)]
-    pub created_at: i64,
-}
-
 /// One curated hot-memory entry (`MEMORY.md`, the block injected into every
 /// system prompt).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -345,20 +287,24 @@ impl MemoryApi {
         serde_json::from_value(result).map_err(|e| format!("Failed to parse memory.stats: {e}"))
     }
 
-    /// Walk a memory claim down (or up) to ground-truth evidence.
+    /// Read recorded provenance. Drawer callers use an exact row partition;
+    /// the curated ledger passes a base agent ID and keeps its scoped lookup.
     pub async fn trace(
         state: &DashboardState,
         agent_id: &str,
         target: &str,
         kind: TraceKind,
         max_results: usize,
+        exact_partition: bool,
     ) -> Result<TraceResult, String> {
-        let params = serde_json::json!({
-            "agent_id": agent_id,
-            "target": target,
-            "kind": kind,
-            "max_results": max_results,
-        });
+        let params = serde_json::to_value(TraceRequest {
+            agent_id: Some(agent_id.into()),
+            target: target.into(),
+            kind,
+            max_results: Some(max_results),
+            exact_partition,
+        })
+        .map_err(|e| format!("Failed to encode memory.trace: {e}"))?;
         let result = state.rpc_call("memory.trace", params).await?;
         serde_json::from_value(result).map_err(|e| format!("Failed to parse memory.trace: {e}"))
     }
@@ -629,6 +575,18 @@ mod tests {
         )
         .expect("mutation shape");
         assert_eq!(written.message.as_deref(), Some("Entry removed."));
+    }
+
+    #[test]
+    fn trace_result_parses_fact_only_response() {
+        let trace: TraceResult = serde_json::from_str(
+            r#"{"target":"habits/x","notes":["habits/x"],"evidence":[],
+                "facts":[{"note_path":"habits/x","fact_idx":0,"text":"Runs daily",
+                "origin":"raw_source","inferred":false,"source_id":"transcript-17"}]}"#,
+        )
+        .expect("fact-only response");
+        assert!(trace.evidence.is_empty());
+        assert_eq!(trace.facts[0].source_id.as_deref(), Some("transcript-17"));
     }
 
     /// `write_decisions` is omitted entirely for the evidence-chain kinds

@@ -125,7 +125,10 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // tool-name space the live agent loop resolves against. `None` (tests /
     // no MCP bridge) leaves the durable identity field unset.
     tool_descriptor_lookup: Option<Arc<dyn alephcore::tools::descriptor::ToolDescriptorLookup>>,
-) -> anyhow::Result<Arc<Orchestrator>> {
+) -> anyhow::Result<(
+    Arc<Orchestrator>,
+    Option<alephcore::gateway::codex_token_refresher::CodexRefreshRoute>,
+)> {
     // Install the process-wide UI locale from the same `[general] language`
     // key that already drives the gateway's system messages and the model's
     // response language (two lines apart, below). Strings a human reads that
@@ -290,36 +293,42 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // model publication; it does not consult learned routing state.
     let registered_provider_names: std::collections::BTreeSet<String> =
         default_provider.provider_names().into_iter().collect();
-    let provider_chain = alephcore::orchestrator::build_failover_chain(
-        config,
-        primary_provider_key,
-        default_provider,
-    );
+    let vault_credential = |name: &str| {
+        shared_token_mgr
+            .get_secret(&alephcore::providers::probe::provider_vault_key(name))
+            .ok()
+            .flatten()
+            .map(|secret| secret.expose().to_owned())
+            .filter(|key| !key.trim().is_empty())
+    };
+    let (provider_chain, cheap_summary_provider) = {
+        // These keys belong to the installed transports, not the live Config.
+        let mut transport_config = config.clone();
+        for (name, provider) in &mut transport_config.providers {
+            if provider.api_key.as_deref().is_none_or(str::is_empty) {
+                provider.api_key = vault_credential(name);
+            }
+        }
+        (
+            alephcore::orchestrator::build_failover_chain(
+                &transport_config,
+                primary_provider_key,
+                default_provider,
+            ),
+            build_cheap_summary_provider(&transport_config, primary_provider_key),
+        )
+    };
     let default_provider = provider_chain.default.clone();
     // The providers this chain can migrate a request into, as the chain itself
     // answers it — the compaction budget is sized for the narrowest of them,
     // so it reads the live walk rather than re-deriving the chain from config.
     let chain_fallbacks = alephcore::orchestrator::chain_fallback_names(&provider_chain);
-    // Wire the per-provider pin chains as the harness `named_providers` so the
-    // explicit model directive composes with failure-only fallback, not around
-    // it: `BrainRef::Strict`/`Preferred` and a `select_model(provider=…)` pick
-    // now resolve to the matching pin+fall-through `FailoverProvider` (route-
-    // shaped, circuit-broken) instead of a raw provider — or, when unmatched,
-    // fall back to the global default. Each entry pins one configured provider
-    // as primary then falls through the whole global chain, so a pinned
-    // provider's outage still degrades gracefully. (Realizes the prior
-    // "PHASE-6: populate named_providers" TODO by reusing the chain
-    // `build_failover_chain` already built for subagent routing — no second
-    // construction.)
+    // Reuse the named chains for BrainRef routing. Qualified model bindings
+    // resolve their exact transport from the same handles without traversing
+    // the failure-only ladder.
     let mut named_providers = provider_chain.agent_overrides.clone();
-    // `agent_overrides` deliberately omits the primary provider (it is the head
-    // of the default chain, not a separate pin). But consumers that resolve a
-    // provider BY KEY — `select_model(provider=…)` and `BrainRef::Strict` — must
-    // be able to name the primary too. Without this entry, a provider selection
-    // using the default provider key fails with "provider '<primary>' is not
-    // configured/keyed" and silently falls back to the plain chain. Map the
-    // primary key to the default chain (whose head IS the primary); other
-    // consumers already fell through to the same chain when the key missed.
+    // The primary is the head of the default chain, not a separate route in
+    // agent_overrides. Map its own key to that same chain for exact lookup.
     if !primary_provider_key.is_empty() {
         named_providers
             .entry(primary_provider_key.to_string())
@@ -339,15 +348,25 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
                 config.providers.get(name).is_some_and(|pc| {
                     pc.protocol() == "ollama"
                         || pc.api_key.as_ref().is_some_and(|key| !key.is_empty())
-                }) || shared_token_mgr
-                    .get_secret(&format!("ai:{name}"))
-                    .ok()
-                    .flatten()
-                    .is_some()
+                }) || vault_credential(name).is_some()
                     || (registered_provider_names.contains(name)
                         && alephcore::gateway::available_provider_from_env() == Some(name))
             },
-        );
+        )
+        .certify_discovery_transports(|name| {
+            named_providers
+                .get(name)
+                .and_then(|route| route.as_failover_provider())
+                .and_then(|route| route.exact_transport(name))
+                .is_some_and(|transport| {
+                    alephcore::providers::model_catalog::discovery::transport_matches_listing(
+                        config,
+                        name,
+                        transport.as_ref(),
+                        |name, _| vault_credential(name),
+                    )
+                })
+        });
     alephcore::providers::session_model_handle::publish_selectable_models(snapshot);
 
     // Cheap-tier summarization provider, built once and used twice: by the
@@ -360,7 +379,6 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // identical (R6). Both providers ride the wiring: the cheap tier is tried
     // first and a model-class failure falls back to the main one, the same
     // shape the per-run compactor has.
-    let cheap_summary_provider = build_cheap_summary_provider(config, primary_provider_key);
     // Build the context-budget config ONCE here (it used to be built inline in
     // the harness literal below): the manual `/compact` wiring needs the
     // derived summarizer-input budget, and building twice would double the
@@ -385,6 +403,12 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     );
 
     let (stall_cfg, failure_cap, turn_to) = build_stability_triple(config);
+    let codex_named_route = named_providers.get("chatgpt").cloned().map(|route| {
+        alephcore::gateway::codex_token_refresher::CodexRefreshRoute::new(
+            route,
+            provider_chain.codex_mount.clone(),
+        )
+    });
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),
         session_service: session_service.clone(),
@@ -480,7 +504,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     .with_agent_registry(agent_registry);
 
     tracing::info!("Orchestrator assembled (Phase 5)");
-    Ok(Arc::new(orchestrator))
+    Ok((Arc::new(orchestrator), codex_named_route))
 }
 
 // =============================================================================

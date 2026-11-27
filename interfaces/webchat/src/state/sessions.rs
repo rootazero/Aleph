@@ -259,6 +259,23 @@ impl SessionMap {
         }
     }
 
+    /// Park the direct conversation before the group takes over the visible
+    /// chat. It remains open, and its run frames continue to go to its own
+    /// background state while the group is visible.
+    pub fn enter_team(&self, singleton: ChatState, team_id: String) {
+        self.stash_active(singleton);
+        self.active.set(None);
+        singleton.clear_session();
+        singleton.team_id.set(Some(team_id));
+    }
+
+    fn stash_active(&self, singleton: ChatState) {
+        if let Some(conv) = self.active_conv() {
+            self.ensure_background(conv)
+                .restore_from(singleton.capture_snapshot());
+        }
+    }
+
     /// Open or focus a conversation. On switch, flush the outgoing conversation's data back to its persistent background state,
     /// pull the incoming conversation's persistent background state into the singleton (both are the same persistent `ChatState`, created once, reused across switches).
     pub fn activate(&self, singleton: ChatState, conv: ConvId) {
@@ -267,10 +284,7 @@ impl SessionMap {
             return;
         }
         // 1. Outgoing conversation: copy the singleton's current data back to its persistent background state.
-        if let Some(prev) = current {
-            let bg = self.ensure_background(prev);
-            bg.restore_from(singleton.capture_snapshot());
-        }
+        self.stash_active(singleton);
         // 2. Incoming conversation: restore from its persistent background state into the singleton (keep the live entry, don't remove it).
         let incoming = self.ensure_background(conv);
         singleton.restore_from(incoming.capture_snapshot());
@@ -731,6 +745,46 @@ mod tests {
                 None,
                 "team context is the part no snapshot carries, so it must be cleared"
             );
+        });
+    }
+
+    #[test]
+    fn a_group_does_not_replace_the_open_direct_conversation() {
+        with_owner(|| {
+            let map = SessionMap::new();
+            let chat = ChatState::new();
+            let conv = map.adopt_session(chat, "agent-a", "direct-a", || "Direct".into());
+            chat.session_key.set(Some("direct-a".into()));
+            chat.draft.set("direct draft".into());
+            chat.push_user_message("direct history");
+            chat.history_limit.set(400);
+            chat.history_has_more.set(true);
+            chat.history_above.set(Some(12));
+            chat.active_run_id.set(Some("run-a".into()));
+
+            map.enter_team(chat, "team-a".into());
+            assert_eq!(chat.team_id.get_untracked().as_deref(), Some("team-a"));
+            assert_eq!(map.active_conv(), None);
+            assert!(chat.session_key.get_untracked().is_none());
+            chat.draft.set("team draft".into());
+            chat.push_user_message("group history");
+
+            let reopened = map.adopt_session(chat, "agent-a", "direct-a", || unreachable!());
+            assert_eq!(reopened, conv);
+            assert_eq!(
+                chat.session_key.get_untracked().as_deref(),
+                Some("direct-a")
+            );
+            assert_eq!(chat.draft.get_untracked(), "direct draft");
+            assert_eq!(
+                chat.messages.with_untracked(|rows| rows[0].content.clone()),
+                "direct history"
+            );
+            assert_eq!(chat.history_limit.get_untracked(), 400);
+            assert!(chat.history_has_more.get_untracked());
+            assert_eq!(chat.history_above.get_untracked(), Some(12));
+            assert_eq!(chat.active_run_id.get_untracked().as_deref(), Some("run-a"));
+            assert!(chat.team_id.get_untracked().is_none());
         });
     }
 

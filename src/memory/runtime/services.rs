@@ -39,6 +39,8 @@ pub struct MemoryServicesConfig {
     pub raw_store: Arc<dyn RawMemoryStore>,
     pub session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
     pub provider: Option<Arc<dyn AiProvider>>,
+    /// Resolve the Dream transport's credential when Memory is activated.
+    pub provider_secrets: Option<Arc<dyn crate::secrets::injection::AsyncSecretResolver>>,
     pub extensions: Arc<MemoryExtensionRegistry>,
     pub state_db: Option<Arc<crate::resilience::database::StateDatabase>>,
     pub default_agent_id: String,
@@ -67,6 +69,30 @@ pub(crate) struct MemoryServices {
     pub(super) producer: Arc<MemoryProducerScheduler>,
     pub(crate) reconciler: Option<Arc<MemoryCommandHandler>>,
     pub(crate) reembed: Arc<crate::gateway::handlers::memory::ReembedState>,
+}
+
+async fn build_dream_transport(
+    config: &crate::Config,
+    resolver: Option<&dyn crate::secrets::AsyncSecretResolver>,
+) -> Option<Arc<dyn AiProvider>> {
+    let primary = config.general.default_provider.as_deref()?;
+    if let Some(resolver) = resolver.filter(|_| {
+        config
+            .providers
+            .get(primary)
+            .is_some_and(|p| p.api_key.is_none())
+    }) {
+        let key = crate::providers::probe::provider_vault_key(primary);
+        if let Ok(secret) = resolver.resolve(&key).await {
+            if !secret.expose().trim().is_empty() {
+                let mut transport_config = config.clone();
+                transport_config.providers.get_mut(primary)?.api_key =
+                    Some(secret.expose().to_owned());
+                return crate::orchestrator::build_dream_provider(&transport_config, primary);
+            }
+        }
+    }
+    crate::orchestrator::build_dream_provider(config, primary)
 }
 
 impl MemoryServices {
@@ -241,15 +267,9 @@ impl MemoryServices {
                 .with_note_memory_dir(config.note_memory_dir.clone())
                 .with_optional_raw_store(Some(inputs.raw_store.clone()))
                 .with_orientation(orientation.clone());
-            let provider = crate::orchestrator::build_dream_provider(
-                &snapshot,
-                snapshot
-                    .general
-                    .default_provider
-                    .as_deref()
-                    .unwrap_or_default(),
-            )
-            .or_else(|| inputs.provider.clone());
+            let provider = build_dream_transport(&snapshot, inputs.provider_secrets.as_deref())
+                .await
+                .or_else(|| inputs.provider.clone());
             let daemon = match provider {
                 Some(provider) => daemon.with_provider(provider),
                 None => daemon,
@@ -297,5 +317,47 @@ impl MemoryServices {
             reconciler,
             reembed: Arc::new(crate::gateway::handlers::memory::ReembedState::new()),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_dream_transport;
+    use crate::secrets::{AsyncSecretResolver, DecryptedSecret, SecretError};
+
+    struct FixtureVault;
+
+    #[async_trait::async_trait]
+    impl AsyncSecretResolver for FixtureVault {
+        async fn resolve(&self, name: &str) -> Result<DecryptedSecret, SecretError> {
+            assert_eq!(name, "ai:relay");
+            Ok(DecryptedSecret::new("dream-fixture-key"))
+        }
+    }
+
+    #[tokio::test]
+    async fn dream_transport_uses_vault_without_changing_the_config() {
+        let mut config = crate::Config::default();
+        config.general.default_provider = Some("relay".into());
+        config.memory.dreaming.enabled = true;
+        config.memory.dreaming.model = Some("org/dream".into());
+        let mut provider = crate::config::ProviderConfig::test_config("org/chat");
+        provider.api_key = None;
+        provider.base_url = Some("https://relay.invalid/v1".into());
+        config.providers.insert("relay".into(), provider);
+
+        let dream = build_dream_transport(&config, Some(&FixtureVault))
+            .await
+            .unwrap();
+        assert_eq!(dream.serving_model_hint().as_deref(), Some("org/dream"));
+        assert!(
+            crate::providers::model_catalog::discovery::transport_matches_listing(
+                &config,
+                "relay",
+                dream.as_ref(),
+                |_, _| Some("dream-fixture-key".into()),
+            )
+        );
+        assert!(config.providers["relay"].api_key.is_none());
     }
 }

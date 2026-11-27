@@ -81,6 +81,11 @@ pub(crate) enum ResultTransport {
     StructuredRpc,
 }
 
+pub(super) enum ConfigApprovalRequester {
+    Operator(Arc<crate::approval::OperatorApprovalRequester>),
+    Generic(Arc<dyn ApprovalRequester>),
+}
+
 /// Identify the narrow legacy compatibility shape that has no canonical
 /// descriptor but still carries an explicit plugin usage owner.
 fn is_descriptorless_plugin_compat(tool: &dyn LoopTool) -> bool {
@@ -132,7 +137,7 @@ pub struct ScopedToolService {
     /// sudo). Distinct from `approval_requester` (which routes to the
     /// requester's OWN channel for `requires_confirmation`); this routes to the
     /// server operator. `None` → config gate hard-rejects (fail closed).
-    pub(super) config_approval_requester: Option<Arc<dyn ApprovalRequester>>,
+    pub(super) config_approval_requester: Option<ConfigApprovalRequester>,
     /// Routing context of the agent turn this service serves. When set,
     /// `execute()` scopes it into the `TURN_CONTEXT` task-local so HITL tools
     /// (sandbox escalation, `requires_confirmation`, `ask_user`) can route a

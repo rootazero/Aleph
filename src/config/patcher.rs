@@ -13,6 +13,7 @@ use crate::config::schema::generate_config_schema;
 use crate::config::Config;
 use crate::error::{AlephError, Result};
 use crate::gateway::event_bus::GatewayEventBus;
+use crate::providers::model_catalog::discovery_authority;
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -295,9 +296,9 @@ impl ConfigPatcher {
             .to_string();
 
         // 2. Read current config as JSON (read lock)
-        let config_json = {
+        let (config_json, current_desktop) = {
             let config = self.config.read().await;
-            config_to_json(&config)?
+            (config_to_json(&config)?, config.desktop.clone())
         };
 
         // 3. Get old values for diff
@@ -310,7 +311,8 @@ impl ConfigPatcher {
         // 5-7. Validate the candidate: JSON Schema → deserialize → normalize
         // → Config::validate(). The value actually committed is re-validated
         // under the write lock inside `commit_patch`.
-        self.validate_candidate(patched_json.clone())?;
+        let candidate = self.validate_candidate(patched_json.clone())?;
+        ensure_offline_stt_unchanged(&current_desktop, &candidate.desktop)?;
 
         // 8. Compute diff
         let new_at_path = get_nested_value(&patched_json, &request.path).cloned();
@@ -467,6 +469,7 @@ impl ConfigPatcher {
         // already validated. Without this, an invalid config could be
         // persisted and installed live under concurrency.
         let final_config = self.validate_candidate(re_patched)?;
+        ensure_offline_stt_unchanged(&config.desktop, &final_config.desktop)?;
         // Commit to disk first; only swap in-memory on success. If the
         // save fails, restore the previous live config so the in-memory
         // state never diverges from what is on disk.
@@ -476,6 +479,7 @@ impl ConfigPatcher {
             *config = previous;
             return Err(e);
         }
+        discovery_authority::config_replaced(&previous, &config);
         Ok(())
     }
 
@@ -636,12 +640,14 @@ impl ConfigPatcher {
         // 2. Parse + validate the snapshot. `load_from_file` applies the same
         //    migrations/defaults as boot loading; `validate()` rejects a
         //    structurally-invalid snapshot before it can be installed.
-        let restored = Config::load_from_file(&entry.path)?;
+        let mut restored = Config::load_rollback_snapshot(&entry.path)?;
         restored.validate()?;
 
-        // 3. Compute current → restored diff.
+        // 3. Rollback does not own the boot-only installation. Ignore the
+        //    snapshot's value both in the preview and in the running config.
         let current_json = {
             let config = self.config.read().await;
+            restored.desktop.offline_stt = config.desktop.offline_stt.clone();
             config_to_json(&config)?
         };
         let restored_json = serde_json::to_value(&restored).map_err(|e| {
@@ -670,16 +676,20 @@ impl ConfigPatcher {
             }
         }
 
-        // 7. Commit to disk first; swap in-memory only on success so the
-        //    in-memory state never diverges from what is on disk.
+        // 7. Commit to disk first; swap in-memory only on success. The
+        //    boot-only offline installation remains disk-owned at save; an
+        //    operator's edit does not change the running adapter.
         {
             let mut config = self.config.write().await;
+            self.check_conflict().await?;
+            restored.desktop.offline_stt = config.desktop.offline_stt.clone();
             let previous = config.clone();
             *config = restored;
             if let Err(e) = config.save_to_file(&self.config_path) {
                 *config = previous;
                 return Err(e);
             }
+            discovery_authority::config_replaced(&previous, &config);
         }
 
         // The restored file is ours even if live application is cancelled.
@@ -746,6 +756,20 @@ impl ConfigPatcher {
 // =============================================================================
 // Helper Functions (pub(crate) for use by RPC handlers)
 // =============================================================================
+
+/// Provisioning a host executable is not part of remote config mutation.
+/// Compare the complete typed field so a patch of an ancestor cannot bypass it.
+fn ensure_offline_stt_unchanged(
+    previous: &crate::config::types::desktop::DesktopDaemonConfig,
+    candidate: &crate::config::types::desktop::DesktopDaemonConfig,
+) -> Result<()> {
+    if previous.offline_stt != candidate.offline_stt {
+        return Err(AlephError::invalid_config(
+            "desktop.offline_stt must be changed locally in config.toml",
+        ));
+    }
+    Ok(())
+}
 
 /// Serialize a `Config` to `serde_json::Value` with the project's standard
 /// `AlephError::invalid_config` mapping. Three call sites in this module
@@ -1385,6 +1409,248 @@ mod tests {
             file_content.contains("zh-Hans"),
             "Saved file should contain the patched language value"
         );
+    }
+
+    #[tokio::test]
+    async fn offline_stt_cannot_be_changed_through_config_patch() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, config_path, _) = setup_patcher(&tmp);
+        patcher.record_mtime().await;
+        let before = tokio::fs::read(&config_path).await.unwrap();
+
+        for (path, patch) in [
+            ("desktop.offline_stt.executable", json!("/tmp/whisper-cli")),
+            (
+                "desktop",
+                json!({"offline_stt": {"executable": "/tmp/whisper-cli", "model": "/tmp/model.bin"}}),
+            ),
+        ] {
+            let error = patcher
+                .apply(PatchRequest {
+                    path: path.into(),
+                    patch,
+                    health_check: false,
+                    dry_run: false,
+                })
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("desktop.offline_stt must be changed locally"),
+                "{error}"
+            );
+        }
+        assert_eq!(tokio::fs::read(&config_path).await.unwrap(), before);
+        assert!(patcher.config.read().await.desktop.offline_stt.is_none());
+
+        patcher
+            .apply(PatchRequest {
+                path: "desktop".into(),
+                patch: json!({"allow_global_pointer": true}),
+                health_check: false,
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+        assert!(patcher.config.read().await.desktop.allow_global_pointer);
+    }
+
+    #[tokio::test]
+    async fn offline_stt_snapshot_cannot_reinstall_a_removed_recognizer() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, config_path, _) = setup_patcher(&tmp);
+        let previous_file = tmp.path().join("old-installation.toml");
+        let mut older = Config::default();
+        older.desktop.allow_global_pointer = true;
+        older.save_to_file(&previous_file).unwrap();
+        add_offline_stt_on_disk(&previous_file).await;
+        patcher.backup.create_snapshot(&previous_file).unwrap();
+
+        let preview = patcher.rollback(None, true).await.unwrap();
+        assert!(preview
+            .diff
+            .iter()
+            .any(|entry| entry.path == "desktop.allow_global_pointer"));
+        assert!(preview
+            .diff
+            .iter()
+            .all(|entry| !entry.path.starts_with("desktop.offline_stt")));
+        patcher.rollback(None, false).await.unwrap();
+        let desktop = Config::load_from_file(&config_path).unwrap().desktop;
+        assert!(desktop.allow_global_pointer);
+        assert!(desktop.offline_stt.is_none());
+        assert!(patcher.config.read().await.desktop.offline_stt.is_none());
+    }
+
+    #[tokio::test]
+    async fn offline_stt_rollback_to_predeployment_snapshot_keeps_running_installation() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, config_path, _) = setup_patcher(&tmp);
+        let previous_file = tmp.path().join("before-deployment.toml");
+        let mut older = Config::default();
+        older.desktop.allow_global_pointer = true;
+        older.save_to_file(&previous_file).unwrap();
+        patcher.backup.create_snapshot(&previous_file).unwrap();
+        add_offline_stt_on_disk(&config_path).await;
+        let running = Config::load_from_file(&config_path).unwrap();
+        let installation = running.desktop.offline_stt.clone().unwrap();
+        *patcher.config.write().await = running;
+
+        let preview = patcher.rollback(None, true).await.unwrap();
+        assert!(preview
+            .diff
+            .iter()
+            .any(|entry| entry.path == "desktop.allow_global_pointer"));
+        assert!(preview
+            .diff
+            .iter()
+            .all(|entry| !entry.path.starts_with("desktop.offline_stt")));
+        patcher.rollback(None, false).await.unwrap();
+        let desktop = Config::load_from_file(&config_path).unwrap().desktop;
+        assert!(desktop.allow_global_pointer);
+        assert_eq!(desktop.offline_stt.as_ref(), Some(&installation));
+        assert_eq!(
+            patcher.config.read().await.desktop.offline_stt.as_ref(),
+            Some(&installation)
+        );
+    }
+
+    #[tokio::test]
+    async fn offline_stt_rollback_ignores_invalid_historical_installation() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, config_path, _) = setup_patcher(&tmp);
+        let previous_file = tmp.path().join("historical.toml");
+        let historical = "[desktop]\nallow_global_pointer = true\n\
+                          [desktop.offline_stt]\nexecutable = 42\n";
+        tokio::fs::write(&previous_file, historical).await.unwrap();
+        assert!(Config::load_from_file(&previous_file).is_err());
+        let snapshot = patcher.backup.create_snapshot(&previous_file).unwrap();
+
+        let preview = patcher.rollback(None, true).await.unwrap();
+        assert!(preview
+            .diff
+            .iter()
+            .any(|entry| entry.path == "desktop.allow_global_pointer"));
+        assert!(preview
+            .diff
+            .iter()
+            .all(|entry| !entry.path.starts_with("desktop.offline_stt")));
+        patcher.rollback(None, false).await.unwrap();
+        let desktop = Config::load_from_file(&config_path).unwrap().desktop;
+        assert!(desktop.allow_global_pointer);
+        assert!(desktop.offline_stt.is_none());
+        assert_eq!(
+            tokio::fs::read_to_string(snapshot).await.unwrap(),
+            historical
+        );
+    }
+
+    async fn add_offline_stt_on_disk(path: &std::path::Path) {
+        let mut contents = tokio::fs::read_to_string(path).await.unwrap();
+        contents.push_str(
+            "\n[desktop.offline_stt]\nexecutable = '/tmp/local-whisper'\nmodel = '/tmp/local-model.bin'\n",
+        );
+        tokio::fs::write(path, contents).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn offline_stt_disk_edit_survives_desktop_patch_without_mtime_baseline() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, config_path, _) = setup_patcher(&tmp);
+        add_offline_stt_on_disk(&config_path).await;
+        let before = Config::load_from_file(&config_path)
+            .unwrap()
+            .desktop
+            .offline_stt;
+        assert!(before.is_some());
+
+        patcher
+            .apply(PatchRequest {
+                path: "desktop.allow_global_pointer".into(),
+                patch: json!(true),
+                health_check: false,
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+
+        let desktop = Config::load_from_file(&config_path).unwrap().desktop;
+        assert!(desktop.allow_global_pointer);
+        assert_eq!(desktop.offline_stt, before);
+        assert!(patcher.config.read().await.desktop.offline_stt.is_none());
+    }
+
+    #[tokio::test]
+    async fn offline_stt_disk_edit_survives_rollback_without_mtime_baseline() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, config_path, _) = setup_patcher(&tmp);
+        let mut older = Config::default();
+        older.desktop.allow_global_pointer = true;
+        let previous_file = tmp.path().join("previous.toml");
+        older.save_to_file(&previous_file).unwrap();
+        patcher.backup.create_snapshot(&previous_file).unwrap();
+        add_offline_stt_on_disk(&config_path).await;
+        let before = Config::load_from_file(&config_path)
+            .unwrap()
+            .desktop
+            .offline_stt;
+        assert!(before.is_some());
+
+        patcher.rollback(None, false).await.unwrap();
+
+        let desktop = Config::load_from_file(&config_path).unwrap().desktop;
+        assert!(desktop.allow_global_pointer);
+        assert_eq!(desktop.offline_stt, before);
+        assert!(patcher.config.read().await.desktop.offline_stt.is_none());
+    }
+
+    #[tokio::test]
+    async fn offline_stt_is_not_recreated_by_patch_after_manual_config_deletion() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, config_path, _) = setup_patcher(&tmp);
+        add_offline_stt_on_disk(&config_path).await;
+        let boot_config = Config::load_from_file(&config_path).unwrap();
+        assert!(boot_config.desktop.offline_stt.is_some());
+        *patcher.config.write().await = boot_config;
+        tokio::fs::remove_file(&config_path).await.unwrap();
+
+        patcher
+            .apply(PatchRequest {
+                path: "desktop.allow_global_pointer".into(),
+                patch: json!(true),
+                health_check: false,
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+
+        let desktop = Config::load_from_file(&config_path).unwrap().desktop;
+        assert!(desktop.allow_global_pointer);
+        assert!(desktop.offline_stt.is_none());
+    }
+
+    #[tokio::test]
+    async fn offline_stt_is_not_recreated_by_rollback_after_manual_config_deletion() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, config_path, _) = setup_patcher(&tmp);
+        let mut older = Config::default();
+        older.desktop.allow_global_pointer = true;
+        let previous_file = tmp.path().join("previous.toml");
+        older.save_to_file(&previous_file).unwrap();
+        add_offline_stt_on_disk(&previous_file).await;
+        patcher.backup.create_snapshot(&previous_file).unwrap();
+        add_offline_stt_on_disk(&config_path).await;
+        let boot_config = Config::load_from_file(&config_path).unwrap();
+        assert!(boot_config.desktop.offline_stt.is_some());
+        *patcher.config.write().await = boot_config;
+        tokio::fs::remove_file(&config_path).await.unwrap();
+
+        patcher.rollback(None, false).await.unwrap();
+
+        let desktop = Config::load_from_file(&config_path).unwrap().desktop;
+        assert!(desktop.allow_global_pointer);
+        assert!(desktop.offline_stt.is_none());
     }
 
     #[tokio::test]

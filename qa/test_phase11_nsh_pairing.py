@@ -5,8 +5,8 @@ from phase11_nsh_pairing import evaluate, helper_stopped
 
 def complete():
     return [{"kind": "protected-panel-fixture", "documents": ["a" * 32, "b" * 32],
-             "user": "alice", "effects": {key: True for key in ["initial_empty", "ticket_submitted",
-             "pair_authorized", "save_ack", "reload_stored", "reload_protected", "no_reload_ticket",
+             "user": "alice", "effects": {key: True for key in ["initial_empty", "local_without_prompt",
+             "ticket_submitted", "pair_authorized", "save_ack", "reload_stored", "reload_protected", "no_reload_ticket",
              "cleanup_deleted", "cleanup_empty"]}}, {"kind": "close-requested"},
             {"kind": "closed", "payload": {"owned_drained": True}}]
 

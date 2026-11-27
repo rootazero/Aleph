@@ -27,6 +27,11 @@ pub enum FlowInput {
     /// carry `blocks` referencing images, files, or other non-text payloads;
     /// the harness delegates interpretation to the LLM provider.
     Multimodal(Vec<MessageContent>),
+    /// Convert incoming attachments only after the runner binds a model.
+    PendingAttachments {
+        message: MessageContent,
+        media: std::sync::Arc<crate::media::processor::PendingMedia>,
+    },
     /// Resume an interrupted run. Carries no input: the session event log
     /// already holds the full trajectory (including the original
     /// `UserMessage`). `seed_session` treats this as a no-op so replay is

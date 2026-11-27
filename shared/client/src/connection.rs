@@ -22,6 +22,7 @@ use crate::credential::{ensure_credential_transport, DeviceCredential, VerifiedI
 use crate::error::{CliError, CliResult};
 use crate::tls;
 
+mod panel_voice;
 mod requests;
 use requests::RequestState;
 
@@ -139,6 +140,14 @@ impl Socket {
     }
 
     async fn send_text(&self, json: String) -> CliResult<()> {
+        self.send_text_if(json, || Ok(())).await
+    }
+
+    async fn send_text_if(
+        &self,
+        json: String,
+        before_send: impl FnOnce() -> CliResult<()>,
+    ) -> CliResult<()> {
         let mut write = self.write.lock().await;
         if self.requests.is_closed() {
             return Err(CliError::Disconnected("Connection closed by peer".into()));
@@ -146,6 +155,7 @@ impl Socket {
         let Some(writer) = write.as_mut() else {
             return Err(CliError::Disconnected("Connection closed by peer".into()));
         };
+        before_send()?;
         let sent = tokio::select! {
             biased;
             () = self.stopped() => return Err(CliError::Disconnected("Connection closed by peer".into())),
@@ -314,6 +324,22 @@ fn classify_frame(text: &str) -> Inbound {
     classify_value(value)
 }
 
+fn response_id_key(id: &Value) -> Option<std::borrow::Cow<'_, str>> {
+    match id {
+        Value::String(s) => Some(std::borrow::Cow::Borrowed(s)),
+        Value::Number(n) => Some(std::borrow::Cow::Owned(n.to_string())),
+        _ => None,
+    }
+}
+
+#[cfg(any(unix, windows))]
+fn parse_desktop_reply(text: &str, requests: &RequestState) -> std::io::Result<Value> {
+    local_ipc::parse_voice_response_payload(text, local_ipc::MAX_FRAME_BYTES as usize, |id| {
+        id.as_str()
+            .is_some_and(|id| requests.expects_voice_synthesis(id))
+    })
+}
+
 fn classify_value(value: Value) -> Inbound {
     // A JSON-RPC notification carries no id, and a response to a request this
     // client never sent is indistinguishable from one it did — so `null` is
@@ -373,13 +399,11 @@ fn classify_value(value: Value) -> Inbound {
     }
 
     if let Some(id) = id {
-        let id = match id {
-            Value::String(s) => s.clone(),
-            Value::Number(n) => n.to_string(),
-            // An id that is neither is not an id this client ever minted
-            // (`next_id` produces decimal strings), so nothing is waiting on it.
-            _ => return Inbound::Unrecognized,
+        let Some(id) = response_id_key(id) else {
+            // `next_id` produces decimal strings; nothing waits on other shapes.
+            return Inbound::Unrecognized;
         };
+        let id = id.into_owned();
         let result = match (value.get("error"), value.get("result")) {
             (Some(error), _) => Err(serde_json::from_value::<JsonRpcError>(error.clone())
                 .unwrap_or_else(|e| JsonRpcError {
@@ -778,7 +802,7 @@ impl AlephClient {
                 let mut received_response = false;
                 let mut chat_allowed = None;
                 while let Ok(Some(text)) = local_ipc::read_frame(&mut read).await {
-                    let Ok(value) = local_ipc::parse_payload(&text) else {
+                    let Ok(value) = parse_desktop_reply(&text, &socket.requests) else {
                         break;
                     };
                     // With `live_events`, an id-less notification takes the
@@ -1004,7 +1028,7 @@ impl AlephClient {
         // `device_token` / `bootstrap_ticket`. Method + id + size suffice.
         debug!(method = %method, id = %id, bytes = json.len(), "Sending request");
 
-        let mut pending = socket.requests.reserve(id, during_handshake)?;
+        let mut pending = socket.requests.reserve(id, method, during_handshake)?;
         socket.send_text(json).await?;
         if socket.retain_sent_requests {
             pending.retain_until_reply();
@@ -1154,6 +1178,21 @@ impl AlephClient {
     /// Whether the current socket is live and has completed its handshake.
     pub fn is_connected(&self) -> bool {
         self.socket().requests.is_ready()
+    }
+
+    /// Run a short, synchronous side effect only while this Desktop IPC
+    /// socket is Ready, ordered against that socket's logical retirement.
+    /// Returns `None` for WebSocket, unready or retired connections.
+    ///
+    /// The action runs under the request-state lock, never the socket
+    /// selection or writer lock. It must not call back into the client,
+    /// take locks used by client callers, or wait for I/O or async work.
+    pub fn with_ready_local_connection<T>(&self, action: impl FnOnce() -> T) -> Option<T> {
+        if self.url.is_some() {
+            return None;
+        }
+        // Desktop IPC has no in-place reconnect; the host installs a new client.
+        self.socket().requests.with_ready(action)
     }
 
     /// Close the captured socket, not any replacement installed while waiting
@@ -1831,6 +1870,30 @@ mod tests {
 #[cfg(test)]
 mod wire_contract {
     use super::{classify_frame, Inbound};
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn voice_turn_desktop_large_reply_requires_exact_wire_id() {
+        use super::{classify_value, local_ipc, parse_desktop_reply, RequestState};
+        use aleph_protocol::panel_voice::VOICE_TURN_SYNTHESIZE_METHOD;
+        use std::sync::Arc;
+
+        let requests = Arc::new(RequestState::new());
+        assert!(requests.mark_ready());
+        let _pending = requests
+            .reserve("1".into(), VOICE_TURN_SYNTHESIZE_METHOD, false)
+            .unwrap();
+        let mut reply = json!({"jsonrpc":"2.0", "id":1, "result":{"audio_base64":"AA=="}});
+        let ordinary_reply = parse_desktop_reply(&reply.to_string(), &requests).unwrap();
+        assert!(
+            matches!(classify_value(ordinary_reply), Inbound::Response { id, .. } if id == "1")
+        );
+
+        reply["result"]["audio_base64"] = json!("A".repeat(local_ipc::MAX_STRING_BYTES + 4));
+        assert!(parse_desktop_reply(&reply.to_string(), &requests).is_err());
+        reply["id"] = json!("1");
+        assert!(parse_desktop_reply(&reply.to_string(), &requests).is_ok());
+    }
     use aleph_protocol::{JsonRpcRequest, StreamEvent};
     use serde_json::json;
 

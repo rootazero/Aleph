@@ -72,6 +72,9 @@ pub trait SessionEventStore: Send + Sync + 'static {
     /// `retire` runs BEFORE the inserts so the batch's own rows stay live.
     /// `durability` decides whether the commit fsyncs the WAL
     /// ([`Durability::Barrier`]) or rides the store's resting level.
+    /// Return [`SessionError::AppendOutcomeUnknown`] if the commit cannot be
+    /// confirmed and the batch may already be durable. Other errors must
+    /// mean the attempted batch did not land; callers may retry those errors.
     ///
     /// An empty `events` with no `retire` is refused: a "batch" that could do
     /// nothing would report success for nothing. An empty `events` WITH a
@@ -1231,8 +1234,8 @@ fn with_synchronous_full<T>(
 }
 
 /// The transaction itself: `BEGIN IMMEDIATE`, retire, insert every row,
-/// `COMMIT`. Any error returns before `commit`, and dropping the
-/// `Transaction` uncommitted rolls it back (rusqlite's default
+/// `COMMIT`. An error before `commit` drops the uncommitted transaction
+/// and rolls it back (rusqlite's default
 /// `DropBehavior::Rollback`) — so a batch whose third row collides leaves rows
 /// one and two behind with it, and leaves the retired range live.
 fn write_batch(
@@ -1282,8 +1285,11 @@ fn write_batch(
         )
         .map_err(|e| SessionError::Storage(e.to_string()))?;
     }
-    tx.commit()
-        .map_err(|e| SessionError::Storage(format!("append_batch COMMIT failed: {e}")))
+    tx.commit().map_err(|e| {
+        SessionError::AppendOutcomeUnknown(format!(
+            "storage error: append_batch COMMIT failed: {e}"
+        ))
+    })
 }
 
 #[async_trait]

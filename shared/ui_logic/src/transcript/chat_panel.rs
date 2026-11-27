@@ -57,6 +57,10 @@ struct PendingSend {
     held: Vec<ChatFrame>,
     bytes: usize,
     incomplete: bool,
+    /// `stream.run_joined` frames seen before the send reply. Kept apart from
+    /// `held`: a handoff is the only frame a folded send ever gets, so the
+    /// byte budget and the age limit must not drop it.
+    handoffs: Vec<ChatFrame>,
 }
 
 #[derive(Deserialize)]
@@ -98,6 +102,7 @@ struct FrameData {
     tool_call_id: Option<String>,
     change: Option<ChatToolChange>,
     error: Option<String>,
+    joined_run_id: Option<String>,
     #[serde(default)]
     is_final: bool,
     #[serde(default)]
@@ -197,6 +202,7 @@ impl ChatState {
             held: Vec::new(),
             bytes: 0,
             incomplete: false,
+            handoffs: Vec::new(),
         };
         patch.insert(pending.prompt.row());
         self.pending = Some(pending);
@@ -219,9 +225,30 @@ impl ChatState {
         let mut run = LiveRun::new(run_id.clone(), now_ms, missing);
         run.prompt = Some(pending.prompt);
         self.live = Some(run);
+        let (own, others): (Vec<_>, Vec<_>) = held
+            .into_iter()
+            .partition(|frame| frame.data.run_id == run_id);
         if !expired {
-            for frame in held.into_iter().filter(|frame| frame.data.run_id == run_id) {
+            for frame in own {
                 self.fold_live_frame(frame, now_ms, &mut patch);
+            }
+        }
+        let handoff = pending
+            .handoffs
+            .into_iter()
+            .find(|frame| frame.data.run_id == run_id);
+        if let Some(frame) = handoff {
+            self.fold_live_frame(frame, now_ms, &mut patch);
+            // The send now follows the run it joined; that run's frames held
+            // alongside it belong to this conversation too.
+            let joined = self.live.as_ref().map(|run| run.id.clone());
+            if let (false, Some(joined)) = (expired, joined) {
+                for frame in others
+                    .into_iter()
+                    .filter(|frame| frame.data.run_id == joined)
+                {
+                    self.fold_live_frame(frame, now_ms, &mut patch);
+                }
             }
         }
         patch.reconcile |= missing;
@@ -246,6 +273,7 @@ impl ChatState {
                 | "stream.chat_tool"
                 | "stream.run_complete"
                 | "stream.run_error"
+                | "stream.run_joined"
         ) {
             return encode(patch);
         }
@@ -269,7 +297,13 @@ impl ChatState {
             }
         } else if let Some(pending) = &mut self.pending {
             // Keep complete frames only and never retain unrelated data after the send reply.
-            if now_ms.saturating_sub(pending.started_ms) > EARLY_AGE_MS {
+            if frame.topic == "stream.run_joined" {
+                if pending.handoffs.len() < EARLY_FRAMES {
+                    pending.handoffs.push(frame);
+                } else {
+                    pending.incomplete = true;
+                }
+            } else if now_ms.saturating_sub(pending.started_ms) > EARLY_AGE_MS {
                 pending.held.clear();
                 pending.bytes = 0;
                 pending.incomplete = true;
@@ -691,6 +725,10 @@ impl ChatState {
     }
 
     fn fold_live_frame(&mut self, frame: ChatFrame, now_ms: u64, patch: &mut Patch) {
+        if frame.topic == "stream.run_joined" {
+            self.follow_joined_run(frame.data.joined_run_id, now_ms, patch);
+            return;
+        }
         if let Some(run) = &mut self.live {
             if Self::fold_frame(run, frame, now_ms, patch) {
                 self.retain_live_preview(patch, false);
@@ -764,6 +802,33 @@ impl ChatState {
             patch.terminal_run = Some(run.id.clone());
         }
         terminal
+    }
+
+    /// Core folded this send into the run already live on the session, so
+    /// the send's own id will never produce a reply. Its prompt row goes —
+    /// the folded message is committed inside the live run's turn and the
+    /// reload brings it back there. The joined run becomes the live run at
+    /// once, so Stop tracks the run that is actually answering and that run's
+    /// frames, its terminal one included, land while the reload is in flight.
+    /// Its earlier frames were not seen here, so it starts with a missing
+    /// prefix the reload fills in.
+    fn follow_joined_run(&mut self, joined: Option<String>, now_ms: u64, patch: &mut Patch) {
+        let Some(run) = self.live.take() else {
+            return;
+        };
+        patch
+            .remove
+            .extend(run.rows().map(|row| row.key().to_owned()));
+        self.last_ended = Some(run.id);
+        patch.reconcile = true;
+        let Some(joined) = joined else {
+            return;
+        };
+        // A run already sealed here has ended or is shown as its own preview.
+        if self.sealed.iter().any(|sealed| sealed.id == joined) {
+            return;
+        }
+        self.live = Some(LiveRun::new(joined, now_ms, true));
     }
 
     fn retain_live_preview(&mut self, patch: &mut Patch, detached: bool) {

@@ -37,6 +37,77 @@ pub struct MediaProcessor {
     vision: Option<Arc<VisionPipeline>>,
 }
 
+/// One turn's pending media. Shared across Gateway retry attempts so a
+/// stable binding does not repeat downloads or transcription. Its last
+/// owner cleans up, including when the Gateway drops before the runner exits.
+pub struct PendingMedia {
+    processor: Arc<MediaProcessor>,
+    attachments: Vec<Attachment>,
+    cache_key: String,
+    vision: tokio::sync::OnceCell<Vec<serde_json::Value>>,
+    text_only: tokio::sync::OnceCell<Vec<serde_json::Value>>,
+}
+
+impl std::fmt::Debug for PendingMedia {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingMedia")
+            .field("attachment_count", &self.attachments.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PendingMedia {
+    pub fn new(processor: Arc<MediaProcessor>, attachments: Vec<Attachment>) -> Self {
+        Self {
+            processor,
+            attachments,
+            cache_key: uuid::Uuid::new_v4().to_string(),
+            vision: tokio::sync::OnceCell::new(),
+            text_only: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    pub(crate) fn cache_key(&self) -> &str {
+        &self.cache_key
+    }
+
+    pub(crate) async fn blocks(&self, model: Option<&str>, run_id: &str) -> &[serde_json::Value] {
+        // Custom aliases absent from static metadata retain native images.
+        let supports_vision = model
+            .and_then(crate::providers::capabilities_for)
+            .is_none_or(|caps| caps.supports_vision);
+        let cell = if supports_vision {
+            &self.vision
+        } else {
+            &self.text_only
+        };
+        cell.get_or_init(|| async {
+            let blocks = self.processor
+                .process(&self.attachments, supports_vision, &self.cache_key, run_id)
+                .await;
+            tracing::info!(
+                target: "multimodal",
+                probe = "P5_inject",
+                %run_id,
+                content_blocks = blocks.len(),
+                has_images = blocks.iter().any(|block| matches!(block, ContentBlock::Image { .. })),
+                has_transcripts = blocks.iter().any(|block| matches!(block, ContentBlock::Text { text, .. } if text.starts_with("[Voice message transcript]"))),
+                supports_vision,
+                model = model.unwrap_or_default(),
+                "Multimodal content blocks built"
+            );
+            blocks.iter().filter_map(|block| serde_json::to_value(block).ok()).collect()
+        })
+        .await
+    }
+}
+
+impl Drop for PendingMedia {
+    fn drop(&mut self) {
+        self.processor.cleanup(&self.cache_key);
+    }
+}
+
 impl MediaProcessor {
     /// Create a new processor with optional transcription and vision backends.
     #[must_use]

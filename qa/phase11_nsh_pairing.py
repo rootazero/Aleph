@@ -11,7 +11,7 @@ import tempfile
 import time
 import uuid
 
-EFFECTS = ["initial_empty", "ticket_submitted", "pair_authorized", "save_ack",
+EFFECTS = ["initial_empty", "local_without_prompt", "ticket_submitted", "pair_authorized", "save_ack",
            "reload_stored", "reload_protected", "no_reload_ticket", "cleanup_deleted", "cleanup_empty"]
 
 

@@ -7,7 +7,7 @@ use super::{engine::ExecutionEngine, ExecutionError, RunRequest, RunStatus};
 use crate::executor::ToolRegistry;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter};
-use crate::gateway::execution_adapter::ExecutionAdapter;
+use crate::gateway::execution_adapter::{ChatRunCancellation, ExecutionAdapter};
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 
 /// Implement `ExecutionAdapter` for the `ExecutionEngine`.
@@ -30,6 +30,22 @@ where
         // then delegate to the existing generic execute method
         let wrapper = Arc::new(DynEventEmitter::new(emitter));
         Self::execute(self, request, agent, wrapper).await
+    }
+
+    fn chat_run_cancellation(&self) -> Option<ChatRunCancellation> {
+        Some(ChatRunCancellation::default())
+    }
+
+    async fn execute_chat_run(
+        &self,
+        request: RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<dyn EventEmitter + Send + Sync>,
+        cancellation: ChatRunCancellation,
+    ) -> Result<(), ExecutionError> {
+        let emitter = Arc::new(DynEventEmitter::new(emitter));
+        self.execute_with_chat_cancellation(request, agent, emitter, Some(&cancellation))
+            .await
     }
 
     async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {

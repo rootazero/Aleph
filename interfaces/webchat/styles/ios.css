@@ -91,8 +91,7 @@
    Unlayered, so it beats Tailwind's `@layer utilities` regardless of order —
    same mechanism the `@media (hover:none)` block in tailwind.css relies on. */
 
-/* The macOS traffic-light inset. Inside PhoneShell the glass title bar already
-   owns the top of the screen, so this is pure dead space (up to 48 px). */
+/* The phone title bar already provides the top inset. */
 .phone-wrapped .aleph-content-top { padding-top: 0; }
 
 /* Desktop page gutters. The shell contributes none in wrapped mode, so these

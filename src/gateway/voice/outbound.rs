@@ -167,6 +167,47 @@ pub(crate) async fn generate_tts_outcome(
     generation_registry: &GenerationProviderRegistry,
     generation_config: &GenerationConfig,
 ) -> TtsOutcome {
+    synthesize_tts(
+        text,
+        voice_state,
+        generation_registry,
+        generation_config,
+        TtsPolicy::Legacy,
+    )
+    .await
+    .unwrap_or(TtsOutcome::Failed)
+}
+
+/// One attempt per candidate, with the existing single provider fallback.
+/// `None` means no speech provider could be selected.
+pub(crate) async fn generate_tts_turn(
+    text: &str,
+    generation_registry: &GenerationProviderRegistry,
+    generation_config: &GenerationConfig,
+) -> Option<TtsOutcome> {
+    synthesize_tts(
+        text,
+        &VoiceState::default(),
+        generation_registry,
+        generation_config,
+        TtsPolicy::VoiceTurn,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum TtsPolicy {
+    Legacy,
+    VoiceTurn,
+}
+
+async fn synthesize_tts(
+    text: &str,
+    voice_state: &VoiceState,
+    generation_registry: &GenerationProviderRegistry,
+    generation_config: &GenerationConfig,
+    policy: TtsPolicy,
+) -> Option<TtsOutcome> {
     // Defensively strip speech-hostile markdown/code/URLs and clamp to the
     // provider's character ceiling. The VoiceModeLayer *asks* the model to
     // avoid these, but R7/P7 forbid trusting compliance — a stray `**` or a
@@ -175,12 +216,12 @@ pub(crate) async fn generate_tts_outcome(
     let spoken = super::sanitize::sanitize_for_tts(text);
     if spoken.trim().is_empty() {
         debug!("TTS: reply has no speakable content after sanitization, skipping");
-        return TtsOutcome::Skipped;
+        return Some(TtsOutcome::Skipped);
     }
     let candidates = tts_candidates(voice_state, generation_registry, generation_config);
     if candidates.is_empty() {
         warn!("TTS: no speech provider available — no override, no default, no auto-detect");
-        return TtsOutcome::Failed;
+        return None;
     }
 
     // Execute TTS under a length-aware per-attempt deadline so a wedged provider
@@ -213,7 +254,10 @@ pub(crate) async fn generate_tts_outcome(
         }
         let output = synth_with_retry(
             timeout,
-            TTS_MAX_ATTEMPTS,
+            match policy {
+                TtsPolicy::Legacy => TTS_MAX_ATTEMPTS,
+                TtsPolicy::VoiceTurn => 1,
+            },
             TTS_RETRY_BACKOFF,
             provider_id,
             || {
@@ -229,18 +273,22 @@ pub(crate) async fn generate_tts_outcome(
         }
     }
     let Some(output) = generated else {
-        return TtsOutcome::Failed;
+        return Some(TtsOutcome::Failed);
     };
+    let mime_type = output
+        .metadata
+        .content_type
+        .unwrap_or_else(|| match policy {
+            TtsPolicy::Legacy => "audio/mpeg".to_owned(),
+            TtsPolicy::VoiceTurn => String::new(),
+        });
 
     // Convert GenerationData → Attachment
     let id = uuid::Uuid::new_v4().to_string();
     let attachment = match output.data {
         GenerationData::Bytes(bytes) => Attachment {
             id,
-            mime_type: output
-                .metadata
-                .content_type
-                .unwrap_or_else(|| "audio/mpeg".to_string()),
+            mime_type,
             filename: Some("tts_output.mp3".to_string()),
             size: Some(bytes.len() as u64),
             url: None,
@@ -251,10 +299,7 @@ pub(crate) async fn generate_tts_outcome(
         },
         GenerationData::Url(url) => Attachment {
             id,
-            mime_type: output
-                .metadata
-                .content_type
-                .unwrap_or_else(|| "audio/mpeg".to_string()),
+            mime_type,
             filename: Some("tts_output.mp3".to_string()),
             size: None,
             url: Some(url),
@@ -265,10 +310,7 @@ pub(crate) async fn generate_tts_outcome(
         },
         GenerationData::LocalPath(path) => Attachment {
             id,
-            mime_type: output
-                .metadata
-                .content_type
-                .unwrap_or_else(|| "audio/mpeg".to_string()),
+            mime_type,
             filename: Some("tts_output.mp3".to_string()),
             size: None,
             url: None,
@@ -279,7 +321,7 @@ pub(crate) async fn generate_tts_outcome(
         },
     };
 
-    TtsOutcome::Generated(attachment)
+    Some(TtsOutcome::Generated(attachment))
 }
 
 // ---------------------------------------------------------------------------

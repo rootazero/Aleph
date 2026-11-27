@@ -5,6 +5,7 @@ use std::io;
 use aleph_protocol::framing::{
     decode_header, encode_header, DEFAULT_MAX_PAYLOAD_BYTES, HEADER_BYTES,
 };
+use aleph_protocol::panel_voice::{MAX_WAV_BASE64_BYTES, VOICE_TURN_TRANSCRIBE_METHOD};
 use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -23,7 +24,8 @@ pub const HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5)
 
 const MAX_DEPTH: usize = 64;
 const MAX_ITEMS: usize = 4096;
-const MAX_STRING_BYTES: usize = 65_536;
+/// Maximum UTF-8 byte length of ordinary strings in a v1 JSON payload.
+pub const MAX_STRING_BYTES: usize = 65_536;
 
 /// EOF before a new header is clean; EOF within a frame is an error.
 /// If cancelled, discard the stream rather than restarting at a partial frame.
@@ -78,10 +80,61 @@ pub async fn write_frame(writer: &mut (impl AsyncWrite + Unpin), text: &str) -> 
 }
 
 pub fn parse_payload(text: &str) -> io::Result<Value> {
+    parse_bounded_payload(text, None)
+}
+
+pub fn parse_request_payload(text: &str) -> io::Result<Value> {
+    let value = parse_bounded_payload(text, Some(("params", MAX_WAV_BASE64_BYTES)))?;
+    if has_long_voice_audio(&value, "params")
+        && value.get("method").and_then(Value::as_str) != Some(VOICE_TURN_TRANSCRIBE_METHOD)
+    {
+        return Err(invalid_data("IPC string limit exceeded"));
+    }
+    Ok(value)
+}
+
+/// `accepts_synthesis_id` must match responses to a dispatched or pending synthesis call.
+pub fn parse_voice_response_payload(
+    text: &str,
+    frame_budget: usize,
+    accepts_synthesis_id: impl FnOnce(&Value) -> bool,
+) -> io::Result<Value> {
+    if text.len() > frame_budget {
+        return Err(invalid_data("IPC frame length exceeded"));
+    }
+    let value = parse_bounded_payload(text, Some(("result", frame_budget)))?;
+    if has_long_voice_audio(&value, "result")
+        && (value.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+            || value.get("method").is_some()
+            || value.get("error").is_some()
+            || !value.get("id").is_some_and(accepts_synthesis_id))
+    {
+        return Err(invalid_data("IPC string limit exceeded"));
+    }
+    Ok(value)
+}
+
+fn has_long_voice_audio(value: &Value, parent: &str) -> bool {
+    value
+        .get(parent)
+        .and_then(|parent| parent.get("audio_base64"))
+        .and_then(Value::as_str)
+        .is_some_and(|audio| audio.len() > MAX_STRING_BYTES)
+}
+
+fn parse_bounded_payload(
+    text: &str,
+    voice_audio: Option<(&'static str, usize)>,
+) -> io::Result<Value> {
     let mut decoder = serde_json::Deserializer::from_str(text);
-    let value = JsonValue(0)
-        .deserialize(&mut decoder)
-        .map_err(invalid_data)?;
+    let value = JsonValue {
+        depth: 0,
+        position: voice_audio.map_or(JsonPosition::Ordinary, |(parent, max)| {
+            JsonPosition::Root(parent, max)
+        }),
+    }
+    .deserialize(&mut decoder)
+    .map_err(invalid_data)?;
     decoder.end().map_err(invalid_data)?;
     Ok(value)
 }
@@ -92,7 +145,27 @@ fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> i
 
 // Check the shape during deserialization: counting the final map would miss
 // repeated keys and their discarded values.
-struct JsonValue(usize);
+#[derive(Clone, Copy)]
+enum JsonPosition {
+    Ordinary,
+    Root(&'static str, usize),
+    VoiceAudioParent(usize),
+    VoiceAudio(usize),
+}
+
+struct JsonValue {
+    depth: usize,
+    position: JsonPosition,
+}
+
+impl JsonValue {
+    fn child(&self, position: JsonPosition) -> Self {
+        Self {
+            depth: self.depth + 1,
+            position,
+        }
+    }
+}
 
 impl<'de> DeserializeSeed<'de> for JsonValue {
     type Value = Value;
@@ -126,18 +199,22 @@ impl<'de> Visitor<'de> for JsonValue {
     }
 
     fn visit_str<E: Error>(self, value: &str) -> Result<Value, E> {
-        if value.len() > MAX_STRING_BYTES {
+        let max = match self.position {
+            JsonPosition::VoiceAudio(max) => max,
+            _ => MAX_STRING_BYTES,
+        };
+        if value.len() > max {
             return Err(E::custom("IPC string limit exceeded"));
         }
         Ok(value.into())
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
-        if self.0 >= MAX_DEPTH {
+        if self.depth >= MAX_DEPTH {
             return Err(A::Error::custom("IPC JSON depth limit exceeded"));
         }
         let mut items = Vec::new();
-        while let Some(value) = seq.next_element_seed(JsonValue(self.0 + 1))? {
+        while let Some(value) = seq.next_element_seed(self.child(JsonPosition::Ordinary))? {
             if items.len() == MAX_ITEMS {
                 return Err(A::Error::custom("IPC array limit exceeded"));
             }
@@ -147,7 +224,7 @@ impl<'de> Visitor<'de> for JsonValue {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
-        if self.0 >= MAX_DEPTH {
+        if self.depth >= MAX_DEPTH {
             return Err(A::Error::custom("IPC JSON depth limit exceeded"));
         }
         let mut members = Map::new();
@@ -160,7 +237,16 @@ impl<'de> Visitor<'de> for JsonValue {
                     "IPC object limit exceeded or duplicate member",
                 ));
             }
-            let value = map.next_value_seed(JsonValue(self.0 + 1))?;
+            let position = match self.position {
+                JsonPosition::Root(parent, max) if key == parent => {
+                    JsonPosition::VoiceAudioParent(max)
+                }
+                JsonPosition::VoiceAudioParent(max) if key == "audio_base64" => {
+                    JsonPosition::VoiceAudio(max)
+                }
+                _ => JsonPosition::Ordinary,
+            };
+            let value = map.next_value_seed(self.child(position))?;
             members.insert(key, value);
         }
         Ok(Value::Object(members))
@@ -303,6 +389,69 @@ mod tests {
             read_frame(&mut non_utf8).await.unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
+    }
+
+    #[test]
+    fn voice_turn_request_parser_only_admits_exact_audio_path() {
+        let max = "A".repeat(MAX_WAV_BASE64_BYTES);
+        let before_method = format!(
+            r#"{{"params":{{"audio_base64":"{max}"}},"method":"{VOICE_TURN_TRANSCRIBE_METHOD}"}}"#
+        );
+        assert!(parse_request_payload(&before_method).is_ok());
+        assert!(parse_payload(&before_method).is_err());
+
+        let over = format!(
+            r#"{{"method":"{VOICE_TURN_TRANSCRIBE_METHOD}","params":{{"audio_base64":"{max}A"}}}}"#
+        );
+        assert!(parse_request_payload(&over).is_err());
+        let long = "A".repeat(MAX_STRING_BYTES + 1);
+        for bad in [
+            format!(r#"{{"method":"voice.transcribe","params":{{"audio_base64":"{long}"}}}}"#),
+            format!(
+                r#"{{"method":"{VOICE_TURN_TRANSCRIBE_METHOD}","params":[{{"audio_base64":"{long}"}}]}}"#
+            ),
+            format!(
+                r#"{{"method":"{VOICE_TURN_TRANSCRIBE_METHOD}","params":{{"nested":{{"audio_base64":"{long}"}}}}}}"#
+            ),
+            format!(
+                r#"{{"method":"{VOICE_TURN_TRANSCRIBE_METHOD}","params":{{"audio_base64":["{long}"]}}}}"#
+            ),
+            format!(
+                r#"{{"method":"{VOICE_TURN_TRANSCRIBE_METHOD}","params":{{"text":"{long}"}}}}"#
+            ),
+            format!(
+                r#"{{"method":"voice.transcribe","method":"{VOICE_TURN_TRANSCRIBE_METHOD}","params":{{"audio_base64":"{long}"}}}}"#
+            ),
+            format!(
+                r#"{{"method":"{VOICE_TURN_TRANSCRIBE_METHOD}","params":{{"audio_base64":"{long}","audio_base64":"A"}}}}"#
+            ),
+        ] {
+            assert!(parse_request_payload(&bad).is_err());
+        }
+    }
+
+    #[test]
+    fn voice_turn_response_parser_requires_correlated_synthesis() {
+        let long = "A".repeat(MAX_STRING_BYTES + 1);
+        let exact = format!(r#"{{"result":{{"audio_base64":"{long}"}},"id":1,"jsonrpc":"2.0"}}"#);
+        let accepts = |id: &Value| id.as_i64() == Some(1);
+        assert!(parse_voice_response_payload(&exact, exact.len(), accepts).is_ok());
+        assert!(parse_voice_response_payload(&exact, exact.len() - 1, accepts).is_err());
+        assert!(parse_voice_response_payload(&exact, exact.len(), |_| false).is_err());
+        assert!(parse_payload(&exact).is_err());
+        for bad in [
+            format!(r#"{{"jsonrpc":"2.0","result":{{"audio_base64":"{long}"}}}}"#),
+            format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"notice","result":{{"audio_base64":"{long}"}}}}"#
+            ),
+            format!(
+                r#"{{"jsonrpc":"2.0","id":1,"result":{{"nested":{{"audio_base64":"{long}"}}}}}}"#
+            ),
+            format!(r#"{{"jsonrpc":"2.0","id":1,"result":{{"text":"{long}"}}}}"#),
+            format!(r#"{{"jsonrpc":"2.0","id":1,"id":2,"result":{{"audio_base64":"{long}"}}}}"#),
+        ] {
+            assert!(parse_voice_response_payload(&bad, bad.len(), accepts).is_err());
+        }
     }
 
     #[test]

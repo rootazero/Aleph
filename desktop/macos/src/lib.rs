@@ -17,6 +17,7 @@ mod pim;
 mod screen;
 mod sleep_inhibitor;
 mod system;
+mod voice_capture;
 
 pub use sleep_inhibitor::MacosPower;
 // Exposed for `tests/escape_listener_e2e.rs`, which proves the abort key is
@@ -34,7 +35,7 @@ use aleph_desktop::media_types::{
 use aleph_desktop::platform::EscapeAbort;
 use aleph_desktop::traits::{
     AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
-    PimCapability, PowerCapability, ScreenCapability, SystemCapability,
+    PimCapability, PowerCapability, ScreenCapability, SystemCapability, VoiceCapture,
 };
 use aleph_desktop::DesktopPlatform;
 use aleph_desktop::Result;
@@ -70,6 +71,25 @@ pub struct MacOSPlatform {
 /// build a platform handle. The client is lazy: the child process is not
 /// spawned until the first real `desktop.*` call.
 static SHARED_BRIDGE: OnceLock<Arc<SwiftBridge>> = OnceLock::new();
+
+/// Bind the Core-resolved staging root before constructing any platform handles.
+/// Returns false if the shared client does not have this exact root. Never spawns
+/// the helper or changes an existing client.
+#[must_use]
+pub fn configure_offline_speech_root(root: &std::path::Path) -> bool {
+    if !root.is_absolute() {
+        return false;
+    }
+    SHARED_BRIDGE
+        .get_or_init(|| {
+            Arc::new(SwiftBridge::new_with_offline_speech_root(
+                resolve_helper_path(),
+                Some(root.to_path_buf()),
+            ))
+        })
+        .offline_speech_root()
+        .is_some_and(|configured| configured.as_os_str() == root.as_os_str())
+}
 
 fn shared_bridge() -> Arc<SwiftBridge> {
     SHARED_BRIDGE
@@ -208,6 +228,32 @@ fn preserve_typed(method: &str, e: aleph_desktop::DesktopError) -> aleph_desktop
     }
 }
 
+fn matching_offline_transcribe_success(
+    result: &serde_json::Value,
+    expected_operation_id: &str,
+) -> Option<SpeechToTextResult> {
+    use aleph_protocol::desktop_bridge::methods::media::{
+        OfflineSpeechInputRelease, OfflineTranscribeFileResult,
+    };
+
+    let OfflineTranscribeFileResult::Success {
+        operation_id,
+        input_release: OfflineSpeechInputRelease::Detached,
+        text,
+        language,
+    } = serde::Deserialize::deserialize(result).ok()?;
+    (operation_id == expected_operation_id).then_some(SpeechToTextResult { text, language })
+}
+
+fn offline_transcribe_proves_release(
+    reply: &aleph_desktop::bridge::client::BridgeRemoteReply,
+    expected_operation_id: &str,
+) -> bool {
+    reply.as_ref().is_ok_and(|result| {
+        matching_offline_transcribe_success(result, expected_operation_id).is_some()
+    })
+}
+
 /// Extra time beyond a capture's requested duration to allow for capture-
 /// session warm-up, encoding, and disk I/O before the RPC is treated as hung.
 /// Added on top of `duration_secs` for `camera.clip` / `audio.record`, whose
@@ -218,6 +264,12 @@ const CAPTURE_TIMEOUT_MARGIN_SECS: f64 = 30.0;
 /// known to the Rust side, so this is bounded generously rather than derived.
 const SPEECH_TRANSCRIBE_TIMEOUT: Duration = Duration::from_mins(5);
 
+/// The helper enforces the offline recognizer deadline itself; this leaves
+/// headroom for its reply before the Rust side retires and reaps the helper.
+const OFFLINE_SPEECH_TIMEOUT: Duration = Duration::from_millis(
+    aleph_protocol::desktop_bridge::methods::media::OFFLINE_SPEECH_DEADLINE_MS + 15_000,
+);
+
 // ---------------------------------------------------------------------------
 // MediaCapability: camera + audio + speech proxied via the Swift helper.
 // All method bodies are thin RPC forwarders — no native AVFoundation /
@@ -225,6 +277,18 @@ const SPEECH_TRANSCRIBE_TIMEOUT: Duration = Duration::from_mins(5);
 // ---------------------------------------------------------------------------
 #[async_trait]
 impl MediaCapability for MacOSPlatform {
+    fn supports_voice_capture(&self) -> bool {
+        true
+    }
+
+    async fn voice_capture_begin(
+        &self,
+        cancel: aleph_desktop::CancellationToken,
+    ) -> Result<Box<dyn VoiceCapture>> {
+        let capture = voice_capture::MacVoiceCapture::begin(&self.bridge, &cancel).await?;
+        Ok(Box::new(capture))
+    }
+
     async fn camera_snap(&self, config: CameraSnapConfig) -> Result<CameraSnapResult> {
         use aleph_protocol::desktop_bridge::methods::media::{
             SnapParams, SnapResult, METHOD_CAMERA_SNAP,
@@ -390,7 +454,8 @@ impl MediaCapability for MacOSPlatform {
                 METHOD_SPEECH_TRANSCRIBE_FILE,
                 TranscribeFileParams {
                     audio_path: audio_path.to_string(),
-                    language: config.language.clone(),
+                    language: Some(config.language.clone()),
+                    offline_only: None,
                 },
                 SPEECH_TRANSCRIBE_TIMEOUT,
             )
@@ -399,6 +464,48 @@ impl MediaCapability for MacOSPlatform {
         Ok(SpeechToTextResult {
             text: rpc.text,
             language: rpc.language,
+        })
+    }
+
+    async fn speech_to_text_offline(
+        &self,
+        audio_path: &str,
+        language: Option<&str>,
+        cancel: aleph_desktop::CancellationToken,
+    ) -> Result<SpeechToTextResult> {
+        use aleph_desktop::bridge::client::map_bridge_error;
+        use aleph_protocol::desktop_bridge::methods::media::{
+            OfflineSpeechPolicy, TranscribeFileParams, METHOD_SPEECH_TRANSCRIBE_FILE,
+        };
+
+        // Neither the path nor the language is logged: both describe a user turn.
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let reply = self
+            .bridge
+            .call_bound(
+                METHOD_SPEECH_TRANSCRIBE_FILE,
+                TranscribeFileParams {
+                    audio_path: audio_path.to_string(),
+                    // Only the policy carries the language: a helper that predates
+                    // it rejects the request instead of recognizing over the network.
+                    language: None,
+                    offline_only: Some(OfflineSpeechPolicy {
+                        operation_id: operation_id.clone(),
+                        language: language.map(str::to_owned),
+                    }),
+                },
+                OFFLINE_SPEECH_TIMEOUT,
+                &cancel,
+                |reply| offline_transcribe_proves_release(reply, &operation_id),
+            )
+            .await
+            .map_err(|e| preserve_typed(METHOD_SPEECH_TRANSCRIBE_FILE, e))?;
+        let result = reply.map_err(map_bridge_error)?;
+        // call_bound may return the original ambiguous reply after reaping.
+        matching_offline_transcribe_success(&result, &operation_id).ok_or_else(|| {
+            aleph_desktop::DesktopError::BridgeFailed(
+                "offline speech reply lacks matching input release proof".into(),
+            )
         })
     }
 }
@@ -451,6 +558,54 @@ mod tests {
             !platform.bridge().is_running(),
             "constructing a platform must not spawn the bridge"
         );
+    }
+
+    fn detached_offline_transcribe_result() -> serde_json::Value {
+        serde_json::json!({
+            "operation_id": "op",
+            "input_release": "detached",
+            "text": "hi",
+            "language": "en-US",
+        })
+    }
+
+    #[test]
+    fn offline_transcribe_proves_release_only_for_exact_operation_id() {
+        let result = detached_offline_transcribe_result();
+        let reply = Ok(result.clone());
+        assert!(offline_transcribe_proves_release(&reply, "op"));
+        assert!(!offline_transcribe_proves_release(&reply, "OP"));
+        assert!(matching_offline_transcribe_success(&result, "OP").is_none());
+        let success = matching_offline_transcribe_success(&result, "op").unwrap();
+        assert_eq!(success.text, "hi");
+        assert_eq!(success.language, "en-US");
+    }
+
+    #[test]
+    fn offline_transcribe_proves_release_rejects_non_proof_replies() {
+        use aleph_protocol::desktop_bridge::envelope::RpcError;
+        use aleph_protocol::desktop_bridge::errors::ERR_PLATFORM;
+        use serde_json::json;
+
+        let mut invalid_release = detached_offline_transcribe_result();
+        invalid_release["input_release"] = json!(true);
+        let mut invalid_text = detached_offline_transcribe_result();
+        invalid_text["text"] = json!(null);
+        for result in [
+            json!({"text": "hi", "language": "en-US"}),
+            json!({"cancelled": true}),
+            invalid_release,
+            invalid_text,
+        ] {
+            assert!(matching_offline_transcribe_success(&result, "op").is_none());
+            assert!(!offline_transcribe_proves_release(&Ok(result), "op"));
+        }
+        let remote_error = Err(RpcError {
+            code: ERR_PLATFORM,
+            message: "recognition failed".into(),
+            data: Some(detached_offline_transcribe_result()),
+        });
+        assert!(!offline_transcribe_proves_release(&remote_error, "op"));
     }
 
     #[test]

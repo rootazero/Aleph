@@ -6,9 +6,9 @@
 use std::time::{Duration, Instant};
 
 use aleph_protocol::terminate::{self, UiLocale};
-use aleph_protocol::{peer_message_is_renderable, AskUserQuestion, StreamEvent};
+use aleph_protocol::{peer_message_is_renderable, StreamEvent};
 
-use super::{row_timestamp, Action, ActiveRunJoin, AppState, AskDialogView};
+use super::{row_timestamp, Action, ActiveRunJoin, AppState};
 
 /// Bound on how many `(run_id, session_key)` pairs [`AppState`] remembers,
 /// learned one per `RunAccepted`. A background/cron/subagent-heavy install
@@ -67,65 +67,6 @@ pub(super) fn halt_notice(token: &str, locale: Option<UiLocale>) -> String {
     match locale {
         UiLocale::En => format!("Run stopped: {label}"),
         UiLocale::Zh => format!("运行已停止：{label}"),
-    }
-}
-
-/// Flatten an `AskUser` frame into the view the dialog overlay renders.
-///
-/// Prefers the structured `questions` view: it carries the short header, the
-/// per-option `description`, and the position within a multi-question request —
-/// none of which the flat `question` / `options` pair can express, which is why
-/// this overlay showed a bare label where a messaging channel showed
-/// `label — description`.
-///
-/// Falls back to the flat pair whenever the structured view is absent or its
-/// cursor is out of range (a frame that raced a completion), so the overlay
-/// renders *something* rather than an empty box. The fallback reports
-/// `multi_select` / `secret` as false because the flat pair cannot express
-/// either — narrowing, never widening: the worst it costs is an unmasked
-/// buffer on a core too old to have had `secret` at all.
-fn render_ask_user(
-    question: &str,
-    options: &[String],
-    questions: &[AskUserQuestion],
-    answered: usize,
-) -> AskDialogView {
-    let Some(current) = questions.get(answered) else {
-        return AskDialogView {
-            question: question.to_string(),
-            options: options.to_vec(),
-            multi_select: false,
-            secret: false,
-        };
-    };
-    let position = if questions.len() > 1 {
-        format!("({}/{}) ", answered + 1, questions.len())
-    } else {
-        String::new()
-    };
-    let header = current
-        .header
-        .as_deref()
-        .map(|h| format!("[{h}] "))
-        .unwrap_or_default();
-    let hint = if current.multi_select {
-        "\n(pick one or more — reply with comma-separated numbers)"
-    } else {
-        ""
-    };
-    let labels = current
-        .options
-        .iter()
-        .map(|o| match o.description.as_deref() {
-            Some(d) if !d.trim().is_empty() => format!("{} — {d}", o.label),
-            _ => o.label.clone(),
-        })
-        .collect();
-    AskDialogView {
-        question: format!("{position}{header}{}{hint}", current.prompt),
-        options: labels,
-        multi_select: current.multi_select,
-        secret: current.secret,
     }
 }
 
@@ -444,6 +385,10 @@ impl AppState {
             // Exhaustiveness still requires an arm for the variant, per
             // `run_scoped_id`'s doc above.
             StreamEvent::RunQueued { .. } => Action::None,
+            // This screen never adopts a send's id before `RunAccepted`, so a
+            // folded send leaves nothing to close; the joined run's own
+            // frames keep driving the transcript.
+            StreamEvent::RunJoined { .. } => Action::None,
 
             StreamEvent::AgentTrace { event, .. } => {
                 self.current_run_uses_agent_trace = true;
@@ -589,24 +534,9 @@ impl AppState {
                 Action::None
             }
 
-            StreamEvent::AskUser {
-                session_key,
-                question,
-                options,
-                questions,
-                answered,
-                ..
-            } => {
-                // The structured view when core sends one, the flat projection
-                // otherwise. Indices are identical either way, which is what
-                // lets the overlay keep answering with a bare 1-based number.
-                if session_key.is_empty() {
-                    let view = render_ask_user(&question, &options, &questions, answered);
-                    self.show_dialog(self.session_key.clone(), view);
-                }
-                self.sync_modal_focus();
-                Action::None
-            }
+            // The controller already admitted this projection or left it for
+            // the pending refresh. Never infer a missing session from focus.
+            StreamEvent::AskUser { .. } => Action::None,
 
             // The question is over — retire the card. Without this the overlay
             // holds focus and keeps claiming the agent is waiting for up to the

@@ -823,24 +823,42 @@ fn recompute_palette_filter(state: &mut AppState) {
 
 /// Handle key events when the dialog is focused.
 ///
-/// Two modes, because the overlay has to be able to produce **every** answer
-/// the server accepts, and free text is a legal answer to every question — a
-/// menu never forbids it, which is why `ask_user` tells the model not to add an
-/// "other" choice:
+/// A questionnaire is answered in two local steps, so that the request is
+/// addressed as a whole and never half-answered:
 ///
-/// * **pick** — digits answer outright, arrows move the highlight, Enter
-///   confirms it. Offered only when a single index *can* answer the question
-///   ([`DialogState::has_quick_pick`]), the same predicate the server uses to
-///   decide whether a channel gets an inline keyboard.
-/// * **type** — printable keys build a free-text answer, Backspace deletes,
-///   Enter sends it. It is the *only* mode a free-text or multi-select
-///   question has, and the mode `Tab` reaches from a menu.
+/// * **edit** — one question at a time. Digits move the menu highlight, arrows
+///   move it, printable keys build a free-text answer, `Tab` flips between the
+///   menu and the buffer, and `Enter` *stages* the answer and moves on. Left
+///   and right move between the questions of the questionnaire. Nothing is sent
+///   here: staging is local.
+/// * **review** — every staged answer on screen, `Enter` submits the whole
+///   questionnaire in one write, a left arrow (or `e`) goes back to the
+///   highlighted question to change it.
 ///
-/// Before this, the overlay was menu-only: a question with no choices had no
-/// answerable key at all, and `Esc` is deliberately swallowed for this overlay
-/// (the run is parked on a oneshot), so the TUI was held by a modal nothing
-/// could dismiss.
+/// `Esc` still only hides the overlay; discarding the request is `Ctrl+X`,
+/// which the overlay displays, so a hidden questionnaire can be reopened and
+/// answered later.
 fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
+    let Some(owner) = state.interaction.active_owner().cloned() else {
+        return Action::None;
+    };
+    let session_key = owner.session_key().to_string();
+    // A chord is a command, not text. Ctrl+C / Ctrl+D are already claimed by
+    // the global handler; everything else with a modifier must not silently
+    // land in the answer buffer.
+    let plain = !key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    // Discarding the request is a chord of its own, and it is the only key
+    // that can throw an answer away: `Esc` hides the overlay, it never
+    // discards anything.
+    if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Action::CancelQuestion { session_key };
+    }
+    // The review step has no live buffer: it shows the staged answers.
+    if state.interaction.in_review() {
+        return handle_review_key(state, key, &session_key);
+    }
     if key.code == KeyCode::Enter {
         if let Some(dialog) = state.interaction.active_dialog_mut() {
             if let ParsedInput::Local(command @ LocalCommand::Theme { .. }) =
@@ -851,21 +869,25 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
             }
         }
     }
-    if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CONTROL) {
-        if let Some(owner) = state.interaction.active_owner().cloned() {
-            state.interaction.confirm_legacy(&owner);
+    // Moving between the questions of a questionnaire is a local move: it
+    // never sends anything, and it never touches another question's draft.
+    if plain && !state.interaction.active_dialog().is_some_and(|d| d.typing) {
+        match key.code {
+            KeyCode::Left => {
+                state.interaction.move_question(-1);
+                return Action::None;
+            }
+            KeyCode::Right => {
+                state.interaction.move_question(1);
+                return Action::None;
+            }
+            _ => {}
         }
-        return Action::None;
     }
     let Some(dialog) = state.interaction.active_dialog_mut() else {
         return Action::None;
     };
-    // A chord is a command, not text. Ctrl+C / Ctrl+D are already claimed by
-    // the global handler; everything else with a modifier must not silently
-    // land in the answer buffer.
-    let plain = !key
-        .modifiers
-        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    let mut stage = false;
     match key.code {
         // Tab flips between the menu and a typed answer. Only meaningful when
         // there is a menu to flip away from.
@@ -873,14 +895,14 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
             dialog.typing = !dialog.typing;
             Action::None
         }
-        // Quick pick: 1–9 answers outright while the menu has focus. In text
-        // mode a digit is just a character — that is what makes "3 days" a
+        // A digit picks the Nth choice of the menu and stages it. In text mode
+        // a digit is just a character — that is what makes "3 days" a
         // sendable answer to a three-choice question.
         //
         // A digit PAST the end of the menu is not a pick, so it falls through
         // to the typing arm below rather than being eaten: on a two-choice
         // question, "5 minutes" has to be typeable, and swallowing the leading
-        // "5" would silently send "minutes".
+        // "5" would silently stage "minutes".
         KeyCode::Char(c)
             if plain
                 && !dialog.typing
@@ -888,13 +910,17 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
                 && c != '0'
                 && (c as usize) - ('1' as usize) < dialog.options.len() =>
         {
-            let idx = (c as usize) - ('1' as usize);
-            dialog.selected = idx;
-            Action::RespondToDialog {
-                session_key: dialog.session_key.clone(),
-                // 1-based index, not the label — see `pending_reply`.
-                reply: (idx + 1).to_string(),
+            dialog.selected = (c as usize) - ('1' as usize);
+            if dialog.multi_select {
+                dialog.toggle_choice();
+            } else {
+                stage = true;
             }
+            Action::None
+        }
+        KeyCode::Char(' ') if plain && !dialog.typing && dialog.multi_select => {
+            dialog.toggle_choice();
+            Action::None
         }
         // Any other printable key is an answer being typed. On a menu question
         // the first one switches modes, so the character is never lost.
@@ -919,14 +945,51 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
             }
             Action::None
         }
+        // Enter stages the answer of the displayed question. It sends
+        // nothing: the questionnaire leaves the TUI from the review step, as
+        // one write for the whole request.
         KeyCode::Enter => {
-            dialog
-                .pending_reply()
-                .map_or(Action::None, |reply| Action::RespondToDialog {
-                    session_key: dialog.session_key.clone(),
-                    reply,
-                })
+            stage = true;
+            Action::None
         }
+        _ => Action::None,
+    };
+    if stage {
+        state.interaction.stage_current();
+    }
+    Action::None
+}
+
+/// Handle key events while the review step is on screen.
+///
+/// The review step shows what will be sent: the highlighted row can be edited
+/// again, and `Enter` submits the whole questionnaire in a single write.
+fn handle_review_key(state: &mut AppState, key: KeyEvent, session_key: &str) -> Action {
+    let plain = !key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    match key.code {
+        KeyCode::Up if plain => {
+            state.interaction.move_review_cursor(-1);
+            Action::None
+        }
+        KeyCode::Down if plain => {
+            state.interaction.move_review_cursor(1);
+            Action::None
+        }
+        // Going back to the highlighted question keeps its staged answer
+        // until the user stages a new one.
+        KeyCode::Left if plain => {
+            state.interaction.edit_review_row();
+            Action::None
+        }
+        KeyCode::Char('e') if plain => {
+            state.interaction.edit_review_row();
+            Action::None
+        }
+        KeyCode::Enter if plain => Action::SubmitAnswers {
+            session_key: session_key.to_string(),
+        },
         _ => Action::None,
     }
 }
@@ -1211,14 +1274,42 @@ mod palette_key_tests {
 mod dialog_key_tests {
     use super::*;
     use crate::tui::app::AskDialogView;
+    use aleph_protocol::{AskUserOption, AskUserQuestion, PendingClarification};
+
+    const SESSION: &str = "telegram:bot:1:u1";
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    /// A question that carries its identity: an answer can only be staged and
+    /// sent when the request and the question it belongs to are known.
     fn state_with(view: AskDialogView) -> AppState {
-        let mut state = AppState::new("s".into(), "m".into());
-        state.show_dialog("telegram:bot:1:u1".into(), view);
+        let mut state = AppState::new(SESSION.into(), "m".into());
+        state.interaction.offer_question(PendingClarification {
+            session_key: SESSION.into(),
+            request_id: "r1".into(),
+            run_id: "run-1".into(),
+            question: view.question.clone(),
+            options: view.options.clone(),
+            answered: 0,
+            questions: vec![AskUserQuestion {
+                id: "q1".into(),
+                header: None,
+                prompt: view.question,
+                options: view
+                    .options
+                    .into_iter()
+                    .map(|label| AskUserOption {
+                        label,
+                        description: None,
+                    })
+                    .collect(),
+                multi_select: view.multi_select,
+                secret: view.secret,
+            }],
+        });
+        state.sync_modal_focus();
         state
     }
 
@@ -1240,10 +1331,23 @@ mod dialog_key_tests {
         }
     }
 
+    /// The staged value of the only question, as the review step shows it.
+    fn staged_value(state: &AppState) -> String {
+        state
+            .interaction
+            .review_rows()
+            .first()
+            .map(|row| row.value.clone())
+            .unwrap_or_default()
+    }
+
     /// The bug this whole path exists to fix. Every key a user could plausibly
     /// press on a free-text question used to resolve to `Action::None`, and
     /// `Esc` is swallowed by the global handler for this overlay, so the only
     /// way out of the modal was killing the process.
+    ///
+    /// The answer now leaves the overlay in two steps: `Enter` stages it, and
+    /// the review step sends it.
     #[test]
     fn a_free_text_question_can_be_answered() {
         let mut state = state_with(free_text());
@@ -1253,47 +1357,55 @@ mod dialog_key_tests {
                 Action::None
             ));
         }
-        let action = handle_dialog_key(&mut state, key(KeyCode::Enter));
-        match action {
-            Action::RespondToDialog { session_key, reply } => {
-                assert_eq!(session_key, "telegram:bot:1:u1");
-                assert_eq!(reply, "Ελληνικά");
-            }
-            other => panic!("a typed answer must be sendable, got {other:?}"),
+        // Staging is local: nothing is sent while the question is edited.
+        assert!(matches!(
+            handle_dialog_key(&mut state, key(KeyCode::Enter)),
+            Action::None
+        ));
+        assert!(state.interaction.in_review());
+        assert_eq!(staged_value(&state), "Ελληνικά");
+        // The review step sends the whole questionnaire in one write.
+        match handle_dialog_key(&mut state, key(KeyCode::Enter)) {
+            Action::SubmitAnswers { session_key } => assert_eq!(session_key, SESSION),
+            other => panic!("a staged answer must be sendable, got {other:?}"),
         }
     }
 
-    /// Enter on an empty buffer must not post a blank answer — core would take
-    /// it as the user's free-text reply and unpark the tool with nothing.
+    /// Enter on an empty buffer must not stage a blank answer — the server
+    /// would take it as the user's free-text reply and unpark the tool with
+    /// nothing.
     #[test]
-    fn an_empty_buffer_sends_nothing() {
+    fn an_empty_buffer_stages_nothing() {
         let mut state = state_with(free_text());
         assert!(matches!(
             handle_dialog_key(&mut state, key(KeyCode::Enter)),
             Action::None
         ));
+        assert!(!state.interaction.in_review());
         handle_dialog_key(&mut state, key(KeyCode::Char(' ')));
         assert!(matches!(
             handle_dialog_key(&mut state, key(KeyCode::Enter)),
             Action::None
         ));
+        assert!(!state.interaction.in_review());
     }
 
-    /// One keypress still answers a menu question, and it answers with the
-    /// INDEX — the label carries its `— description` suffix and core matches
-    /// labels exactly, so a label reply lands as free text.
+    /// A digit picks the Nth choice of the menu and stages it — it no longer
+    /// sends on its own, because the questionnaire is sent once, as a whole.
     #[test]
-    fn a_digit_still_answers_a_menu_outright() {
+    fn a_digit_stages_the_choice_it_picks() {
         let mut state = state_with(menu());
-        match handle_dialog_key(&mut state, key(KeyCode::Char('2'))) {
-            Action::RespondToDialog { reply, .. } => assert_eq!(reply, "2"),
-            other => panic!("expected an immediate answer, got {other:?}"),
-        }
+        assert!(matches!(
+            handle_dialog_key(&mut state, key(KeyCode::Char('2'))),
+            Action::None
+        ));
+        assert!(state.interaction.in_review());
+        assert_eq!(staged_value(&state), "prod — live");
     }
 
-    /// …and the same index arrives via the arrow + Enter route.
+    /// …and the same choice arrives via the arrow route.
     #[test]
-    fn arrows_move_the_highlight_and_enter_confirms_it() {
+    fn arrows_move_the_highlight_and_enter_stages_it() {
         let mut state = state_with(menu());
         handle_dialog_key(&mut state, key(KeyCode::Down));
         assert_eq!(state.interaction.active_dialog().unwrap().selected, 1);
@@ -1303,10 +1415,9 @@ mod dialog_key_tests {
         handle_dialog_key(&mut state, key(KeyCode::Up));
         handle_dialog_key(&mut state, key(KeyCode::Up));
         assert_eq!(state.interaction.active_dialog().unwrap().selected, 0);
-        match handle_dialog_key(&mut state, key(KeyCode::Enter)) {
-            Action::RespondToDialog { reply, .. } => assert_eq!(reply, "1"),
-            other => panic!("expected the highlighted choice, got {other:?}"),
-        }
+        handle_dialog_key(&mut state, key(KeyCode::Enter));
+        assert!(state.interaction.in_review());
+        assert_eq!(staged_value(&state), "staging — shared QA");
     }
 
     /// A menu never forbids free text — `ask_user` tells the model not to add
@@ -1322,10 +1433,8 @@ mod dialog_key_tests {
             handle_dialog_key(&mut state, key(KeyCode::Char(c)));
         }
         assert_eq!(state.interaction.active_dialog().unwrap().input, "3 days");
-        match handle_dialog_key(&mut state, key(KeyCode::Enter)) {
-            Action::RespondToDialog { reply, .. } => assert_eq!(reply, "3 days"),
-            other => panic!("expected the typed answer, got {other:?}"),
-        }
+        handle_dialog_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(staged_value(&state), "3 days");
     }
 
     /// Tab is a no-op where there is no menu to go back to, and must not eat
@@ -1342,7 +1451,7 @@ mod dialog_key_tests {
 
     /// A digit PAST the end of the menu is not a pick. It must start a typed
     /// answer instead of being swallowed: on a two-choice question "5 minutes"
-    /// has to be sendable, and eating the leading "5" would silently send
+    /// has to be sendable, and eating the leading "5" would silently stage
     /// "minutes" — an answer the user never wrote.
     #[test]
     fn a_digit_beyond_the_menu_starts_a_typed_answer() {
@@ -1355,10 +1464,8 @@ mod dialog_key_tests {
             state.interaction.active_dialog().unwrap().input,
             "5 minutes"
         );
-        match handle_dialog_key(&mut state, key(KeyCode::Enter)) {
-            Action::RespondToDialog { reply, .. } => assert_eq!(reply, "5 minutes"),
-            other => panic!("expected the typed answer, got {other:?}"),
-        }
+        handle_dialog_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(staged_value(&state), "5 minutes");
     }
 
     #[test]
@@ -1385,6 +1492,49 @@ mod dialog_key_tests {
             KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
         );
         assert!(state.interaction.active_dialog().unwrap().input.is_empty());
+    }
+
+    /// Discarding the request is a chord of its own, and it is the only key
+    /// that throws an answer away: `Esc` only hides the overlay.
+    #[test]
+    fn ctrl_x_cancels_the_questionnaire() {
+        let mut state = state_with(menu());
+        match handle_dialog_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        ) {
+            Action::CancelQuestion { session_key } => assert_eq!(session_key, SESSION),
+            other => panic!("the cancel chord must be routed, got {other:?}"),
+        }
+    }
+
+    /// The review step is the only place a questionnaire is sent: `Enter`
+    /// there submits, and it is a single action, not one write per question.
+    #[test]
+    fn the_review_step_submits_the_whole_questionnaire() {
+        let mut state = state_with(menu());
+        handle_dialog_key(&mut state, key(KeyCode::Char('1')));
+        assert!(state.interaction.in_review());
+        match handle_dialog_key(&mut state, key(KeyCode::Enter)) {
+            Action::SubmitAnswers { session_key } => assert_eq!(session_key, SESSION),
+            other => panic!("the review step must submit, got {other:?}"),
+        }
+    }
+
+    /// Going back from the review step keeps the staged answer and lets the
+    /// user change it: the answer is staged again only when they press
+    /// `Enter` on the question.
+    #[test]
+    fn the_review_step_can_go_back_to_the_question() {
+        let mut state = state_with(menu());
+        handle_dialog_key(&mut state, key(KeyCode::Char('1')));
+        assert!(state.interaction.in_review());
+        assert!(matches!(
+            handle_dialog_key(&mut state, key(KeyCode::Left)),
+            Action::None
+        ));
+        assert!(!state.interaction.in_review());
+        assert_eq!(state.interaction.active_dialog().unwrap().selected, 0);
     }
 }
 

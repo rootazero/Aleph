@@ -4,6 +4,8 @@ mod automation;
 mod ax;
 mod escape_listener;
 mod media;
+#[cfg(windows)]
+mod offline_stt;
 mod permission;
 mod pim;
 mod sleep_inhibitor;
@@ -13,6 +15,8 @@ pub use automation::WindowsAutomation;
 pub use ax::WindowsAccessibility;
 pub use escape_listener::WindowsEscapeListener;
 pub use media::WindowsMedia;
+#[cfg(windows)]
+pub use offline_stt::{run_offline_stt_worker, OFFLINE_STT_WORKER_ARG};
 pub use permission::WindowsPermission;
 pub use pim::WindowsPim;
 pub use sleep_inhibitor::WindowsPower;
@@ -67,6 +71,17 @@ impl WindowsPlatform {
             media: WindowsMedia::new(),
             ax: WindowsAccessibility::new(),
         }
+    }
+
+    /// Mount offline dictation using the absolute path to the running server.
+    /// The caller must resolve this trusted executable at startup; it must
+    /// dispatch [`run_offline_stt_worker`] before ordinary server initialization.
+    #[cfg(windows)]
+    #[must_use]
+    pub fn with_offline_stt_worker(server_exe: std::path::PathBuf) -> Self {
+        let mut platform = Self::new();
+        platform.media = WindowsMedia::with_offline_stt_worker(server_exe);
+        platform
     }
 }
 

@@ -79,6 +79,14 @@ fn startup_diagnostics_control(
     DiagnosticControl::new(host, tree).map(Arc::new).map(Some)
 }
 
+// Canonicalize the existing data directory, not the lazily created media root.
+fn resolve_offline_speech_root() -> Result<PathBuf, String> {
+    let data_dir = alephcore::utils::paths::get_data_dir().map_err(|error| error.to_string())?;
+    std::fs::canonicalize(data_dir)
+        .map(|directory| directory.join("_media"))
+        .map_err(|error| format!("cannot canonicalize data directory: {error}"))
+}
+
 // NOTE: `start_server` below is a single ~2270-line monolithic bootstrap
 // sequence. Its hundreds of locals (shared mutable handles, config, server,
 // monitors) are threaded through sequential phases and consumed at the tail,
@@ -227,6 +235,20 @@ async fn start_server_body(
     // Same shape as `PiiEngine::init` above; it lives here rather than beside
     // it only because `[security]` is on the app config, not the gateway one.
     install_mask_patterns(&loaded_app_config);
+
+    // Bind the shared macOS bridge before the builtin tools construct a platform.
+    #[cfg(target_os = "macos")]
+    let offline_speech_root = match resolve_offline_speech_root() {
+        Ok(root) if aleph_desktop_macos::configure_offline_speech_root(&root) => Some(root),
+        Ok(_) => {
+            tracing::warn!("offline speech unavailable: shared bridge root not configured");
+            None
+        }
+        Err(error) => {
+            tracing::warn!(%error, "offline speech unavailable");
+            None
+        }
+    };
 
     // Install the process-wide `[policies.spend]` handle. UNCONDITIONAL —
     // including on a box with no ceiling configured (`enabled() == false`).
@@ -1061,15 +1083,8 @@ async fn start_server_body(
     {
         let vault = &auth_bundle.auth_ctx.shared_token_mgr;
 
-        // AI providers: vault key "ai:<name>"
-        for (name, provider_cfg) in &mut loaded_app_config.providers {
-            if provider_cfg.api_key.is_none() {
-                if let Ok(Some(secret)) = vault.get_secret(&format!("ai:{name}")) {
-                    provider_cfg.api_key = Some(secret.expose().to_string());
-                }
-            }
-        }
-
+        // AI providers hydrate only transport-local copies. The shared Config
+        // must retain vault provenance for credential changes and discovery.
         // Generation providers: vault key "gen:<name>"
         // Legacy flat map
         for (name, provider_cfg) in &mut loaded_app_config.generation.providers {
@@ -1896,6 +1911,7 @@ async fn start_server_body(
     // because both are required by `AgentHarnessRunner`. Failure is warn-only —
     // the rest of boot continues without flow composition, preserving Phase 4
     // behaviour until Task 10 consumes `server.orchestrator`.
+    let mut codex_named_route = None;
     if let (Some(default_provider), Some(session_service)) = (
         agent_result.default_provider.clone(),
         session_service_for_orchestrator.clone(),
@@ -1956,7 +1972,8 @@ async fn start_server_body(
         )
         .await
         {
-            Ok(orch) => {
+            Ok((orch, named_route)) => {
+                codex_named_route = named_route;
                 // Inject orchestrator into ExecutionEngine via the shared OnceLock.
                 if let Some(ref cell) = agent_result.orchestrator_cell {
                     if cell.set(orch.clone()).is_err() {
@@ -2228,12 +2245,34 @@ async fn start_server_body(
         }
     }
 
-    // Panel voice channel — native capture (record_start/stop) + TTS playback
-    // (synthesize). Endpoint I/O for the mic button's full voice loop.
+    // Resolve the Linux installation once at boot, not from a turn or a live
+    // settings update. Release the config lock before filesystem validation.
+    #[cfg(target_os = "linux")]
+    let offline_stt_installation = {
+        let offline_stt = app_config.read().await.desktop.offline_stt.clone();
+        offline_stt.and_then(|config| {
+            let (Some(executable), Some(model)) = (config.executable, config.model) else {
+                tracing::warn!("desktop.offline_stt requires both executable and model");
+                return None;
+            };
+            match aleph_desktop_linux::OfflineSttInstallation::new(executable, model) {
+                Ok(installation) => Some(installation),
+                Err(error) => {
+                    tracing::warn!(%error, "invalid desktop.offline_stt installation");
+                    None
+                }
+            }
+        })
+    };
     register_voice_capability_handlers(
         &mut server,
         app_config.clone(),
         agent_result.generation_registry.clone(),
+        auth_bundle.auth_ctx.shared_token_mgr.clone(),
+        #[cfg(target_os = "macos")]
+        offline_speech_root,
+        #[cfg(target_os = "linux")]
+        offline_stt_installation,
     );
 
     register_session_handlers(
@@ -2333,6 +2372,7 @@ async fn start_server_body(
                 app_config_for_oauth.clone(),
                 oauth_vault.clone(),
                 registry,
+                codex_named_route,
             ));
             // Written fully qualified, like the `decline_global` in this gate's
             // `else` arm two lines below and like every other conditional
