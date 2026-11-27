@@ -29,6 +29,34 @@ use super::helpers::{
 
 #[async_trait]
 impl NoteStore for SqliteMemoryBackend {
+    /// Exact one-hop window. Only extant endpoints of active links consume budget.
+    async fn get_focused_graph_data(
+        &self,
+        center: &str,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<(Vec<NoteIndexEntry>, Vec<GraphEdgeRow>), AlephError> {
+        self.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT n.*, \
+                 (SELECT COUNT(*) FROM notes_links WHERE from_note = n.path AND agent_id = n.agent_id) AS link_count \
+                 FROM notes_index n WHERE n.agent_id = ?1 AND (n.path = ?2 OR EXISTS (\
+                 SELECT 1 FROM notes_links l JOIN notes_index root \
+                 ON root.agent_id = l.agent_id AND root.path = ?2 \
+                 WHERE l.agent_id = ?1 AND l.status = 'active' AND \
+                 ((l.from_note = ?2 AND l.to_note = n.path) OR (l.to_note = ?2 AND l.from_note = n.path)))) \
+                 ORDER BY (n.path = ?2) DESC, n.path ASC LIMIT ?3"
+            ).map_err(|e| AlephError::config(format!("focus prepare: {e}")))?;
+            let entries = stmt.query_map(params![agent_id, center, limit.clamp(1, 500) as i64], row_to_entry)
+                .map_err(|e| AlephError::config(format!("focus query: {e}")))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AlephError::config(format!("focus row: {e}")))?;
+            let visible = entries.iter().map(|e| e.path.clone()).collect();
+            let mut edges = collect_edges_between(conn, &visible, agent_id)?;
+            edges.sort_by(|a, b| (&a.from, &a.to, &a.relation, &a.label).cmp(&(&b.from, &b.to, &b.relation, &b.label)));
+            Ok((entries, edges))
+        })
+    }
     // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn index_note(
         &self,

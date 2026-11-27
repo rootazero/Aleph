@@ -621,6 +621,7 @@ mod tests {
             node_id: "concept/Source".into(),
         };
         let mut outgoing = OutgoingLinkDto {
+            target: None,
             to: "references/Target".into(),
             raw: "Target".into(),
             relation: None,

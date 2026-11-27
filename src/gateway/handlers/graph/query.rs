@@ -22,6 +22,16 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         }
     };
 
+    let focus = params.focus.clone();
+    if let Some(address) = focus.as_ref() {
+        if !crate::gateway::visibility::partition_visible(&address.agent_id) {
+            return JsonRpcResponse::error(
+                req.id,
+                INVALID_PARAMS,
+                format!("Note not found: {}", address.node_id),
+            );
+        }
+    }
     let agent_id = params
         .agent_id
         .as_deref()
@@ -31,8 +41,9 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
     // an empty graph — the same shape a genuinely unused agent_id produces —
     // without ever touching the store under the caller's chosen name (no
     // existence oracle).
-    if !crate::gateway::visibility::partition_visible(agent_id) {
+    if focus.is_none() && !crate::gateway::visibility::partition_visible(agent_id) {
         let response = GraphQueryResponse {
+            focus: None,
             nodes: vec![],
             edges: vec![],
             total: Some(0),
@@ -52,15 +63,32 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
     // unlike search, this window does not include the org tier. `memory.stats`
     // scopes its graph counts the same way.
     let graph_partition = crate::gateway::handlers::memory_scope::primary_read_partition(agent_id);
-    let agent_id = graph_partition.as_str();
-
-    let (entries, links) = match db.get_graph_data(agent_id, params.limit).await {
+    let agent_id = focus
+        .as_ref()
+        .map(|a| a.agent_id.as_str())
+        .unwrap_or(graph_partition.as_str());
+    let data = if let Some(address) = focus.as_ref() {
+        db.get_focused_graph_data(&address.node_id, agent_id, params.limit)
+            .await
+    } else {
+        db.get_graph_data(agent_id, params.limit).await
+    };
+    let (entries, links) = match data {
         Ok(data) => data,
         Err(e) => {
             return JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("NoteStore error: {e}"))
         }
     };
 
+    if let Some(address) = focus.as_ref() {
+        if !entries.iter().any(|e| e.path == address.node_id) {
+            return JsonRpcResponse::error(
+                req.id,
+                INVALID_PARAMS,
+                format!("Note not found: {}", address.node_id),
+            );
+        }
+    }
     // Community map (cold cache => empty) + agent-scoped total for truncation.
     let communities = db.community_ids(agent_id).await.unwrap_or_default();
     let total = db
@@ -113,6 +141,11 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         }
     }
 
+    if focus.is_some() {
+        edges.sort_by(|a, b| {
+            (&a.from, &a.to, &a.kind, &a.label).cmp(&(&b.from, &b.to, &b.kind, &b.label))
+        });
+    }
     // Graph-health emphasis payloads (bridge nodes + surprising edges).
     // `sparse` stays orientation-only by design (spec S3).
     let bridge_nodes: Vec<String> = db
@@ -147,6 +180,7 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         .collect();
 
     let response = GraphQueryResponse {
+        focus,
         nodes,
         edges,
         total,
@@ -194,6 +228,126 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn focus_is_exact_active_bounded_and_one_hop() {
+        let (_scratch, db) = make_db();
+        for (name, links) in [
+            ("two", vec![]),
+            ("dead", vec![]),
+            ("a", vec!["concept/two"]),
+            ("root", vec!["concept/a", "concept/ghost", "concept/dead"]),
+            ("b", vec!["concept/root"]),
+        ] {
+            db.index_note(&make_note(name, "concept", links), "alpha", "concept")
+                .await
+                .unwrap();
+        }
+        db.remove_note_index("concept/dead", "alpha").await.unwrap();
+        // Active rows can outlive their endpoints; neither direction may spend budget.
+        db.add_link_with_relation("alpha", "concept/root", "concept/00missing", "refers")
+            .await
+            .unwrap();
+        db.add_link_with_relation("alpha", "concept/01missing", "concept/root", "refers")
+            .await
+            .unwrap();
+        db.index_note(
+            &make_note("root", "concept", vec!["concept/foreign"]),
+            "beta",
+            "concept",
+        )
+        .await
+        .unwrap();
+        db.index_note(&make_note("foreign", "concept", vec![]), "beta", "concept")
+            .await
+            .unwrap();
+        for (limit, expected) in [
+            (0, vec!["concept/root"]),
+            (2, vec!["concept/root", "concept/a"]),
+            (5000, vec!["concept/root", "concept/a", "concept/b"]),
+        ] {
+            let mut req = query_request(limit, Some("beta"));
+            req.params.as_mut().unwrap()["focus"] =
+                serde_json::json!({"agent_id":"alpha", "node_id":"concept/root"});
+            let response = handle_query_impl(req, db.clone()).await;
+            assert!(response.error.is_none(), "{:?}", response.error);
+            let value = response.result.unwrap();
+            assert_eq!(value["focus"]["agent_id"], "alpha");
+            let paths: Vec<_> = value["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n["id"].as_str().unwrap())
+                .collect();
+            assert_eq!(paths, expected);
+            assert!(value["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|n| n["agent_id"] == "alpha"));
+        }
+    }
+
+    #[tokio::test]
+    async fn focus_caps_at_five_hundred_including_root() {
+        let (_scratch, db) = make_db();
+        db.index_note(&make_note("root", "concept", vec![]), "alpha", "concept")
+            .await
+            .unwrap();
+        for index in 0..505 {
+            let title = format!("neighbor{index:03}");
+            db.index_note(&make_note(&title, "concept", vec![]), "alpha", "concept")
+                .await
+                .unwrap();
+            db.add_link_with_relation(
+                "alpha",
+                "concept/root",
+                &format!("concept/{title}"),
+                "refers",
+            )
+            .await
+            .unwrap();
+        }
+        let mut req = query_request(usize::MAX, None);
+        req.params.as_mut().unwrap()["focus"] =
+            serde_json::json!({"agent_id":"alpha", "node_id":"concept/root"});
+        let value = handle_query_impl(req, db).await.result.unwrap();
+        let nodes = value["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 500);
+        assert_eq!(nodes[0]["id"], "concept/root");
+        assert_eq!(nodes[499]["id"], "concept/neighbor498");
+        assert_eq!(value["edges"].as_array().unwrap().len(), 499);
+    }
+
+    #[tokio::test]
+    async fn denied_focus_matches_missing_detail() {
+        use crate::gateway::caller_identity::CALLER_USER;
+        let (_scratch, db) = make_db();
+        db.index_note(
+            &make_note("secret", "concept", vec![]),
+            "main__u-alice",
+            "concept",
+        )
+        .await
+        .unwrap();
+        let mut req = query_request(100, None);
+        req.params.as_mut().unwrap()["focus"] =
+            serde_json::json!({"agent_id":"main__u-alice", "node_id":"concept/secret"});
+        let denied = CALLER_USER
+            .scope(
+                Some("u-bob".into()),
+                handle_query_impl(req.clone(), db.clone()),
+            )
+            .await;
+        let (_scratch, empty) = make_db();
+        let missing = handle_query_impl(req.clone(), empty).await;
+        let detail = CALLER_USER.scope(Some("u-bob".into()), super::super::node_detail::handle_node_detail_impl(JsonRpcRequest { params: Some(serde_json::json!({"agent_id":"main__u-alice", "node_id":"concept/secret"})), ..req }, db)).await;
+        assert_eq!(
+            denied.error.as_ref().unwrap().message,
+            missing.error.unwrap().message
+        );
+        assert_eq!(denied.error.unwrap().message, detail.error.unwrap().message);
+    }
+
+    #[tokio::test]
     async fn graph_query_uses_explicit_agent_id() {
         let (_scratch, db) = make_db();
         let (alpha_path, _beta_path) = seed_two_agents(&db).await;
@@ -214,6 +368,10 @@ mod tests {
             "beta note must NOT appear when querying alpha: {ids:?}"
         );
 
+        assert!(
+            result.focus.is_none(),
+            "overview preserves the legacy shape"
+        );
         // Enriched fields (Plan 2): agent-scoped total, per-node updated_at,
         // per-edge kind (plain wikilinks map to "wikilink").
         assert!(result.total.is_some(), "total should be populated");
@@ -260,6 +418,16 @@ mod tests {
                         params: Some(params),
                         id: Some(serde_json::json!(2)),
                     };
+                    let mut focus_request = query_request(1, Some("main"));
+                    focus_request.params.as_mut().unwrap()["focus"] = serde_json::json!({
+                        "agent_id": "main", "node_id": "concept/SharedPath"
+                    });
+                    let focused = handle_query_impl(focus_request, db.clone())
+                        .await
+                        .result
+                        .unwrap();
+                    assert_eq!(focused["nodes"][0]["agent_id"], "main");
+                    assert_eq!(focused["nodes"][0]["tags"], serde_json::json!(["org"]));
                     let detail = handle_node_detail_impl(request, db).await;
                     let selected = detail.result.expect("graph.node_detail result");
                     assert_eq!(selected["node"]["id"], node["id"]);
