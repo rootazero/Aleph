@@ -39,6 +39,8 @@ pub(super) fn ReasoningPanel() -> impl IntoView {
     // User-controlled expand toggle. Defaults collapsed; the active live-tail
     // preview gives streaming feedback without forcing a full expand.
     let expanded = RwSignal::new(false);
+    let (chevron, retarget) = crate::components::motion::use_spring(0.0);
+    Effect::new(move |_| retarget.run(if expanded.get() { 90.0 } else { 0.0 }));
 
     let has_reasoning = move || !chat.reasoning_text.with(String::is_empty);
     // "Active" = the model is still reasoning (no answer text streaming yet).
@@ -63,6 +65,7 @@ pub(super) fn ReasoningPanel() -> impl IntoView {
                         class="flex-1 min-w-0 flex items-center gap-2 px-3 py-2 text-left
                                hover:bg-surface-sunken/40 transition-colors"
                         on:click=toggle
+                        aria-expanded=move || expanded.get().to_string()
                         title=move || if expanded.get() {
                             t_string!(i18n, chat.reasoning_collapse).to_string()
                         } else {
@@ -85,8 +88,9 @@ pub(super) fn ReasoningPanel() -> impl IntoView {
                         </span>
                         // Chevron rotates when expanded.
                         <span
-                            class="text-text-tertiary transition-transform text-[10px] shrink-0"
-                            style=move || if expanded.get() { "transform: rotate(90deg)" } else { "" }
+                            class="text-text-tertiary text-[10px] shrink-0"
+                            aria-hidden="true"
+                            style:transform=move || format!("rotate({:.2}deg)", chevron.get())
                         >
                             "\u{25B6}"
                         </span>

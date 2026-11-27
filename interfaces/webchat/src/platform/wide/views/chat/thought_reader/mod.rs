@@ -166,6 +166,7 @@ impl Reader {
             state.pending = Some(Pending {
                 scope: scope.clone(),
                 request_id: request_id.clone(),
+                run: request.block.run_id.clone(),
                 block: request.block.block_id.clone(),
                 engine,
             });
@@ -257,7 +258,28 @@ pub(super) fn ThoughtReader(run_id: String) -> impl IntoView {
     let display = RwSignal::new(Blocks::Closed);
     let generation = RwSignal::new(0_u64);
     let run_id = StoredValue::new(run_id);
+    let cancel_run = move || {
+        let pending = reader
+            .state
+            .try_update(|state| {
+                let pending = state.pending.as_ref()?;
+                if !run_id
+                    .try_with_value(|run| pending.run == *run)
+                    .unwrap_or_default()
+                {
+                    return None;
+                }
+                state.text.remove(&(pending.block.clone(), pending.engine));
+                state.pending.take()
+            })
+            .flatten();
+        if let Some(pending) = pending {
+            reader.cancel(pending);
+        }
+    };
+    on_cleanup(cancel_run);
     let invalidate = move || {
+        cancel_run();
         generation.update(|generation| *generation = generation.wrapping_add(1));
         display.set(Blocks::Closed);
     };
@@ -277,7 +299,7 @@ pub(super) fn ThoughtReader(run_id: String) -> impl IntoView {
         let run_id = run_id.get_value();
         display.set(Blocks::Loading);
         spawn_local(async move {
-            let runs = TraceApi::by_runs(&reader.dash, &session, vec![run_id.clone()]).await;
+            let runs = TraceApi::by_runs_at_epoch(reader.dash, epoch, &session, &run_id).await;
             let blocks = runs
                 .ok()
                 .and_then(|mut runs| runs.remove(&run_id))
@@ -293,7 +315,7 @@ pub(super) fn ThoughtReader(run_id: String) -> impl IntoView {
             let engines = if blocks.is_empty() {
                 Default::default()
             } else {
-                ThoughtApi::engines(reader.dash).await
+                ThoughtApi::engines(reader.dash, epoch).await
             };
             if generation.try_get_untracked() == Some(request_generation)
                 && trace_scope.try_get_untracked().flatten() == Some((session, epoch))

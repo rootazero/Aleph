@@ -35,21 +35,5 @@
 .panel-pixel-companion[data-pose="complete"] .panel-pixel-highlight { color: var(--color-text-primary); }
 
 @media (prefers-reduced-motion: no-preference) {
-  .panel-pixel-companion[data-visible="true"][data-pose="working"] .panel-pixel-sprite {
-    animation: panel-companion-hop 320ms steps(4, end) both;
-  }
-
-  .panel-pixel-companion[data-visible="true"][data-pose="complete"] .panel-pixel-sprite {
-    animation: panel-companion-settle 260ms steps(4, end) both;
-  }
-}
-
-@keyframes panel-companion-hop {
-  0%, 100% { transform: translateY(0); }
-  42% { transform: translateY(-3px); }
-}
-
-@keyframes panel-companion-settle {
-  0%, 100% { transform: translateY(0); }
-  45% { transform: translateY(2px); }
+  .panel-pixel-sprite { transform: translateY(var(--panel-pixel-lift, 0px)); }
 }

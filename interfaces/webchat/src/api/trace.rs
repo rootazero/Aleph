@@ -3,6 +3,8 @@
 use crate::context::DashboardState;
 use aleph_protocol::AgentTraceReplay;
 
+type TraceRuns = std::collections::HashMap<String, Vec<serde_json::Value>>;
+
 pub struct TraceApi;
 
 impl TraceApi {
@@ -37,13 +39,26 @@ impl TraceApi {
         state: &DashboardState,
         session_key: &str,
         run_ids: Vec<String>,
-    ) -> Result<std::collections::HashMap<String, Vec<serde_json::Value>>, String> {
-        let result = state
-            .rpc_call(
-                "trace.by_runs",
-                serde_json::json!({ "session_key": session_key, "run_ids": run_ids }),
-            )
-            .await?;
+    ) -> Result<TraceRuns, String> {
+        let params = serde_json::json!({ "session_key": session_key, "run_ids": run_ids });
+        Self::decode_runs(state.rpc_call("trace.by_runs", params).await?)
+    }
+
+    pub(crate) async fn by_runs_at_epoch(
+        state: DashboardState,
+        epoch: u64,
+        session_key: &str,
+        run_id: &str,
+    ) -> Result<TraceRuns, String> {
+        let params = serde_json::json!({ "session_key": session_key, "run_ids": [run_id] });
+        Self::decode_runs(
+            state
+                .rpc_call_at_epoch(epoch, "trace.by_runs", params)
+                .await?,
+        )
+    }
+
+    fn decode_runs(result: serde_json::Value) -> Result<TraceRuns, String> {
         let runs = result
             .get("runs")
             .cloned()

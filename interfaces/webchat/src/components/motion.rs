@@ -1,28 +1,25 @@
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-
+use leptos::leptos_dom::helpers::{
+    request_animation_frame_with_handle, AnimationFrameRequestHandle,
+};
 use leptos::prelude::*;
-use wasm_bindgen::JsCast;
-use wasm_bindgen::closure::Closure;
+use wasm_bindgen::{closure::Closure, JsCast};
 
 const STIFFNESS: f64 = 220.0;
 const DAMPING: f64 = 28.0;
 const MAX_FRAME_SECONDS: f64 = 1.0 / 30.0;
 const POSITION_EPSILON: f64 = 0.001;
 const VELOCITY_EPSILON: f64 = 0.01;
+const MOTION_QUERY: &str = "(prefers-reduced-motion: no-preference)";
 
-/// Bounded, frame-rate independent damped spring. `step` clamps long frames so
-/// returning from a suspended tab cannot produce a large integration jump.
 #[derive(Clone, Copy, Debug)]
-pub struct Spring {
+struct Spring {
     position: f64,
     velocity: f64,
     target: f64,
 }
 
 impl Spring {
-    #[must_use]
-    pub fn new(position: f64) -> Self {
+    fn new(position: f64) -> Self {
         Self {
             position,
             velocity: 0.0,
@@ -30,227 +27,165 @@ impl Spring {
         }
     }
 
-    pub fn set_target(&mut self, target: f64) {
+    fn retarget(&mut self, target: f64) {
         if target.is_finite() {
             self.target = target;
         }
     }
 
-    #[must_use]
-    pub fn position(&self) -> f64 {
-        self.position
+    fn snap(&mut self) {
+        self.position = self.target;
+        self.velocity = 0.0;
     }
 
-    #[must_use]
-    pub fn is_settled(&self) -> bool {
+    fn is_settled(&self) -> bool {
         (self.target - self.position).abs() <= POSITION_EPSILON
             && self.velocity.abs() <= VELOCITY_EPSILON
     }
 
-    /// Advance by elapsed seconds and return whether another frame is needed.
-    pub fn step(&mut self, seconds: f64) -> bool {
-        if self.is_settled() {
-            self.position = self.target;
-            self.velocity = 0.0;
-            return false;
+    fn advance(&mut self, seconds: f64) -> f64 {
+        if !self.is_settled() && seconds.is_finite() {
+            let dt = seconds.clamp(0.0, MAX_FRAME_SECONDS);
+            let acceleration = STIFFNESS * (self.target - self.position) - DAMPING * self.velocity;
+            self.velocity += acceleration * dt;
+            self.position += self.velocity * dt;
         }
-        let dt = if seconds.is_finite() {
-            seconds.clamp(0.0, MAX_FRAME_SECONDS)
-        } else {
-            0.0
-        };
-        let acceleration = STIFFNESS * (self.target - self.position) - DAMPING * self.velocity;
-        self.velocity = (self.velocity + acceleration * dt).clamp(-10_000.0, 10_000.0);
-        self.position = (self.position + self.velocity * dt).clamp(-1_000_000.0, 1_000_000.0);
         if self.is_settled() {
-            self.position = self.target;
-            self.velocity = 0.0;
-            false
-        } else {
-            true
+            self.snap();
+        }
+        self.position
+    }
+}
+
+pub(crate) fn can_animate() -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    window.document().is_some_and(|document| !document.hidden())
+        && window
+            .match_media(MOTION_QUERY)
+            .ok()
+            .flatten()
+            .is_some_and(|query| query.matches())
+}
+
+/// Both animation consumers settle immediately when the tab or the OS disables motion.
+pub(crate) fn on_motion_unavailable(cancel: impl Fn() + Copy + 'static) {
+    let visibility = window_event_listener_untyped("visibilitychange", move |_| {
+        if !can_animate() {
+            cancel();
+        }
+    });
+    on_cleanup(move || visibility.remove());
+    if let Some(query) =
+        web_sys::window().and_then(|window| window.match_media(MOTION_QUERY).ok()?)
+    {
+        let callback = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+            if !can_animate() {
+                cancel();
+            }
+        });
+        if query
+            .add_event_listener_with_callback("change", callback.as_ref().unchecked_ref())
+            .is_ok()
+        {
+            let listener = StoredValue::new_local((query, callback));
+            on_cleanup(move || {
+                let _ = listener.try_with_value(|(query, callback)| {
+                    let _ = query.remove_event_listener_with_callback(
+                        "change",
+                        callback.as_ref().unchecked_ref(),
+                    );
+                });
+            });
         }
     }
 }
 
-/// Reactive spring value driven by one cancellable browser frame loop.
-/// The returned callback changes the target; reduced motion snaps immediately.
-#[must_use]
-pub fn use_spring(initial: f64) -> (ReadSignal<f64>, Callback<f64>) {
-    let value = RwSignal::new(initial);
-    let spring = Rc::new(RefCell::new(Spring::new(initial)));
-    let alive = Rc::new(Cell::new(true));
-    let raf_id = Rc::new(Cell::new(0_i32));
-    let previous_time = Rc::new(Cell::new(None::<f64>));
-    let frame: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>> = Rc::new(RefCell::new(None));
-    let frame_again = frame.clone();
-    let spring_frame = spring.clone();
-    let alive_frame = alive.clone();
-    let raf_frame = raf_id.clone();
-    let previous_frame = previous_time.clone();
-    let value_frame = value;
+fn now() -> Option<f64> {
+    Some(web_sys::window()?.performance()?.now())
+}
 
-    *frame.borrow_mut() = Some(Closure::wrap(Box::new(move |time: f64| {
-        if !alive_frame.get() {
-            return;
-        }
-        let Some(window) = web_sys::window() else {
-            return;
-        };
-        let hidden = window.document().is_some_and(|doc| doc.hidden());
-        if hidden {
-            previous_frame.set(None);
-            return;
-        }
-        let reduced = window
-            .match_media("(prefers-reduced-motion: reduce)")
-            .ok()
-            .flatten()
-            .is_some_and(|query| query.matches());
-        if reduced {
-            let target = spring_frame.borrow().target;
-            let mut state = spring_frame.borrow_mut();
-            state.position = target;
-            state.velocity = 0.0;
-            value_frame.set(target);
-            previous_frame.set(None);
-            raf_frame.set(0);
-            return;
-        }
-        let elapsed = previous_frame
-            .replace(Some(time))
-            .map(|prior| ((time - prior) / 1000.0).max(0.0))
-            .unwrap_or(0.0);
-        let mut state = spring_frame.borrow_mut();
-        let keep_running = state.step(elapsed);
-        value_frame.set(state.position());
-        drop(state);
-        if keep_running {
-            if let Some(callback) = frame_again.borrow().as_ref() {
-                raf_frame.set(
-                    window
-                        .request_animation_frame(callback.as_ref().unchecked_ref())
-                        .unwrap_or(0),
-                );
-            }
-        } else {
-            previous_frame.set(None);
-            raf_frame.set(0);
-        }
-    }) as Box<dyn FnMut(f64)>));
+#[derive(Clone, Copy)]
+struct SpringDriver {
+    spring: StoredValue<Spring>,
+    value: RwSignal<f64>,
+    frame: StoredValue<Option<AnimationFrameRequestHandle>>,
+}
 
-    let request = {
-        let frame = frame.clone();
-        let spring = spring.clone();
-        let alive = alive.clone();
-        let raf_id = raf_id.clone();
-        let previous_time = previous_time.clone();
-        Callback::new(move |target: f64| {
-            if !target.is_finite() || !alive.get() {
+impl SpringDriver {
+    fn cancel_frame(self) {
+        if let Some(pending) = self.frame.try_update_value(Option::take).flatten() {
+            pending.cancel();
+        }
+    }
+
+    fn settle(self) {
+        self.cancel_frame();
+        if let Some(position) = self.spring.try_update_value(|spring| {
+            spring.snap();
+            spring.position
+        }) {
+            let _ = self.value.try_set(position);
+        }
+    }
+
+    fn schedule(self, then: f64) {
+        let next = request_animation_frame_with_handle(move || {
+            let _ = self.frame.try_update_value(Option::take);
+            if !can_animate() {
+                self.settle();
                 return;
             }
-            spring.borrow_mut().set_target(target);
-            let Some(window) = web_sys::window() else {
+            let Some(now) = now() else {
+                self.settle();
                 return;
             };
-            let reduced = window
-                .match_media("(prefers-reduced-motion: reduce)")
-                .ok()
-                .flatten()
-                .is_some_and(|query| query.matches());
-            if reduced {
-                let mut state = spring.borrow_mut();
-                state.position = target;
-                state.velocity = 0.0;
-                value.set(target);
-                previous_time.set(None);
-                return;
-            }
-            if window.document().is_some_and(|doc| doc.hidden()) {
-                return;
-            }
-            if raf_id.get() == 0 {
-                previous_time.set(None);
-                if let Some(callback) = frame.borrow().as_ref() {
-                    raf_id.set(
-                        window
-                            .request_animation_frame(callback.as_ref().unchecked_ref())
-                            .unwrap_or(0),
-                    );
+            if let Some((position, settled)) = self.spring.try_update_value(|spring| {
+                let position = spring.advance((now - then) / 1_000.0);
+                (position, spring.is_settled())
+            }) {
+                let _ = self.value.try_set(position);
+                if !settled {
+                    self.schedule(now);
                 }
             }
-        })
-    };
+        });
+        if let Ok(next) = next {
+            let _ = self.frame.try_update_value(|slot| *slot = Some(next));
+        } else {
+            self.settle();
+        }
+    }
+}
 
-    let visibility_frame = frame.clone();
-    let visibility_spring = spring.clone();
-    let visibility_alive = alive.clone();
-    let visibility_raf = raf_id.clone();
-    let visibility_previous = previous_time.clone();
-    let visibility = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
-        let Some(window) = web_sys::window() else {
+/// Drive a visual position with at most one pending frame. Retargets retain velocity.
+pub(crate) fn use_spring(initial: f64) -> (ReadSignal<f64>, Callback<f64>) {
+    let driver = SpringDriver {
+        spring: StoredValue::new(Spring::new(initial)),
+        value: RwSignal::new(initial),
+        frame: StoredValue::new(None),
+    };
+    on_cleanup(move || driver.cancel_frame());
+    on_motion_unavailable(move || driver.settle());
+    let retarget = Callback::new(move |target: f64| {
+        let Some(settled) = driver.spring.try_update_value(|spring| {
+            spring.retarget(target);
+            spring.is_settled()
+        }) else {
             return;
         };
-        if !visibility_alive.get() {
-            return;
-        }
-        if window.document().is_some_and(|doc| doc.hidden()) {
-            if visibility_raf.get() != 0 {
-                let _ = window.cancel_animation_frame(visibility_raf.get());
-                visibility_raf.set(0);
-            }
-            visibility_previous.set(None);
-            return;
-        }
-        if visibility_raf.get() != 0 {
-            return;
-        }
-        visibility_previous.set(None);
-        let reduced = window
-            .match_media("(prefers-reduced-motion: reduce)")
-            .ok()
-            .flatten()
-            .is_some_and(|query| query.matches());
-        if reduced {
-            let mut state = visibility_spring.borrow_mut();
-            state.position = state.target;
-            state.velocity = 0.0;
-            value.set(state.target);
-            return;
-        }
-        if !visibility_spring.borrow().is_settled() {
-            if let Some(callback) = visibility_frame.borrow().as_ref() {
-                visibility_raf.set(
-                    window
-                        .request_animation_frame(callback.as_ref().unchecked_ref())
-                        .unwrap_or(0),
-                );
+        if settled || !can_animate() {
+            driver.settle();
+        } else if driver.frame.with_value(Option::is_none) {
+            if let Some(now) = now() {
+                driver.schedule(now);
+            } else {
+                driver.settle();
             }
         }
     });
-    let document = web_sys::window().and_then(|window| window.document());
-    if let Some(document) = &document {
-        let _ = document.add_event_listener_with_callback(
-            "visibilitychange",
-            visibility.as_ref().unchecked_ref(),
-        );
-    }
-    on_cleanup(move || {
-        alive.set(false);
-        if let Some(window) = web_sys::window() {
-            if raf_id.get() != 0 {
-                let _ = window.cancel_animation_frame(raf_id.get());
-            }
-        }
-        if let Some(document) = document {
-            let _ = document.remove_event_listener_with_callback(
-                "visibilitychange",
-                visibility.as_ref().unchecked_ref(),
-            );
-        }
-        frame.borrow_mut().take();
-        drop(visibility);
-    });
-    (value.read_only(), request)
+    (driver.value.read_only(), retarget)
 }
 
 #[cfg(test)]
@@ -258,22 +193,35 @@ mod tests {
     use super::Spring;
 
     #[test]
-    fn spring_settles_at_target_and_clamps_long_frames() {
+    fn spring_retarget_keeps_current_position() {
         let mut spring = Spring::new(0.0);
-        spring.set_target(1.0);
-        let mut frames = 0;
-        while spring.step(10.0) && frames < 300 {
-            frames += 1;
-        }
-        assert!(frames < 300);
-        assert_eq!(spring.position(), 1.0);
+        spring.retarget(1.0);
+        spring.advance(1.0 / 60.0);
+        let (position, velocity) = (spring.position, spring.velocity);
+        spring.retarget(-1.0);
+        assert_eq!((spring.position, spring.velocity), (position, velocity));
     }
 
     #[test]
-    fn non_finite_targets_are_ignored() {
-        let mut spring = Spring::new(2.0);
-        spring.set_target(f64::NAN);
-        assert_eq!(spring.position(), 2.0);
-        assert!(!spring.step(0.0));
+    fn spring_settles_after_large_frame_gap() {
+        let mut spring = Spring::new(0.0);
+        spring.retarget(1.0);
+        assert!(spring.advance(120.0) < 0.5);
+        for _ in 0..120 {
+            spring.advance(1.0 / 60.0);
+        }
+        assert_eq!(spring.position, 1.0);
+        assert!(spring.is_settled());
+    }
+
+    #[test]
+    fn snapping_to_target_clears_motion() {
+        let mut spring = Spring::new(0.0);
+        spring.retarget(1.0);
+        spring.advance(1.0 / 60.0);
+        spring.retarget(0.4);
+        spring.snap();
+        assert_eq!(spring.position, 0.4);
+        assert!(spring.is_settled());
     }
 }

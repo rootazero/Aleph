@@ -22,6 +22,7 @@ pub mod layouts;
 pub mod markdown;
 pub mod mode_labels;
 pub mod mode_sidebar;
+pub mod model_picker;
 pub mod motion;
 pub mod nav_menu;
 pub mod notification_center;

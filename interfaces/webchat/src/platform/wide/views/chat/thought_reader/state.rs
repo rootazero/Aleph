@@ -15,6 +15,7 @@ pub(super) struct Scope {
 pub(super) struct Pending {
     pub scope: Scope,
     pub request_id: String,
+    pub run: String,
     pub block: ThoughtBlockId,
     pub engine: TranslationEngine,
 }
@@ -89,6 +90,7 @@ mod tests {
             pending: Some(Pending {
                 scope: scope.clone(),
                 request_id: "test".into(),
+                run: "run".into(),
                 block: block.clone(),
                 engine,
             }),

@@ -42,7 +42,11 @@ pub fn ContextVial() -> impl IntoView {
         detail.set(Some(Detail::Loading));
         spawn_local(async move {
             let response = dash
-                .rpc_call("context.breakdown", serde_json::json!({"session_key": key}))
+                .rpc_call_at_epoch(
+                    epoch,
+                    "context.breakdown",
+                    serde_json::json!({"session_key": key}),
+                )
                 .await;
             if request.try_get_untracked() != Some(id)
                 || dash.connection_epoch.try_get_untracked() != Some(epoch)

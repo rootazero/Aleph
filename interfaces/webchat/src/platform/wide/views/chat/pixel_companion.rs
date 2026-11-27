@@ -1,4 +1,5 @@
 use super::state::{ChatPhase, ChatState};
+use crate::components::motion::use_spring;
 use leptos::prelude::*;
 
 // An original 11×10 sprite. Each palette entry is rendered with one shadow layer.
@@ -31,11 +32,7 @@ fn pixels(layer: char) -> String {
 #[component]
 pub(super) fn PixelCompanion() -> impl IntoView {
     let chat = expect_context::<ChatState>();
-    let visible = RwSignal::new(!document().hidden());
-    let listener = window_event_listener_untyped("visibilitychange", move |_| {
-        visible.set(!document().hidden());
-    });
-    on_cleanup(move || listener.remove());
+    let (lift, retarget) = use_spring(0.0);
     let status = Memo::new(
         move |previous: Option<&(Option<String>, bool, &'static str)>| {
             let session = chat.session_key.get();
@@ -53,10 +50,17 @@ pub(super) fn PixelCompanion() -> impl IntoView {
             (session, busy, pose)
         },
     );
+    Effect::new(move |_| {
+        let target = status.with(|status| match status.2 {
+            "working" => -3.0,
+            "complete" => -1.0,
+            _ => 0.0,
+        });
+        retarget.run(target);
+    });
     view! {
-        <span class="panel-pixel-companion" aria-hidden="true" data-pose=move || status.with(|status| status.2)
-            data-visible=move || if visible.get() { "true" } else { "false" }>
-            <span class="panel-pixel-sprite">
+        <span class="panel-pixel-companion" aria-hidden="true" data-pose=move || status.with(|status| status.2)>
+            <span class="panel-pixel-sprite" style:--panel-pixel-lift=move || format!("{:.2}px", lift.get())>
                 <span class="panel-pixel-outline" style:box-shadow=pixels('+')></span>
                 <span class="panel-pixel-body" style:box-shadow=pixels('%')></span>
                 <span class="panel-pixel-highlight" style:box-shadow=pixels('#')></span>

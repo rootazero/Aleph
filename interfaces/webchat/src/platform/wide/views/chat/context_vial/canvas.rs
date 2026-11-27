@@ -1,4 +1,5 @@
 use super::water::{Surface, SURFACE_POINTS};
+use crate::components::motion::{can_animate, on_motion_unavailable};
 use leptos::html;
 use leptos::leptos_dom::helpers::{
     request_animation_frame_with_handle, AnimationFrameRequestHandle,
@@ -15,18 +16,6 @@ struct Slosh {
     level: f64,
     timestamp: f64,
     elapsed: f64,
-}
-
-fn can_animate() -> bool {
-    let Some(window) = web_sys::window() else {
-        return false;
-    };
-    window.document().is_some_and(|document| !document.hidden())
-        && window
-            .match_media("(prefers-reduced-motion: no-preference)")
-            .ok()
-            .flatten()
-            .is_some_and(|query| query.matches())
 }
 
 fn paint(context: &CanvasRenderingContext2d, slosh: &Slosh) {
@@ -91,13 +80,10 @@ pub(super) fn WaterDisplay(
         }
     };
     on_cleanup(cancel);
-    let visibility_listener = window_event_listener_untyped("visibilitychange", move |_| {
-        if !can_animate() {
-            cancel();
-            active.set(false);
-        }
+    on_motion_unavailable(move || {
+        cancel();
+        let _ = active.try_set(false);
     });
-    on_cleanup(move || visibility_listener.remove());
     Effect::new(move |previous: Option<(Option<String>, Option<f64>)>| {
         let session = session.get();
         let value = level.get();
