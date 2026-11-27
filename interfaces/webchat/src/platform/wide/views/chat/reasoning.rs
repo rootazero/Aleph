@@ -54,7 +54,7 @@ pub(super) fn ReasoningPanel() -> impl IntoView {
 
     view! {
         <Show when=has_reasoning>
-            <div class="max-w-5xl mx-auto w-full">
+            <div class="max-w-5xl mx-auto w-full reasoning-card-optic">
                 <div class="rounded-xl glass-inset overflow-hidden">
                   // Header row — expand toggle.
                   <div class="flex items-center">

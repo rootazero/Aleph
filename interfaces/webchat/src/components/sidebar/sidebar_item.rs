@@ -33,7 +33,7 @@ pub fn SidebarItem(
     view! {
         <A href=href attr:class=move || {
             if is_active() {
-                "nav-tile-active relative group flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg"
+                "nav-tile-active nav-optic-selected relative group flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg"
             } else {
                 "nav-tile relative group flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg"
             }
