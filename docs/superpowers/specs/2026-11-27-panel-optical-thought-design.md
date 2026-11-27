@@ -1,6 +1,6 @@
 # Aleph Panel 光学界面与思考阅读器 / Optical Panel and Thought Reader
 
-状态 / Status: Provisional design for approval · 2026-11-27
+状态 / Status — 已批准 / Approved · 2026-11-27
 
 ## 目标 / Intent
 
@@ -22,7 +22,7 @@ Deliver Aleph's own optical design, damped motion, context vial, pixel companion
 
 - **光学层 / Optical surfaces.** 扩展现有颜色、层级和密度 token，为导航选中项、聊天输入区、上下文明细和思考卡提供固定的高光、边界及焦点状态。深浅主题各自保持文字对比，窄屏保留布局与阅读空间。 / Build on existing theme and density tokens. Apply bounded highlights to selected navigation, the composer, the context detail and thought card. Preserve contrast and focus in both schemes and usable layouts at narrow widths.
 - **阻尼运动 / Damped motion.** 用共享弹簧参数和可中断的生命周期控制承载浮层、展开和状态切换。减少动态效果时直接提交静态终态。绘制预算随实际可见性和停止条件回收。从已改造组件移除被替换的样式和计时路径。 / Share spring parameters, interruption and cleanup across the upgraded surfaces. Reduced motion commits the final state immediately. Visibility and settling stop the frame loop. Remove superseded animation paths in the migrated surfaces.
-- **上下文小瓶 / Context vial.** 点按或键盘激活小瓶打开 Leptos 明细浮层，复用已经服务 TSX 与 TUI 的 `context.breakdown` 契约和共享明细投影。数字和可访问名称随数据更新。把 `stream.context_gauge`、终态摘要和授权历史投影归并到同一占用状态，沿用现有会话路由与刷新隔离。每个使用量对应其产生时的真实模型窗口。`512K` 作为真实容量或测试样例出现，模型切换、缺数、缩减和恢复各有显式状态。浅水渲染采用上限明确的逐帧计算，减少动态效果或绘制资源不可用时显示静态水位。 / Open a Leptos detail popover using the `context.breakdown` contract and shared projection already used by TSX and TUI. Merge live occupancy, terminal summaries and authorized history into one projection keyed to the actual window for the measured turn. Cover model changes, unknown values, compaction and restore. Support a 512K fixture and a static accessible level indicator.
+- **上下文小瓶 / Context vial.** 点按或键盘激活小瓶打开 Leptos 明细浮层，复用 `context.breakdown` 契约及 TSX 使用的共享明细投影。数字和可访问名称随数据更新。把 `stream.context_gauge`、终态摘要和授权历史投影归并到同一占用状态，沿用现有会话路由与刷新隔离。每个使用量对应其产生时的真实模型窗口。`512K` 作为真实容量或测试样例出现，模型切换、缺数、缩减和恢复各有显式状态。浅水渲染采用上限明确的逐帧计算，减少动态效果或绘制资源不可用时显示静态水位。 / Open a Leptos detail popover using `context.breakdown` and the shared detail projection used by TSX. Merge live occupancy, terminal summaries and authorized history into one projection keyed to the actual window for the measured turn. Cover model changes, unknown values, compaction and restore. Support a 512K fixture and a static accessible level indicator.
 - **像素伙伴 / Pixel companion.** 原创像素角色位于输入区边缘，有独立偏好开关，只响应已有空闲、处理和完成状态。它有固定布局上限，移动端可隐藏装饰。切换会话、隐藏页面、静置和卸载释放计时。 / Use an original pixel companion with an appearance preference and bounded placement. Existing idle, active and complete states drive it. Stop timers on session change, hidden pages, settling and teardown.
 - **思考阅读器 / Thought reader.** 继续实时显示现有原文，按可识别的思考块组织呈现。保留原文查看，提供沉浸式译文及原文与译文并列的双语模式。当前块失败、模型没有可展示思考或引擎未配置时，保留原文并给出对应状态。思考强度仍走现有 `thinking` 会话旋钮。 / Keep the original live readout, organize it into identifiable thought blocks, and offer translated and bilingual reading layouts. Keep the original reachable through failures and unavailable engines. Preserve the existing session thinking control.
 
