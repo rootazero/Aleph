@@ -588,6 +588,12 @@ pub(in crate::commands::start) fn register_graph_handlers(
     );
     register_handler!(
         server,
+        "graph.mutate_note",
+        runtime::handle_graph,
+        memory_runtime
+    );
+    register_handler!(
+        server,
         "graph.update_note",
         runtime::handle_graph,
         memory_runtime

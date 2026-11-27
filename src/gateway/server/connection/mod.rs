@@ -113,6 +113,7 @@ pub(super) const V1_METHODS: &[&str] = &[
     aleph_protocol::memory_graph::GRAPH_QUERY_METHOD,
     aleph_protocol::memory_graph::GRAPH_SEARCH_METHOD,
     aleph_protocol::memory_graph::GRAPH_NODE_DETAIL_METHOD,
+    aleph_protocol::memory_graph::GRAPH_MUTATE_NOTE_METHOD,
     "chat.history",
     "chat.models.list",
     "chat.send",

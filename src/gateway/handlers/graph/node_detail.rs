@@ -62,9 +62,13 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
     let md_path = notes_dir()
         .join(agent_id)
         .join(format!("{}.md", entry.path));
-    let content = tokio::fs::read_to_string(&md_path)
-        .await
-        .unwrap_or_default();
+    let (content, revision) = match tokio::fs::read_to_string(&md_path).await {
+        Ok(content) => {
+            let revision = crate::memory::notes::indexer::note_revision(&content);
+            (content, Some(revision))
+        }
+        Err(_) => (String::new(), None),
+    };
 
     // Fetch backlinks (incoming links).
     let backlinks = db
@@ -129,6 +133,7 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
         backlink_targets: Some(backlink_targets),
         node,
         content,
+        revision,
         backlinks,
         outgoing,
     };

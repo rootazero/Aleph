@@ -269,6 +269,103 @@ async fn mounted_graph_reads_prepare_without_an_idempotency_key() {
 }
 
 #[tokio::test]
+async fn checked_graph_writes_require_a_bound_caller_and_key() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let method = aleph_protocol::memory_graph::GRAPH_MUTATE_NOTE_METHOD;
+    assert!(super::super::v1_mounted(method));
+    assert_eq!(Lane::for_method(method), Lane::Mutate);
+    let legacy = peer("graph-writer");
+    let other_legacy = peer("other-writer");
+    let bound = bound_tests::bind(&legacy).await;
+    let other = bound_tests::bind(&other_legacy).await;
+    let caller = bound.snapshot().await.unwrap();
+    for params in [None, Some(json!({"idempotency_key": " "}))] {
+        let request = JsonRpcRequest::with_id(method, params, json!(1));
+        assert_eq!(
+            prepare(&request, &caller, false)
+                .err()
+                .unwrap()
+                .error
+                .unwrap()
+                .code,
+            IDEMPOTENCY_KEY_REQUIRED
+        );
+    }
+
+    let hits = Arc::new(AtomicUsize::new(0));
+    let mut handlers = HandlerRegistry::new();
+    handlers.register(method, {
+        let hits = hits.clone();
+        move |req| {
+            let hits = hits.clone();
+            Box::pin(async move {
+                let hit = hits.fetch_add(1, Ordering::SeqCst) + 1;
+                JsonRpcResponse::success(req.id, json!({"hit": hit}))
+            })
+        }
+    });
+    let executor = executor(
+        handlers,
+        Arc::new(RateLimiter::new(RateLimitConfig::default())),
+    );
+    let request = |id| {
+        JsonRpcRequest::with_id(
+            method,
+            Some(json!({
+                "address": {"agent_id": "main", "node_id": "reference/one"},
+                "revision": "a".repeat(64),
+                "action": {"type": "rename", "title": "two"},
+                "idempotency_key": "key",
+            })),
+            json!(id),
+        )
+    };
+    assert!(invoke(&executor, &legacy, request(1))
+        .await
+        .get("error")
+        .is_some());
+    assert_eq!(
+        invoke(&executor, &bound, request(2)).await["result"]["hit"],
+        1
+    );
+    assert_eq!(
+        invoke(&executor, &bound, request(3)).await["result"]["hit"],
+        1
+    );
+    assert_eq!(
+        invoke(&executor, &other, request(4)).await["result"]["hit"],
+        2
+    );
+    let mut different = request(5);
+    different.params.as_mut().unwrap()["action"] = json!({"type": "delete"});
+    assert_eq!(
+        invoke(&executor, &bound, different).await["error"]["code"],
+        INVALID_PARAMS
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+
+    // Seed a stale success directly to test the live partition check independently
+    // of the handler's own partition check.
+    let mut foreign = request(6);
+    foreign.params.as_mut().unwrap()["address"]["agent_id"] = json!("main__u-foreign");
+    foreign.params.as_mut().unwrap()["idempotency_key"] = json!("stale");
+    let plan = prepare(&foreign, &caller, false).unwrap();
+    let AcquireResult::Proceed(slot) = executor.idempotency.try_acquire_for_payload(
+        plan.key.as_deref().unwrap(),
+        plan.note_mutation.unwrap().fingerprint,
+    ) else {
+        panic!("expected a new slot");
+    };
+    slot.complete(json!({"hit": 99}));
+    assert_eq!(
+        invoke(&executor, &bound, foreign).await["error"]["code"],
+        RESOURCE_NOT_FOUND
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn ordinary_rpc_uses_one_inflight_slot() {
     let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let release = Arc::new(Notify::new());

@@ -1,3 +1,5 @@
+use aleph_client::local_ipc::MAX_JSON_CONTAINER_ITEMS;
+
 use super::{entry_to_dto, undirected_key};
 use crate::gateway::handlers::graph_types::{
     GraphQueryParams, GraphQueryResponse, NoteLinkDto, NoteNodeDto,
@@ -5,6 +7,48 @@ use crate::gateway::handlers::graph_types::{
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::memory::notes::store::NoteStore;
 use crate::memory::store::MemoryBackend;
+
+// Keep focused graph data below the Web v1 frame limit, with room for the RPC envelope.
+const FOCUSED_GRAPH_BUDGET: usize = 960 * 1024;
+
+fn limit_focused_response(response: &mut GraphQueryResponse, root: &str) -> Result<(), String> {
+    let mut edges = std::mem::take(&mut response.edges);
+    edges.sort_by(|a, b| {
+        let rank = |edge: &NoteLinkDto| {
+            (
+                edge.from != root && edge.to != root,
+                edge.kind.as_deref() == Some("related_similarity"),
+            )
+        };
+        (rank(a), &a.from, &a.to, &a.kind, &a.label).cmp(&(
+            rank(b),
+            &b.from,
+            &b.to,
+            &b.kind,
+            &b.label,
+        ))
+    });
+    // Reserve the truncation marker even when the complete response fits.
+    response.truncated = Some(true);
+    let mut bytes = serde_json::to_vec(response)
+        .map_err(|e| e.to_string())?
+        .len();
+    if bytes > FOCUSED_GRAPH_BUDGET {
+        return Err("Focused graph metadata exceeds its response budget".to_string());
+    }
+    let edge_count = edges.len();
+    for edge in edges.into_iter().take(MAX_JSON_CONTAINER_ITEMS) {
+        bytes += serde_json::to_vec(&edge).map_err(|e| e.to_string())?.len() + 1;
+        if bytes > FOCUSED_GRAPH_BUDGET {
+            break;
+        }
+        response.edges.push(edge);
+    }
+    if response.edges.len() == edge_count {
+        response.truncated = None;
+    }
+    Ok(())
+}
 
 /// Real implementation of graph.query.
 ///
@@ -44,6 +88,7 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
     if focus.is_none() && !crate::gateway::visibility::partition_visible(agent_id) {
         let response = GraphQueryResponse {
             focus: None,
+            truncated: None,
             nodes: vec![],
             edges: vec![],
             total: Some(0),
@@ -141,11 +186,6 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         }
     }
 
-    if focus.is_some() {
-        edges.sort_by(|a, b| {
-            (&a.from, &a.to, &a.kind, &a.label).cmp(&(&b.from, &b.to, &b.kind, &b.label))
-        });
-    }
     // Graph-health emphasis payloads (bridge nodes + surprising edges).
     // `sparse` stays orientation-only by design (spec S3).
     let bridge_nodes: Vec<String> = db
@@ -179,14 +219,20 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         .map(|r| (r.from, r.to))
         .collect();
 
-    let response = GraphQueryResponse {
-        focus,
+    let mut response = GraphQueryResponse {
+        focus: focus.clone(),
+        truncated: None,
         nodes,
         edges,
         total,
         bridge_nodes,
         surprising_edges,
     };
+    if let Some(root) = focus {
+        if let Err(error) = limit_focused_response(&mut response, &root.node_id) {
+            return JsonRpcResponse::error(req.id, INTERNAL_ERROR, error);
+        }
+    }
 
     match serde_json::to_value(response) {
         Ok(v) => JsonRpcResponse::success(req.id, v),
@@ -225,6 +271,60 @@ mod tests {
             params: Some(params),
             id: Some(serde_json::json!(1)),
         }
+    }
+
+    #[test]
+    fn focused_response_budget_keeps_root_edges_first() {
+        let root = "reference/root";
+        let neighbor = |index| format!("reference/neighbor-{index:03}");
+        let edge = |from, to| NoteLinkDto {
+            from,
+            to,
+            label: None,
+            kind: Some("wikilink".to_string()),
+            confidence: Some(1.0),
+        };
+        let mut edges = Vec::new();
+        for from in 0..150 {
+            for to in 0..150 {
+                if from != to {
+                    edges.push(edge(neighbor(from), neighbor(to)));
+                }
+            }
+            edges.push(edge(root.to_string(), neighbor(from)));
+        }
+        let mut response = GraphQueryResponse {
+            focus: None,
+            truncated: None,
+            nodes: vec![],
+            edges,
+            total: None,
+            bridge_nodes: vec![],
+            surprising_edges: vec![],
+        };
+        limit_focused_response(&mut response, root).unwrap();
+        assert_eq!(response.truncated, Some(true));
+        assert_eq!(
+            response
+                .edges
+                .iter()
+                .filter(|edge| edge.from == root)
+                .count(),
+            150
+        );
+        assert!(response
+            .edges
+            .iter()
+            .take(150)
+            .all(|edge| edge.from == root));
+        assert_eq!(response.edges.len(), MAX_JSON_CONTAINER_ITEMS);
+        let envelope = JsonRpcResponse::success(
+            Some(serde_json::json!(1)),
+            serde_json::to_value(&response).unwrap(),
+        );
+        let wire = serde_json::to_string(&envelope).unwrap();
+        assert!(wire.len() <= FOCUSED_GRAPH_BUDGET);
+        assert!(aleph_client::local_ipc::parse_payload(&wire).is_ok());
     }
 
     #[tokio::test]

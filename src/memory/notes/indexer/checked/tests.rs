@@ -438,20 +438,27 @@ async fn checked_rename_preserves_previously_resolved_short_backlink() {
 #[tokio::test]
 async fn checked_rename_resumes_backlinks_after_restart() {
     let (dir, indexer) = fixture().await;
-    let original = seed(&indexer, "reference", "old", "Selected").await;
-    seed(&indexer, "reference", "a", "[[reference/old]]").await;
-    let second = seed(&indexer, "reference", "b", "[[reference/old|Second]]").await;
+    const PARTITION: &str = "main";
+    let original = "---\ncategory: reference\n---\nSelected\n";
+    let first = "---\ncategory: reference\n---\n[[reference/old]]\n";
+    let second = "---\ncategory: reference\n---\n[[reference/old|Second]]\n";
+    for (title, content) in [("old", original), ("a", first), ("b", second)] {
+        indexer
+            .write_note_raw(PARTITION, "reference", title, content)
+            .await
+            .unwrap();
+    }
     indexer.store.with_conn(|conn| {
         conn.execute_batch("CREATE TRIGGER reject_first_backlink BEFORE INSERT ON notes_index WHEN NEW.path = 'reference/a' BEGIN SELECT RAISE(ABORT, 'test: backlink projection failure'); END;")
             .map_err(|error| AlephError::other(error.to_string()))
     }).await.unwrap();
-    let root = indexer.memory_dir.join("default");
+    let root = indexer.memory_dir.join(PARTITION);
     let rename = || CheckedNoteAction::Rename {
         title: "new".into(),
     };
-    let revision = note_revision(&original);
+    let revision = note_revision(original);
     let result = indexer
-        .mutate_note_checked("default", "reference/old", &revision, rename())
+        .mutate_note_checked(PARTITION, "reference/old", &revision, rename())
         .await;
     assert!(
         matches!(result, Err(CheckedNoteError::Partial { address, failed_source: Some(failed_source), source }) if address == "reference/new" && failed_source == "reference/a" && source.to_string().contains("backlink projection failure"))
@@ -480,7 +487,7 @@ async fn checked_rename_resumes_backlinks_after_restart() {
         .unwrap();
     assert!(matches!(
         indexer
-            .mutate_note_checked("default", "reference/old", "stale", rename())
+            .mutate_note_checked(PARTITION, "reference/old", "stale", rename())
             .await,
         Err(CheckedNoteError::Conflict)
     ));
@@ -489,7 +496,7 @@ async fn checked_rename_resumes_backlinks_after_restart() {
         .await
         .unwrap();
     let result = indexer
-        .mutate_note_checked("default", "reference/old", &revision, rename())
+        .mutate_note_checked(PARTITION, "reference/old", &revision, rename())
         .await;
     assert!(
         matches!(result, Err(CheckedNoteError::Partial { address, failed_source: Some(failed_source), .. }) if address == "reference/new" && failed_source == "reference/b")
@@ -506,7 +513,7 @@ async fn checked_rename_resumes_backlinks_after_restart() {
 
     assert_eq!(
         indexer
-            .mutate_note_checked("default", "reference/old", &revision, rename())
+            .mutate_note_checked(PARTITION, "reference/old", &revision, rename())
             .await
             .unwrap(),
         "reference/new"
@@ -529,13 +536,13 @@ async fn checked_rename_resumes_backlinks_after_restart() {
         .contains("[[reference/new|Second]]"));
     assert!(indexer
         .store
-        .get_note_index("reference/old", "default")
+        .get_note_index("reference/old", PARTITION)
         .await
         .unwrap()
         .is_none());
     assert!(indexer
         .store
-        .get_note_index("reference/new", "default")
+        .get_note_index("reference/new", PARTITION)
         .await
         .unwrap()
         .is_some());
@@ -543,7 +550,7 @@ async fn checked_rename_resumes_backlinks_after_restart() {
         assert_eq!(
             indexer
                 .store
-                .get_outgoing_links(source, "default")
+                .get_outgoing_links(source, PARTITION)
                 .await
                 .unwrap(),
             ["reference/new"]
