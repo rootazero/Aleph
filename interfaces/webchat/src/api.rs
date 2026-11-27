@@ -49,8 +49,8 @@ pub mod system;
 pub mod team_chat;
 pub mod teams;
 pub mod telecom_approval;
-pub mod trace;
 pub(crate) mod thought;
+pub mod trace;
 pub mod users;
 pub mod workspace;
 

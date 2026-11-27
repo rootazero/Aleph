@@ -40,15 +40,21 @@ pub struct ThoughtTranslationRequest {
     pub block: ThoughtBlockRef,
     pub engine: TranslationEngine,
     pub target: TranslationTarget,
-    pub expected_destination: String,
+    pub expected_destination: ThoughtTranslationDestination,
     pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ThoughtTranslationDestination {
+    pub label: String,
+    pub revision: String,
 }
 
 /// Destinations the connected caller can explicitly approve per block.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ThoughtTranslationEngines {
-    pub machine: Option<String>,
-    pub ai: Option<String>,
+    pub machine: Option<ThoughtTranslationDestination>,
+    pub ai: Option<ThoughtTranslationDestination>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

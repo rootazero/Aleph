@@ -192,8 +192,23 @@ mod swappable_registry_tests {
 
 use std::collections::HashMap;
 
+#[derive(Clone)]
+pub(crate) struct ProviderBinding {
+    pub(crate) provider: Arc<dyn AiProvider>,
+    pub(crate) revision: uuid::Uuid,
+}
+
+impl ProviderBinding {
+    fn new(provider: Arc<dyn AiProvider>) -> Self {
+        Self {
+            provider,
+            revision: uuid::Uuid::new_v4(),
+        }
+    }
+}
+
 struct RegistryState {
-    providers: HashMap<String, Arc<dyn AiProvider>>,
+    providers: HashMap<String, ProviderBinding>,
     /// Insertion order of provider names, used for fallback when default is removed.
     provider_order: Vec<String>,
     default_name: String,
@@ -207,7 +222,7 @@ pub struct MultiProviderRegistry {
 impl MultiProviderRegistry {
     pub fn new(name: String, provider: Arc<dyn AiProvider>) -> Self {
         let mut providers = HashMap::new();
-        providers.insert(name.clone(), provider);
+        providers.insert(name.clone(), ProviderBinding::new(provider));
         Self {
             state: crate::sync_primitives::RwLock::new(RegistryState {
                 providers,
@@ -222,7 +237,7 @@ impl MultiProviderRegistry {
         if !state.providers.contains_key(&name) {
             state.provider_order.push(name.clone());
         }
-        state.providers.insert(name, provider);
+        state.providers.insert(name, ProviderBinding::new(provider));
     }
 
     pub fn remove(&self, name: &str) -> crate::error::Result<Option<Arc<dyn AiProvider>>> {
@@ -239,7 +254,7 @@ impl MultiProviderRegistry {
                 state.default_name = first.clone();
             }
         }
-        Ok(removed)
+        Ok(removed.map(|binding| binding.provider))
     }
 
     pub fn set_default(&self, name: &str) -> crate::error::Result<()> {
@@ -253,8 +268,8 @@ impl MultiProviderRegistry {
         Ok(())
     }
 
-    /// Resolve one registered provider by its exact key, without model aliases.
-    pub fn get_exact_provider(&self, name: &str) -> Option<Arc<dyn AiProvider>> {
+    /// Snapshot the exact provider and the revision of its active registration.
+    pub(crate) fn provider_binding(&self, name: &str) -> Option<ProviderBinding> {
         let state = self.state.read().unwrap_or_else(|error| error.into_inner());
         state.providers.get(name).cloned()
     }
@@ -273,14 +288,14 @@ impl ProviderRegistry for MultiProviderRegistry {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         // Try "provider/model" format
         if let Some(provider_name) = model_key.split('/').next() {
-            if let Some(p) = state.providers.get(provider_name) {
-                return Some(p.clone());
+            if let Some(binding) = state.providers.get(provider_name) {
+                return Some(binding.provider.clone());
             }
         }
         // Try model name → preset resolution
         if let Some(provider_name) = crate::providers::resolve_provider_from_model(model_key) {
-            if let Some(p) = state.providers.get(&provider_name) {
-                return Some(p.clone());
+            if let Some(binding) = state.providers.get(&provider_name) {
+                return Some(binding.provider.clone());
             }
         }
         None
@@ -299,7 +314,7 @@ impl ProviderRegistry for MultiProviderRegistry {
                     .min()
                     .and_then(|k| state.providers.get(k))
             })
-            .cloned()
+            .map(|binding| binding.provider.clone())
             .unwrap_or_else(|| {
                 // This should never happen because MultiProviderRegistry::new
                 // always inserts at least one provider, but we return a dummy
@@ -343,8 +358,7 @@ impl crate::providers::DefaultProviderHandle for MultiProviderRegistry {
         &self,
         name: &str,
     ) -> Option<crate::sync_primitives::Arc<dyn crate::providers::AiProvider>> {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
-        state.providers.get(name).cloned()
+        self.provider_binding(name).map(|binding| binding.provider)
     }
 }
 

@@ -884,11 +884,17 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
     let thought_run = StoredValue::new(message.with_untracked(|message| {
         Some(message.as_ref()?.id.strip_prefix("assistant-")?.to_owned())
     }));
-    let thought_reader = move || (!is_streaming() && !is_intermediate()).then(|| {
-        thought_run.get_value().map(|run_id| view! {
-            <super::thought_reader::ThoughtReader run_id=run_id />
-        })
-    }).flatten();
+    let thought_reader = move || {
+        (!is_streaming() && !is_intermediate())
+            .then(|| {
+                thought_run.get_value().map(|run_id| {
+                    view! {
+                        <super::thought_reader::ThoughtReader run_id=run_id />
+                    }
+                })
+            })
+            .flatten()
+    };
 
     // Reactive: a message that streams into an assistant final-answer bubble
     // can gain tool calls after this row first mounts (the pre-Task-4 code

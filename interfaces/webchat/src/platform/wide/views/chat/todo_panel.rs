@@ -65,7 +65,7 @@ pub fn TodoPanel() -> impl IntoView {
                         class:settled=move || !run_active
                     >
                         // ── header row (always visible): expand toggle ──
-                        // Slim single line: 18px ring (same size as ContextGauge)
+                        // Slim single line with an 18px progress ring.
                         // + percentage to its right + one-line summary that
                         // ellipsis-truncates its tail. No 36px ring, no two-row meta.
                         <div style="display:flex;align-items:center">

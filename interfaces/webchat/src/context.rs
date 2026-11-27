@@ -1916,7 +1916,9 @@ impl DashboardState {
         if self.current_connection_epoch() != Some(epoch) {
             return Err("Gateway connection changed".into());
         }
-        self.send_rpc(method, params).await.map_err(|error| error.message)
+        self.send_rpc(method, params)
+            .await
+            .map_err(|error| error.message)
     }
 
     #[cfg(feature = "panel-modular")]

@@ -4,9 +4,9 @@ use crate::api::{thought::ThoughtApi, trace::TraceApi};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n, Locale};
 use aleph_protocol::thought::{
-    ThoughtBlockRef, ThoughtTranslationEngines, ThoughtTranslationEvent, ThoughtTranslationFailure,
-    ThoughtTranslationRequest, ThoughtTranslationUpdate, TranslationEngine, TranslationTarget,
-    THOUGHT_TRANSLATION_TOPIC,
+    ThoughtBlockRef, ThoughtTranslationDestination, ThoughtTranslationEngines,
+    ThoughtTranslationEvent, ThoughtTranslationFailure, ThoughtTranslationRequest,
+    ThoughtTranslationUpdate, TranslationEngine, TranslationTarget, THOUGHT_TRANSLATION_TOPIC,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -138,7 +138,7 @@ impl Reader {
         self,
         block: ThoughtBlockRef,
         engine: TranslationEngine,
-        expected_destination: String,
+        expected_destination: ThoughtTranslationDestination,
     ) {
         let Some(scope) = self.scope.try_get_untracked().flatten() else {
             return;
@@ -435,7 +435,7 @@ fn BlockView(block: ThoughtBlock, engines: ThoughtTranslationEngines) -> impl In
                         <button type="button" class="panel-thought-button" on:click=move |_| reader.cancel_block(&key)>{t!(i18n, chat.thought_cancel)}</button>
                     }.into_any()
                 } else if let Some(destination) = destination() {
-                    let label = destination.clone();
+                    let label = destination.label.clone();
                     let engine = reader.engine.get();
                     view! {
                         <span>{t!(i18n, chat.thought_destination, destination = label.clone())}</span>

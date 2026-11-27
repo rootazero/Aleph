@@ -147,7 +147,8 @@ async fn thought_source_translates_only_owned_blocks_through_registered_engines(
             machine,
         )
         .unwrap();
-    let facade = ZahirFacade::new((*tools).clone(), Arc::new(OwnershipTree::new()));
+    let ownership = Arc::new(OwnershipTree::new());
+    let facade = ZahirFacade::new((*tools).clone(), ownership.clone());
     let providers = Arc::new(MultiProviderRegistry::new(
         "fixture".into(),
         Arc::new(MockProvider::new("模型译文")),
@@ -165,7 +166,7 @@ async fn thought_source_translates_only_owned_blocks_through_registered_engines(
     thought_translation::install(
         &mut gateway,
         config.clone(),
-        providers,
+        providers.clone(),
         tools,
         db,
         sessions,
@@ -208,30 +209,30 @@ async fn thought_source_translates_only_owned_blocks_through_registered_engines(
         config.thought_translation.machine_tool = Some("fixture_translate".into());
         config.thought_translation.ai_model = Some("fixture/translate".into());
     }
-    assert_eq!(
-        call(engines()).await.result,
-        Some(json!({
-            "machine": "fixture_translate", "ai": "fixture/translate",
-        }))
-    );
+    let destinations: aleph_protocol::thought::ThoughtTranslationEngines =
+        serde_json::from_value(call(engines()).await.result.unwrap()).unwrap();
+    let ai = destinations.ai.unwrap();
+    let machine = destinations.machine.unwrap();
+    assert_eq!(ai.label, "fixture/translate");
+    assert_eq!(machine.label, "fixture_translate");
 
+    let start = |request: &ThoughtTranslationRequest| {
+        JsonRpcRequest::new(
+            "thought.translation.start",
+            Some(json!(request)),
+            Some(json!(2)),
+        )
+    };
     for (engine, destination, expected) in [
-        (TranslationEngine::Ai, "fixture/translate", "模型译文"),
-        (TranslationEngine::Machine, "fixture_translate", "机器译文"),
+        (TranslationEngine::Ai, ai, "模型译文"),
+        (TranslationEngine::Machine, machine, "机器译文"),
     ] {
         let mut request = ThoughtTranslationRequest {
             block: block.clone(),
             engine,
             target: TranslationTarget::Zh,
-            expected_destination: destination.into(),
-            request_id: destination.into(),
-        };
-        let start = |request: &ThoughtTranslationRequest| {
-            JsonRpcRequest::new(
-                "thought.translation.start",
-                Some(json!(request)),
-                Some(json!(2)),
-            )
+            request_id: destination.label.clone(),
+            expected_destination: destination,
         };
         request.block.run_id = "foreign-run".into();
         assert!(call(start(&request)).await.error.is_some());
@@ -243,6 +244,7 @@ async fn thought_source_translates_only_owned_blocks_through_registered_engines(
                 let event: TopicEvent =
                     serde_json::from_str(&updates.recv().await.unwrap()).unwrap();
                 if event.topic == THOUGHT_TRANSLATION_TOPIC
+                    && event.data["request_id"] == request.request_id.as_str()
                     && event.data["update"]["type"] != "delta"
                 {
                     break event;
@@ -259,6 +261,39 @@ async fn thought_source_translates_only_owned_blocks_through_registered_engines(
         let service = gateway.thought_translation.as_ref().unwrap();
         assert!(service.event_admits(Some(&event.data), "fixture", &state));
         assert!(!service.event_admits(Some(&event.data), "other-connection", &state));
+        match engine {
+            TranslationEngine::Ai => {
+                let endpoint = wiremock::MockServer::start().await;
+                {
+                    let mut config = config.write().await;
+                    let provider = config.providers.get_mut("fixture").unwrap();
+                    provider.base_url = Some(endpoint.uri());
+                    let mut transport_config = provider.clone();
+                    transport_config.api_key = Some("test-key".into());
+                    let transport =
+                        crate::providers::create_provider("fixture", transport_config).unwrap();
+                    providers.register("fixture".into(), transport);
+                }
+                assert!(!service.event_admits(Some(&event.data), "fixture", &state));
+                request.request_id = "stale-disclosure".into();
+                assert!(call(start(&request)).await.error.is_some());
+                assert!(endpoint.received_requests().await.unwrap().is_empty());
+                let current: aleph_protocol::thought::ThoughtTranslationEngines =
+                    serde_json::from_value(call(engines()).await.result.unwrap()).unwrap();
+                let current = current.ai.unwrap();
+                assert_eq!(current.label, request.expected_destination.label);
+                assert_ne!(current.revision, request.expected_destination.revision);
+            }
+            TranslationEngine::Machine => {
+                assert!(
+                    ownership.revoke(&crate::capability::descriptor::CapabilityId {
+                        namespace: crate::capability::backend::TOOL_NAMESPACE.into(),
+                        name: "fixture_translate".into(),
+                    })
+                );
+                assert!(!service.event_admits(Some(&event.data), "fixture", &state));
+            }
+        }
     }
 }
 

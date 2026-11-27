@@ -1,22 +1,11 @@
 use super::*;
 
-fn job_and_connection() -> (Job, ConnectionState) {
+fn route_and_connection() -> (EventRoute, ConnectionState) {
     let mut state = ConnectionState::new("127.0.0.1".parse().unwrap(), true);
     state.first_message = false;
     state.caller_user = Some("alice".into());
     state.verified_user = Some("alice".into());
-    let job = Job {
-        request: ThoughtTranslationRequest {
-            block: ThoughtBlockRef {
-                session_key: "agent:main:main".into(),
-                run_id: "run-a".into(),
-                block_id: ThoughtBlockId("block-a".into()),
-            },
-            engine: TranslationEngine::Ai,
-            target: TranslationTarget::Zh,
-            expected_destination: "local/model".into(),
-            request_id: "request-a".into(),
-        },
+    let route = EventRoute {
         identity: Identity {
             role: Some(state.caller_role.clone()),
             user: state.caller_user.clone(),
@@ -25,14 +14,13 @@ fn job_and_connection() -> (Job, ConnectionState) {
         },
         generation: "generation-a".into(),
         cancel: CancellationToken::new(),
-        running: true,
     };
-    (job, state)
+    (route, state)
 }
 
 #[test]
 fn thought_translation_updates_require_current_connection_identity_and_generation() {
-    let (job, mut state) = job_and_connection();
+    let (route, mut state) = route_and_connection();
     let event = json!({
         "connection_id": "connection-a",
         "request_id": "request-a",
@@ -40,15 +28,15 @@ fn thought_translation_updates_require_current_connection_identity_and_generatio
         "update": { "type": "delta", "text": "译文" }
     });
 
-    assert!(job.admits_event(&event, "connection-a", &state));
-    assert!(!job.admits_event(&event, "connection-b", &state));
+    assert!(route.admits_event(&event, "connection-a", &state, "request-a"));
+    assert!(!route.admits_event(&event, "connection-b", &state, "request-a"));
     for key in ["generation", "request_id"] {
         let mut stale = event.clone();
         stale[key] = json!("previous");
-        assert!(!job.admits_event(&stale, "connection-a", &state));
+        assert!(!route.admits_event(&stale, "connection-a", &state, "request-a"));
     }
     state.verified_user = Some("bob".into());
-    assert!(!job.admits_event(&event, "connection-a", &state));
+    assert!(!route.admits_event(&event, "connection-a", &state, "request-a"));
 }
 
 #[test]
@@ -64,7 +52,7 @@ fn thought_translation_decodes_the_real_mcp_content_envelope() {
 
 #[test]
 fn thought_translation_cancel_drops_queued_text_and_keeps_terminal_failure() {
-    let (job, state) = job_and_connection();
+    let (route, state) = route_and_connection();
     let mut event = json!({
         "connection_id": "connection-a",
         "request_id": "request-a",
@@ -72,9 +60,9 @@ fn thought_translation_cancel_drops_queued_text_and_keeps_terminal_failure() {
         "update": { "type": "completed", "text": "译文" }
     });
 
-    assert!(job.admits_event(&event, "connection-a", &state));
-    job.cancel.cancel();
-    assert!(!job.admits_event(&event, "connection-a", &state));
+    assert!(route.admits_event(&event, "connection-a", &state, "request-a"));
+    route.cancel.cancel();
+    assert!(!route.admits_event(&event, "connection-a", &state, "request-a"));
     event["update"] = json!({"type": "failed", "code": "cancelled"});
-    assert!(job.admits_event(&event, "connection-a", &state));
+    assert!(route.admits_event(&event, "connection-a", &state, "request-a"));
 }
