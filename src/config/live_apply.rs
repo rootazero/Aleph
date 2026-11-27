@@ -104,7 +104,7 @@ pub async fn apply_live_sections(
             // executor). Its liveness is a property of the *reader*, not of a
             // handle — so it is live unconditionally, and saying otherwise
             // would be the mirror of the bug this module fixes.
-            "behavior" => true,
+            "behavior" | "thought_translation" => true,
             // `[policies.spend]`'s handle is a hot-swappable `ArcSwap`
             // seeded at boot by `spend::install_policy`; storing the newly
             // patched policy into it is what makes a ceiling change live —
@@ -260,6 +260,7 @@ mod tests {
         let known_arms = [
             "execution",
             "behavior",
+            "thought_translation",
             "policies.spend",
             "policies.terminal",
             "search",

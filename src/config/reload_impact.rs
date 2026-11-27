@@ -81,7 +81,8 @@ pub enum ReloadImpact {
 /// `config.patch` of `route.mode` reported "no restart needed" and changed
 /// nothing. `live_apply`'s `every_live_section_has_an_apply_arm` fails if an
 /// entry here has no arm there, or vice versa.
-pub(crate) const LIVE_SECTIONS: &[&str] = &["behavior", "execution", "search"];
+pub(crate) const LIVE_SECTIONS: &[&str] =
+    &["behavior", "execution", "search", "thought_translation"];
 
 /// Sub-sections applied live even though their *parent* top-level section is
 /// not — the parent has other fields with no live-apply wiring, so declaring

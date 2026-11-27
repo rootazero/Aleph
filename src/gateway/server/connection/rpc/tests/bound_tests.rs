@@ -359,6 +359,7 @@ async fn bound_connection_cleanup_is_local() {
         node_registry: gateway.node_registry.clone(),
         exec_approval_manager: None,
         audit_log: None,
+        thought_translation: None,
         session_store: Some(sessions.clone()),
         team_store: None,
         event_visibility: gateway.event_visibility.clone(),

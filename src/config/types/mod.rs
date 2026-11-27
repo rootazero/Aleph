@@ -67,3 +67,5 @@ pub use telecom_private_read::*;
 pub use telecom_public_history::*;
 pub use tools::*;
 pub use voice_local::*;
+
+pub mod thought_translation;

@@ -302,6 +302,8 @@ pub struct ConnectionContext {
     /// spec §5.4). `None` ⇒ that 4th filter term is skipped (zero-change
     /// guarantee — see `GatewaySharedState::session_store`).
     session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    thought_translation:
+        Option<Arc<crate::gateway::handlers::thought_translation::TranslationService>>,
     /// Team store for the same filter's `team.<id>.*` plane (team chat bodies,
     /// published as raw `{topic,data}` strings). `None` ⇒ those frames are
     /// denied — see `GatewaySharedState::team_store`.
@@ -340,6 +342,7 @@ impl ConnectionContext {
             node_registry: state.node_registry.clone(),
             exec_approval_manager: state.exec_approval_manager.clone(),
             audit_log: state.audit_log.clone(),
+            thought_translation: state.thought_translation.clone(),
             session_store: state.session_store.clone(),
             team_store: state.team_store.clone(),
             event_visibility: state.event_visibility.clone(),
@@ -1556,6 +1559,9 @@ pub async fn handle_connection(
     // `off_loop::OFF_LOOP_SHUTDOWN_GRACE`: a task stuck in a sync section must
     // not hold teardown hostage (it is cancelled at its next yield point).
     ui_effects.stop();
+    if let Some(service) = &ctx.thought_translation {
+        service.close_connection(&conn_id);
+    }
     crate::gateway::capability_ui::close_connection_surfaces(&conn_id).await;
     ui_effects.join().await;
     off_loop_rpcs.shutdown().await;

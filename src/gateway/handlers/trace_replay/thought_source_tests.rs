@@ -80,6 +80,188 @@ fn reference(row: &Value) -> ThoughtBlockRef {
         .expect("eligible replay must carry a reference")
 }
 
+struct FixtureMachine;
+
+#[async_trait::async_trait]
+impl crate::tools::handlers::ToolHandler for FixtureMachine {
+    fn definition(&self) -> crate::tools::service::ToolDefinition {
+        crate::tools::service::ToolDefinition {
+            name: "fixture_translate".into(),
+            description: "Fixture translation".into(),
+            input_schema: json!({"type": "object"}),
+            source: crate::tools::service::ToolSource::Mcp {
+                server_id: "fixture".into(),
+            },
+            metadata: Default::default(),
+        }
+    }
+
+    async fn invoke(
+        &self,
+        input: Value,
+    ) -> Result<crate::tools::service::ToolOutput, crate::tools::service::ToolError> {
+        assert_eq!(
+            input,
+            json!({"text": "owned source", "target_language": "zh"})
+        );
+        Ok(crate::tools::service::ToolOutput {
+            value: json!({"content": [{"type": "text", "text": "{\"text\":\"机器译文\"}"}]}),
+            metadata: Default::default(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn thought_source_translates_only_owned_blocks_through_registered_engines() {
+    use crate::capability::{ownership::OwnershipTree, zahir_facade::ZahirFacade};
+    use crate::gateway::{
+        caller_identity::with_verified_caller_identity,
+        event_bus::TopicEvent,
+        handlers::thought_translation,
+        server::{ConnectionState, GatewayServer},
+    };
+    use crate::tools::{handlers::ToolHandler, ToolHandlerRegistry};
+    use crate::{config::Config, providers::MockProvider, thinker::MultiProviderRegistry};
+    use aleph_protocol::thought::{
+        ThoughtTranslationRequest, TranslationEngine, TranslationTarget, THOUGHT_TRANSLATION_TOPIC,
+    };
+
+    let (_temp, db, sessions, key) = fixture().await;
+    thought(
+        &db,
+        "owned source",
+        0,
+        Some(ThoughtProvenance::ProviderResponse),
+    )
+    .await;
+    let block = reference(&replay(db.clone(), sessions.clone(), &key).await[0]);
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    let tools = Arc::new(ToolHandlerRegistry::new());
+    let machine = Arc::new(FixtureMachine);
+    let _machine_handle = tools
+        .register(
+            aleph_slot_api::descriptor::ToolCapabilityDescriptor::from_definition(
+                &machine.definition(),
+                0,
+            ),
+            machine,
+        )
+        .unwrap();
+    let facade = ZahirFacade::new((*tools).clone(), Arc::new(OwnershipTree::new()));
+    let providers = Arc::new(MultiProviderRegistry::new(
+        "fixture".into(),
+        Arc::new(MockProvider::new("模型译文")),
+    ));
+    let mut config = Config::default();
+    config.mcp.enabled = true;
+    config.providers.insert(
+        "fixture".into(),
+        serde_json::from_value(json!({
+            "model": "translate", "enabled": true,
+        }))
+        .unwrap(),
+    );
+    let config = Arc::new(tokio::sync::RwLock::new(config));
+    thought_translation::install(
+        &mut gateway,
+        config.clone(),
+        providers,
+        tools,
+        db,
+        sessions,
+        facade,
+    )
+    .unwrap();
+    let mut updates = gateway.event_bus().subscribe();
+    let handlers = gateway.handlers().clone();
+    let mut state = ConnectionState::new("127.0.0.1".parse().unwrap(), true);
+    state.first_message = false;
+    state.caller_user = Some("alice".into());
+    state.verified_user = state.caller_user.clone();
+    gateway
+        .connections
+        .write()
+        .await
+        .insert("fixture".into(), state.clone());
+    let call = |request: JsonRpcRequest| {
+        let handlers = handlers.clone();
+        let role = state.caller_role.clone();
+        async move {
+            with_verified_caller_identity(
+                Some(role),
+                Some("alice".into()),
+                true,
+                Some("fixture".into()),
+                Some("alice".into()),
+                handlers.handle(&request),
+            )
+            .await
+        }
+    };
+    let engines = || JsonRpcRequest::new("thought.translation.engines", None, Some(json!(1)));
+    assert_eq!(
+        call(engines()).await.result,
+        Some(json!({"machine": null, "ai": null}))
+    );
+    {
+        let mut config = config.write().await;
+        config.thought_translation.machine_tool = Some("fixture_translate".into());
+        config.thought_translation.ai_model = Some("fixture/translate".into());
+    }
+    assert_eq!(
+        call(engines()).await.result,
+        Some(json!({
+            "machine": "fixture_translate", "ai": "fixture/translate",
+        }))
+    );
+
+    for (engine, destination, expected) in [
+        (TranslationEngine::Ai, "fixture/translate", "模型译文"),
+        (TranslationEngine::Machine, "fixture_translate", "机器译文"),
+    ] {
+        let mut request = ThoughtTranslationRequest {
+            block: block.clone(),
+            engine,
+            target: TranslationTarget::Zh,
+            expected_destination: destination.into(),
+            request_id: destination.into(),
+        };
+        let start = |request: &ThoughtTranslationRequest| {
+            JsonRpcRequest::new(
+                "thought.translation.start",
+                Some(json!(request)),
+                Some(json!(2)),
+            )
+        };
+        request.block.run_id = "foreign-run".into();
+        assert!(call(start(&request)).await.error.is_some());
+        request.block = block.clone();
+        let response = call(start(&request)).await;
+        assert!(response.error.is_none(), "{response:?}");
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let event: TopicEvent =
+                    serde_json::from_str(&updates.recv().await.unwrap()).unwrap();
+                if event.topic == THOUGHT_TRANSLATION_TOPIC
+                    && event.data["update"]["type"] != "delta"
+                {
+                    break event;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(event.data["request_id"], request.request_id);
+        assert_eq!(
+            event.data["update"],
+            json!({"type": "completed", "text": expected})
+        );
+        let service = gateway.thought_translation.as_ref().unwrap();
+        assert!(service.event_admits(Some(&event.data), "fixture", &state));
+        assert!(!service.event_admits(Some(&event.data), "other-connection", &state));
+    }
+}
+
 #[tokio::test]
 async fn thought_source_rejects_foreign_run() {
     let (_temp, db, sessions, key) = fixture().await;

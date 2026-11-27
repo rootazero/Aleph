@@ -695,3 +695,5 @@ impl ToolService for ScopedToolService {
         schema
     }
 }
+
+pub(crate) mod ephemeral;

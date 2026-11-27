@@ -71,6 +71,8 @@ pub struct Config {
     /// used to report success and change nothing.
     #[serde(default)]
     pub rules: Vec<RoutingRuleConfig>,
+    #[serde(default)]
+    pub thought_translation: super::types::thought_translation::ThoughtTranslationConfig,
     /// Behavior configuration (Phase 6)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behavior: Option<BehaviorConfig>,
@@ -407,6 +409,7 @@ impl Default for Config {
             providers: HashMap::new(),
             // AI-first: no builtin rules, user defines custom rules in config.toml
             rules: vec![],
+            thought_translation: Default::default(),
             behavior: Some(BehaviorConfig::default()),
             search: None,
             fetch: None,

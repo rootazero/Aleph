@@ -447,7 +447,7 @@ pub(crate) fn classify(topic: &str, data: Option<&Value>) -> Option<SessionIdent
         return Some(SessionIdentity::ByTeamId(team_id.to_string()));
     }
     Some(match topic {
-        "capability.event" | "capabilities.ui.display" => SessionIdentity::CapabilityAudience,
+        "capability.event" | "capabilities.ui.display" | "thought.translation.update" => SessionIdentity::CapabilityAudience,
         "capability.event.status" => SessionIdentity::CapabilityStatus,
         // The two clarification frames are plain `BySessionKey`: they must
         // admit exactly whom their two RPC faces admit, and those faces are
