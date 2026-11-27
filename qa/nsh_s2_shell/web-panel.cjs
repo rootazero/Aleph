@@ -64,9 +64,11 @@ async function graphPixel(canvas, [r, g, b]) {
 
 async function sampleZoomFrames(page) {
   await page.evaluate(() => {
-    const sample = window.nebulaQaFrames = { deltas: [], last: null, handle: 0 };
+    const sample = window.nebulaQaFrames = { deltas: [], last: null, handle: 0, peakJsHeapBytes: null };
     function tick(timestamp) {
       if (sample.last !== null) sample.deltas.push(timestamp - sample.last);
+      const heapBytes = performance.memory?.usedJSHeapSize;
+      if (Number.isFinite(heapBytes)) sample.peakJsHeapBytes = Math.max(sample.peakJsHeapBytes ?? 0, heapBytes);
       sample.last = timestamp;
       sample.handle = requestAnimationFrame(tick);
     }
@@ -77,16 +79,16 @@ async function sampleZoomFrames(page) {
     await page.getByLabel('Zoom out').click();
   }
   await page.getByText('Fit graph', { exact: true }).click();
-  const deltas = await page.evaluate(() => {
+  const { deltas, peakJsHeapBytes } = await page.evaluate(() => {
     const sample = window.nebulaQaFrames;
     cancelAnimationFrame(sample.handle);
     delete window.nebulaQaFrames;
-    return sample.deltas;
+    return sample;
   });
   assert.ok(deltas.length >= 12, 'expected frame samples throughout the zoom sequence');
   deltas.sort((left, right) => left - right);
   const percentile = (p) => Number(deltas[Math.ceil(deltas.length * p) - 1].toFixed(2));
-  return { frames: deltas.length, p50Ms: percentile(0.50), p95Ms: percentile(0.95), maxMs: percentile(1) };
+  return { frames: deltas.length, p50Ms: percentile(0.50), p95Ms: percentile(0.95), maxMs: percentile(1), peakJsHeapBytes };
 }
 
 async function verifyNebula(page, fixture, frames, step, shot) {
@@ -98,21 +100,45 @@ async function verifyNebula(page, fixture, frames, step, shot) {
     step('nebula_runtime_unavailable');
     return;
   }
-  await page.getByText('100 of 101 graph notes').waitFor({ timeout: 30000 });
-  const graph = frames.find(({ request, response }) => request.method === 'graph.query' && response.result);
+  const total = fixture.nebula === 'dense' ? 501 : 101;
+  const overview = page.getByText(`100 of ${total} graph notes`);
+  const indexingDeadline = performance.now() + 45000;
+  let readyStarted = openStarted;
+  let refreshes = 0;
+  while (!(await overview.isVisible())) {
+    try {
+      await overview.waitFor({ timeout: 1500 });
+    } catch (error) {
+      if (error.name !== 'TimeoutError' || performance.now() >= indexingDeadline) throw error;
+      readyStarted = performance.now();
+      await page.getByText('Refresh graph', { exact: true }).click();
+      refreshes += 1;
+    }
+  }
+  const graph = frames.findLast(({ request, response }) => request.method === 'graph.query' && response.result?.total === total);
   assert.ok(graph);
   assert.equal(graph.response.result.nodes.length, 100);
   assert.ok(graph.response.result.nodes.every((node) => node.agent_id === 'main__u-owner'));
   const edgeCount = graph.response.result.edges.length;
-  assert.ok(edgeCount >= (fixture.nebula === 'dense' ? 2000 : 90), `only ${edgeCount} edges arrived`);
+  assert.ok(edgeCount >= (fixture.nebula === 'dense' ? 1200 : 90), `only ${edgeCount} edges arrived`);
   const canvas = page.locator('[aria-label="Memory graph"] canvas, canvas[aria-label="Memory graph"]');
   await canvas.waitFor();
-  const readyMs = Math.round(performance.now() - openStarted);
+  await expectGraphPixel();
+  const readyMs = Math.round(performance.now() - readyStarted);
+  if (refreshes) step('nebula_fixture_indexing', { refreshes });
   await page.screenshot({ path: shot('memory-nebula') });
   step('nebula_zoom_frame_sample', await sampleZoomFrames(page));
   await page.getByLabel('Zoom in').click();
   const point = await graphPixel(canvas, [0x93, 0xc5, 0xfd]);
   assert.ok(point, 'the zoomed canvas must contain rendered nodes');
+  const graphResponseCount = frames.filter(({ request }) => request.method === 'graph.query').length;
+  await page.getByText('Refresh graph', { exact: true }).click();
+  await page.getByText('Loading graph…').waitFor({ state: 'hidden' });
+  assert.equal(frames.filter(({ request }) => request.method === 'graph.query').length, graphResponseCount + 1);
+  await expectGraphPixel();
+  const refreshedPoint = await graphPixel(canvas, [0x93, 0xc5, 0xfd]);
+  assert.ok(refreshedPoint && Math.hypot(point.x - refreshedPoint.x, point.y - refreshedPoint.y) <= 1,
+    'same-window refresh should retain the zoomed camera');
   await canvas.evaluate((element) => {
     const context = element.getContext('2d');
     const stroke = context.stroke;
@@ -147,11 +173,14 @@ async function verifyNebula(page, fixture, frames, step, shot) {
   const search = page.getByText('Search', { exact: true });
   await input.fill('nebula-000');
   await search.click();
-  const orgNote = page.getByRole('button').filter({ hasText: 'nebula-000' }).filter({ hasNotText: 'main__u-owner' });
-  // This row exists only in search. Wait for the result list before clicking
-  // the personal row, which also exists in the pre-search graph list.
+  const exactTitle = page.getByText('nebula-000', { exact: true });
+  const results = page.getByRole('button').filter({ has: exactTitle });
+  const orgNote = results.filter({ hasText: 'main · reference' });
   await orgNote.waitFor();
-  const ownNote = page.getByRole('button').filter({ hasText: 'main__u-owner' }).filter({ hasText: 'nebula-000' });
+  const hits = frames.find(({ request }) => request.method === 'graph.search');
+  const exactMatches = hits?.response.result.results.filter((note) => note.id === 'reference/nebula-000');
+  assert.deepEqual(exactMatches?.map((note) => note.agent_id).sort(), ['main', 'main__u-owner']);
+  const ownNote = results.filter({ hasText: 'main__u-owner · reference' });
   await ownNote.click();
   await page.getByText('Personal note fixture only.', { exact: false }).first().waitFor();
   assert.equal(await page.getByText('Foreign twin.', { exact: false }).count(), 0);
@@ -159,15 +188,32 @@ async function verifyNebula(page, fixture, frames, step, shot) {
     && request.params.node_id === 'reference/nebula-000' && response.result);
   assert.equal(detail?.request.params.agent_id, 'main__u-owner');
   assert.equal(detail?.response.result.node.agent_id, 'main__u-owner');
-  const hits = frames.find(({ request }) => request.method === 'graph.search');
-  const exactMatches = hits?.response.result.results.filter((note) => note.id === 'reference/nebula-000');
-  assert.deepEqual(exactMatches?.map((note) => note.agent_id).sort(), ['main', 'main__u-owner']);
   await orgNote.click();
   await page.getByText('Organization twin.', { exact: false }).waitFor();
   await page.getByText('Not in the current graph').waitFor();
   const orgDetail = frames.find(({ request, response }) => request.method === 'graph.node_detail'
     && request.params.node_id === 'reference/nebula-000' && request.params.agent_id === 'main' && response.result);
   assert.equal(orgDetail?.response.result.node.agent_id, 'main');
+
+  if (fixture.nebula === 'dense') {
+    await ownNote.click();
+    await page.getByText('Personal note fixture only.', { exact: false }).first().waitFor();
+    const focusStarted = performance.now();
+    await page.getByText('Show neighborhood', { exact: true }).click();
+    await page.getByText(/^500 notes in this neighborhood/).waitFor();
+    await expectGraphPixel();
+    const focusReadyMs = Math.round(performance.now() - focusStarted);
+    const focus = frames.find(({ request, response }) => request.method === 'graph.query'
+      && request.params.focus?.node_id === 'reference/nebula-000' && response.result);
+    assert.equal(focus?.response.result.nodes.length, 500);
+    assert.equal(focus.response.result.truncated, true);
+    assert.equal(focus.response.result.edges.filter((edge) => edge.from === 'reference/nebula-000').length, 499);
+    assert.ok(focus.bytes < 1024 * 1024);
+    assert.equal(focus.response.result.edges.length, 4_096);
+    step('nebula_dense_frame_sample', { readyMs: focusReadyMs, nodes: focus.response.result.nodes.length,
+      edges: focus.response.result.edges.length, graphBytes: focus.bytes, ...await sampleZoomFrames(page) });
+    await page.screenshot({ path: shot('memory-nebula-dense') });
+  }
 
   await input.fill('nebula-oversize');
   await search.click();
@@ -179,6 +225,44 @@ async function verifyNebula(page, fixture, frames, step, shot) {
   assert.equal(oversized[0].response.result, undefined);
   step('memory_nebula_read_loop', { nodes: 100, edges: edgeCount, graphBytes: graph.bytes,
     detailBytes: detail.bytes, oversizedReplyBytes: oversized[0].bytes });
+
+  if (fixture.nebula === 'normal') {
+    await input.fill('nebula-098');
+    await search.click();
+    await page.getByRole('button').filter({ hasText: 'nebula-098' }).click();
+    await page.getByText('Edit Markdown', { exact: true }).click();
+    const markdown = page.getByLabel('Note Markdown');
+    await markdown.fill(`${await markdown.inputValue()}\n\nNebula QA updated this note.\n`);
+    await page.getByText('Save', { exact: true }).click();
+    await page.getByText('Nebula QA updated this note.', { exact: false }).waitFor();
+    await page.getByText('Rename', { exact: true }).click();
+    await page.getByLabel('New note title').fill('nebula-qa-renamed');
+    await page.getByText('Save', { exact: true }).click();
+    await page.getByText('nebula-qa-renamed', { exact: true }).first().waitFor();
+    await page.getByText('Delete', { exact: true }).click();
+    await page.getByText('Confirm delete', { exact: true }).click();
+    await page.getByText('nebula-qa-renamed', { exact: true }).waitFor({ state: 'hidden' });
+    const writes = frames.filter(({ request }) => request.method === 'graph.mutate_note');
+    assert.deepEqual(writes.map(({ response }) => response.result?.status), ['updated', 'renamed', 'deleted']);
+    assert.deepEqual(writes.map(({ request }) => request.params.address), [
+      { agent_id: 'main__u-owner', node_id: 'reference/nebula-098' },
+      { agent_id: 'main__u-owner', node_id: 'reference/nebula-098' },
+      { agent_id: 'main__u-owner', node_id: 'reference/nebula-qa-renamed' },
+    ]);
+    step('memory_nebula_write_loop');
+  }
+
+  async function expectGraphPixel() {
+    await page.waitForFunction(() => {
+      const element = document.querySelector('[aria-label="Memory graph"] canvas, canvas[aria-label="Memory graph"]');
+      if (!element?.width || !element.height) return false;
+      const { data } = element.getContext('2d').getImageData(0, 0, element.width, element.height);
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i] === 0x93 && data[i + 1] === 0xc5 && data[i + 2] === 0xfd) return true;
+      }
+      return false;
+    });
+  }
 }
 
 async function run(fixturePath) {

@@ -37,11 +37,11 @@ terminal, and `screencapture` needs Screen Recording permission.
 
 ## Memory Nebula fixtures / 记忆星云夹具
 
-Append `--nebula normal` to the replay above. Use fresh output directories with `--nebula dense` and `--nebula off` to check dense links and a mounted-but-unavailable runtime. `--web-only` omits the `--shell` and `--winlist` requirements and runs real Gateway + Chrome on hosts without the macOS embedding. Use `ALEPH_BROWSER_LIVE_CHROME_PATH` to name the installed Chrome and pass the package directory containing `index.html` to `--web`.
+Append `--nebula normal` to the replay above. Use fresh output directories with `--nebula dense` and `--nebula off` to check dense links and a mounted-but-unavailable runtime. For native interaction, compile `swiftc -O qa/nsh_s3_chat/native-view.swift -o /tmp/native-view` and pass `--native-view /tmp/native-view`. The runner then selects the exact personal note and opens its 500-note neighborhood in the dense case. `--web-only` omits the `--shell` and `--winlist` requirements and runs real Gateway + Chrome on hosts without the macOS embedding. Use `ALEPH_BROWSER_LIVE_CHROME_PATH` to name the installed Chrome and pass the package directory containing `index.html` to `--web`.
 
-Normal and dense fixtures put same-path notes in separate partitions. The driver checks the 100-note window, samples Chrome animation-frame intervals over 12 zoom-in/out cycles, clicks an actual painted node, searches and opens the exact personal note, verifies foreign notes are absent, and records framed graph/detail byte counts. The oversized detail must return one bounded error without a body or retry. Animation-frame intervals include idle/vsync time and are not GPU timings. No user notes, existing pairing credentials or running Gateway are used.
+Normal and dense fixtures put same-path notes in separate partitions. The driver checks painted pixels in the 100-note overview, samples Chrome animation-frame intervals over 12 zoom-in/out cycles, opens an actual painted node, resolves the exact personal note, verifies foreign notes are absent, and records framed graph/detail byte counts. The dense fixture also checks a painted 500-note neighborhood. The normal fixture edits the selected note, renames it, then confirms deletion through the UI. The oversized detail must return one bounded error. Animation-frame intervals include idle and vsync time. The runner uses an isolated Gateway, pairing state and note corpus.
 
-普通与密集用例使用隔离的同路径笔记夹具；停用用例验证入口仍存在、读取明确失败。`--web-only` 是浏览器证据，不代替 macOS Desktop IPC 证据。绘图预算、拾取与相似边的快速回归可用 Node.js 22.18+ 运行：
+普通与密集用例使用隔离的同路径笔记夹具。密集用例验证 500 节点聚焦画布，普通用例验证 Markdown 编辑、改名与确认删除，停用用例验证入口仍存在且读取明确失败。`--web-only` 记录浏览器路径，桌面 IPC 由独立的 macOS 阶段记录。绘图预算、拾取与相似边的快速回归可用 Node.js 22.18+ 运行：
 
 ```bash
 node --test interfaces/panel/modules/nebulaViewport.test.mjs
