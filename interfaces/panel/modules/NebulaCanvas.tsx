@@ -1,15 +1,85 @@
 import { Canvas, type GestureResponderEvent, signal, Text, View } from "nsh";
 import { Button } from "nsh/base";
 
-import { drawEdge, drawSlots, pickedNode, project, type Point, type Scene } from "./nebulaViewport";
+import {
+  beginDrag,
+  clipEdge,
+  drawSegment,
+  drawSlots,
+  endDrag,
+  fitViewport,
+  isVisible,
+  moveDrag,
+  panBy,
+  pickOnRelease,
+  project,
+  zoomAt,
+  type DragState,
+  type Point,
+  type Scene,
+  type Viewport,
+} from "./nebulaViewport";
 
-export function NebulaCanvas(props: { scene: Scene; selected: () => number; onSelect: (index: number) => void }) {
-  const zoom = signal(1);
+const EDGE_DENSITY = [160, 320, 640] as const;
+
+export function NebulaCanvas(props: {
+  scene: Scene;
+  selected: () => number;
+  onSelect: (index: number) => void;
+  labels?: () => readonly string[];
+  focusRequest?: () => { index: number; revision: number } | null;
+}) {
+  const viewport = signal<Viewport>({ scale: 1, x: 0, y: 0 });
+  const density = signal(1);
+  const frame = signal({ width: 0, height: 190 });
+  const refresh = signal(0);
+  let drag: DragState | null = null;
   let drawn: Point[] = [];
-  function pick(event: GestureResponderEvent) {
-    const closest = pickedNode(drawn, event.locationX, event.locationY);
-    if (closest >= 0) props.onSelect(closest);
+  let initialized = false;
+  let lastFocusRevision: number | null = null;
+
+  function focus(index: number) {
+    const { width, height } = frame();
+    const point = props.scene.points[index];
+    if (!point || width <= 0 || height <= 0) return;
+    const scale = Math.max(viewport().scale, 1);
+    viewport.set({ scale, x: width / 2 - point[0] * scale, y: height / 2 - point[1] * scale });
+    refresh.update((value) => value + 1);
+  }
+
+  function setFrame(width: number, height: number) {
+    if (width <= 0 || height <= 0) return;
+    frame.set({ width, height });
+    if (!initialized) {
+      viewport.set(fitViewport(props.scene.points, width, height));
+      initialized = true;
+    }
+  }
+
+  function grant(event: GestureResponderEvent) {
+    drag = beginDrag(event.locationX, event.locationY);
     return true;
+  }
+
+  function move(event: GestureResponderEvent) {
+    if (!drag) return;
+    const moved = moveDrag(drag, event.locationX, event.locationY);
+    drag = moved.drag;
+    if (drag.moved) viewport.set(panBy(viewport(), moved.delta[0], moved.delta[1]));
+  }
+
+  function release(event: GestureResponderEvent) {
+    if (!drag) return true;
+    const { width, height } = frame();
+    const index = pickOnRelease(drag, drawn, event.locationX, event.locationY, width, height);
+    drag = null;
+    if (index >= 0) props.onSelect(index);
+    return true;
+  }
+
+  function zoom(factor: number, anchor?: Point) {
+    const { width, height } = frame();
+    viewport.set(zoomAt(viewport(), anchor ?? [width / 2, height / 2], factor));
   }
 
   return (
@@ -17,29 +87,61 @@ export function NebulaCanvas(props: { scene: Scene; selected: () => number; onSe
       <Canvas
         style={{ height: 190 }}
         accessibilityLabel="Memory graph"
+        onLayout={({ bounds }) => setFrame(bounds.size.width, bounds.size.height)}
         onStartShouldSetResponder={() => true}
-        onResponderGrant={pick}
+        onResponderGrant={grant}
+        onResponderMove={move}
+        onResponderRelease={release}
+        onResponderTerminate={() => { drag = null; }}
+        onWheel={(event) => {
+          if (event.modifiers.control) zoom(Math.exp(-event.delta.y * 0.01), [event.position.x, event.position.y]);
+          else viewport.set(panBy(viewport(), -event.delta.x, -event.delta.y));
+        }}
+        onPinch={(event) => {
+          const factor = event.delta > 0 ? 1 + event.delta : 1 / (1 - event.delta);
+          zoom(factor, [event.position.x, event.position.y]);
+        }}
         draw={(cx, { width, height }) => {
+          setFrame(width, height);
           const selected = props.selected();
-          const points = project(props.scene.points, width, height, zoom());
+          const request = props.focusRequest?.() ?? null;
+          if (request && request.revision !== lastFocusRevision) {
+            lastFocusRevision = request.revision;
+            focus(request.index);
+          }
+          refresh();
+          const points = project(props.scene.points, width, height, viewport());
           drawn = points;
           cx.fillStyle = "#10182a";
           cx.fillRect(0, 0, width, height);
-          for (const edge of drawSlots(props.scene.edges, selected, 320)) {
-            drawEdge(cx, points, edge, selected);
+          for (const edge of drawSlots(props.scene.edges, selected, EDGE_DENSITY[density()])) {
+            const clipped = clipEdge(points, edge, width, height);
+            if (!clipped) continue;
+            drawSegment(cx, clipped[0], clipped[1], edge.kind, selected === edge.from || selected === edge.to);
           }
+          const labels = props.labels?.() ?? [];
           for (const [index, [x, y]] of points.entries()) {
-            cx.fillStyle = index === selected ? "#fbbf24" : "#93c5fd";
+            if (!isVisible([x, y], width, height, 12)) continue;
+            const emphasized = index === selected;
+            cx.fillStyle = emphasized ? "#fbbf24" : "#93c5fd";
             cx.beginPath();
-            cx.arc(x, y, index === selected ? 6 : 3, 0, Math.PI * 2);
+            cx.arc(x, y, emphasized ? 6 : 3, 0, Math.PI * 2);
             cx.fill();
+            const label = labels[index];
+            if (label && (emphasized || viewport().scale > 1.4)) {
+              cx.fillStyle = "#dbeafe";
+              cx.font = "11px sans-serif";
+              cx.fillText(label, x + 8, y - 6);
+            }
           }
         }}
       />
       <View class="flex-row gap-1">
-        <Button accessibilityLabel="Zoom out" onPress={() => zoom.update((value) => Math.max(0.5, value / 1.25))}><Text>−</Text></Button>
-        <Button accessibilityLabel="Zoom in" onPress={() => zoom.update((value) => Math.min(4, value * 1.25))}><Text>+</Text></Button>
-        <Button onPress={() => zoom.set(1)}><Text>Fit graph</Text></Button>
+        <Button accessibilityLabel="Zoom out" onPress={() => zoom(1 / 1.25)}><Text>−</Text></Button>
+        <Button accessibilityLabel="Zoom in" onPress={() => zoom(1.25)}><Text>+</Text></Button>
+        <Button accessibilityLabel="Fit graph" onPress={() => viewport.set(fitViewport(props.scene.points, frame().width, frame().height))}><Text>Fit graph</Text></Button>
+        <Button accessibilityLabel="Show fewer relations" onPress={() => density.set(Math.max(0, density() - 1))} disabled={density() === 0}><Text>Fewer links</Text></Button>
+        <Button accessibilityLabel="Show more relations" onPress={() => density.set(Math.min(EDGE_DENSITY.length - 1, density() + 1))} disabled={density() === EDGE_DENSITY.length - 1}><Text>More links</Text></Button>
       </View>
     </View>
   );
