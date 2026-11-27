@@ -201,6 +201,7 @@ test.describe('Chinese phone reader', () => {
     test('cancelling a translation preserves the original and drops late completion', async ({ page }) => {
         const fixture = await installFixture(page, { deferTranslation: true });
         await page.goto('/');
+        await page.getByRole('button', { name: 'History' }).click();
         await selectSession(page, 'Measured session');
         await page.getByRole('button', { name: '阅读思考' }).click();
         await expect(page.getByText('将此思考块发送给 fixture-translate')).toBeVisible();
