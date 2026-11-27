@@ -304,6 +304,14 @@ pub trait NoteStore: Send + Sync {
         limit: usize,
     ) -> Result<(Vec<NoteIndexEntry>, Vec<GraphEdgeRow>), AlephError>;
 
+    /// Exact root plus extant active one-hop neighbors in one corpus.
+    /// Root comes first, then paths in ascending order, within a 1–500 window.
+    async fn get_focused_graph_data(
+        &self,
+        center: &str,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<(Vec<NoteIndexEntry>, Vec<GraphEdgeRow>), AlephError>;
     /// BFS neighborhood around `center` up to `depth` hops.
     ///
     /// Returns `(nodes, edges, truncated)`. `truncated` is `true` when the BFS

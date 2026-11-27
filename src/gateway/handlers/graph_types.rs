@@ -1,12 +1,14 @@
 pub use aleph_protocol::memory_graph::{
-    GraphQueryResponse, GraphSearchResponse, NoteDetailResponse, NoteLinkDto, NoteNodeDto,
-    OutgoingLinkDto, SearchResultDto,
+    GraphQueryResponse, GraphSearchResponse, NoteAddress, NoteDetailResponse, NoteLinkDto,
+    NoteNodeDto, OutgoingLinkDto, SearchResultDto,
 };
 use serde::Deserialize;
 
 // === graph.query ===
 #[derive(Debug, Deserialize)]
 pub struct GraphQueryParams {
+    #[serde(default)]
+    pub focus: Option<NoteAddress>,
     #[serde(default = "default_limit")]
     pub limit: usize,
     #[serde(default)]

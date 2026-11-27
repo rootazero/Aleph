@@ -1,6 +1,6 @@
 use super::{entry_to_dto, notes_dir};
 use crate::gateway::handlers::graph_types::{
-    GraphNodeDetailParams, NoteDetailResponse, OutgoingLinkDto,
+    GraphNodeDetailParams, NoteAddress, NoteDetailResponse, OutgoingLinkDto,
 };
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::memory::notes::store::NoteStore;
@@ -74,12 +74,26 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
 
     // Outgoing links with full lifecycle provenance (active/dangling/tombstone),
     // unlike the graph feed which only surfaces active edges.
-    let outgoing: Vec<OutgoingLinkDto> = db
+    let rows = db
         .get_outgoing_link_rows(&params.node_id, agent_id)
         .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|r| OutgoingLinkDto {
+        .unwrap_or_default();
+    let mut outgoing = Vec::new();
+    for r in rows {
+        let target = if r.status == "active" {
+            db.get_note_index(&r.to_note, agent_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|e| NoteAddress {
+                    agent_id: e.agent_id,
+                    node_id: e.path,
+                })
+        } else {
+            None
+        };
+        outgoing.push(OutgoingLinkDto {
+            target,
             to: r.to_note,
             raw: r.to_raw,
             relation: r.relation,
@@ -87,11 +101,32 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
             confidence: r.confidence,
             resolved_by: r.resolved_by,
             status: r.status,
-        })
-        .collect();
+        });
+    }
+    let mut backlink_targets = Vec::new();
+    for path in &backlinks {
+        let active = db
+            .get_outgoing_link_rows(path, agent_id)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .any(|r| r.status == "active" && r.to_note == params.node_id);
+        if !active {
+            continue;
+        }
+        if let Some(e) = db.get_note_index(path, agent_id).await.ok().flatten() {
+            backlink_targets.push(NoteAddress {
+                agent_id: e.agent_id,
+                node_id: e.path,
+            });
+        }
+    }
 
+    backlink_targets.sort_by(|a, b| (&a.agent_id, &a.node_id).cmp(&(&b.agent_id, &b.node_id)));
+    backlink_targets.dedup();
     let node = entry_to_dto(&entry);
     let response = NoteDetailResponse {
+        backlink_targets: Some(backlink_targets),
         node,
         content,
         backlinks,
@@ -211,6 +246,65 @@ mod tests {
         assert_eq!(outgoing.len(), 2);
         let ghost = outgoing.iter().find(|o| o["raw"] == "ghost").unwrap();
         assert_eq!(ghost["status"], "dangling");
+    }
+
+    #[tokio::test]
+    async fn exact_relation_targets_require_active_extant_endpoints() {
+        let (_scratch, db) = make_db();
+        for agent in ["alpha", "beta"] {
+            for (name, links) in [
+                ("live", vec![]),
+                ("dead", vec![]),
+                ("root", vec!["concept/live", "concept/dead", "ghost"]),
+                ("source", vec!["concept/root"]),
+            ] {
+                db.index_note(&make_note(name, "concept", links), agent, "concept")
+                    .await
+                    .unwrap();
+            }
+            db.remove_note_index("concept/dead", agent).await.unwrap();
+        }
+        db.add_link_with_relation("alpha", "concept/root", "concept/missing", "refers")
+            .await
+            .unwrap();
+        db.add_link_with_relation("alpha", "concept/missing_source", "concept/root", "refers")
+            .await
+            .unwrap();
+        let response =
+            handle_node_detail_impl(node_detail_request("concept/root", Some("alpha")), db).await;
+        let value = response.result.unwrap();
+        let mut backlinks: Vec<_> = value["backlinks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        backlinks.sort_unstable();
+        assert_eq!(backlinks, ["concept/missing_source", "concept/source"]);
+        assert_eq!(
+            value["backlink_targets"],
+            serde_json::json!([{"agent_id":"alpha", "node_id":"concept/source"}])
+        );
+        let mut legacy = value.clone();
+        legacy.as_object_mut().unwrap().remove("backlink_targets");
+        for row in legacy["outgoing"].as_array_mut().unwrap() {
+            row.as_object_mut().unwrap().remove("target");
+        }
+        let legacy: NoteDetailResponse = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.backlink_targets.is_none());
+        assert!(legacy.outgoing.iter().all(|r| r.target.is_none()));
+        let outgoing = value["outgoing"].as_array().unwrap();
+        assert_eq!(outgoing.len(), 4);
+        for row in outgoing {
+            if row["to"] == "concept/live" {
+                assert_eq!(
+                    row["target"],
+                    serde_json::json!({"agent_id":"alpha", "node_id":"concept/live"})
+                );
+            } else {
+                assert!(row.get("target").is_none());
+            }
+        }
     }
 
     /// P1 partition isolation: bob reading alice's note by its real
