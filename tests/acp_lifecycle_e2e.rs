@@ -329,7 +329,7 @@ async fn cancel_reaches_busy_owner_without_waiting_for_prompt_lock() {
     assert_eq!(closed.result.unwrap()["success"], true);
     assert_exited(pid);
     assert!(changes.load(std::sync::atomic::Ordering::Relaxed) > before_close);
-    let empty = handle_sessions_list(rpc("acp.sessions.list"), manager).await;
+    let empty = handle_sessions_list(rpc("acp.sessions.list"), Arc::clone(&manager)).await;
     assert_eq!(empty.result.unwrap(), json!([]));
 }
 
