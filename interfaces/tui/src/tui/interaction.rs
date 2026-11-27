@@ -127,9 +127,6 @@ struct QuestionCard {
     phase: SubmissionPhase,
     hidden: bool,
     superseded: bool,
-    /// Identity-less frames require a successful pending snapshot before the
-    /// user can explicitly accept their weaker legacy semantics.
-    snapshot_confirmed: bool,
     nonce: u64,
 }
 
@@ -894,7 +891,6 @@ impl InteractionController {
                 }) {
                     if q.answered == cursor {
                         if id.is_empty() || q.question_id.is_empty() {
-                            q.snapshot_confirmed = true;
                             if q.phase == SubmissionPhase::Error || q.phase == SubmissionPhase::Reconciling {
                                 q.phase = SubmissionPhase::LegacyConfirmation;
                             }
@@ -983,7 +979,6 @@ impl QuestionCard {
             },
             hidden: false,
             superseded,
-            snapshot_confirmed: false,
             nonce,
         }
     }
