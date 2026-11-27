@@ -761,19 +761,8 @@ unshare --user --map-root-user --net sh -ec '
                                  # (the FILE on disk and the TOOL face — never the RPC being
                                  # driven).
 
-./qa/webview_compat/run.sh macos # br negotiation + Range + the macOS shell's own facts.
-                                 # `marker-origin` is the automated one: it points a
-                                 # panel-only shell at a fake Gateway bound to this
-                                 # machine's LAN address — a genuinely foreign origin to
-                                 # the webview — and asserts `data-shell` is already set
-                                 # when the served page's FIRST inline <script> runs. The
-                                 # comments used to claim the opposite, unmeasured, and a
-                                 # later round drew a wrong conclusion from them. Needs
-                                 # `(cd desktop/shell && cargo build --no-default-features)`;
-                                 # a full-app binary or a missing LAN address is a SKIP,
-                                 # never a PASS.
-./qa/webview_compat/run.sh linux # the WebKitGTK half; its `flat-on-linux` step is manual and
-                                 # that platform's SHELL_MARKER_JS arm is still unrun
+./qa/webview_compat/run.sh macos # Brotli negotiation and Range checks.
+./qa/webview_compat/run.sh linux # Linux browser and WebKitGTK compatibility checks.
 
 ./qa/winshell/run.sh all         # ~28 s. WINDOWS ONLY (loud SKIP elsewhere, never a pass). The
                                  # seven facts the pwsh-as-Windows-shell design rests on, asked of
@@ -2003,7 +1992,7 @@ python qa/browser_live/check_docs.py                 # doc entry points + exact 
 
 **`qa/browser_live/run.sh` is a real Playwright runner.** It requires a real Gateway-issued viewer URL and never creates a synthetic resource or grant. `stream`, `control-all-entries`, `standalone-same-target` and `grant-boundary` use `ALEPH_BROWSER_LIVE_VIEWER_URL`; `binding-switch` additionally requires `ALEPH_BROWSER_LIVE_SECOND_VIEWER_URL`; `managed-companion` requires `ALEPH_BROWSER_LIVE_MANAGED_VIEWER_URL`; `reap` requires `ALEPH_BROWSER_LIVE_REAP_VIEWER_URL`; `revoke-live`, `navigate-fence`, `target-destroy` and `ttl-expiry` use `ALEPH_BROWSER_LIVE_VIEWER_URL` plus `ALEPH_BROWSER_LIVE_SIGNAL_DIR` (the viewer test writes `<case>.ready` into that directory once a real frame is on screen; an **external driver** then performs the real Gateway-side action, and the viewer test itself holds no long-lived credential). Missing variables fail closed. Real run (Windows, only the LLM mocked; rerun on 2026-10-11 after rebuilding the server, see `docs/reports/verify-20261007/browser-live-final-run.md`): 8 of the 9 selectors exited 0; `managed-companion` exited 1 BLOCKED because no managed QA fixture/real issued URL exists, and Windows managed spawn is explicitly Unsupported because the sandbox wrapper cannot prove/reap the service PID. The production companion code and managed sandbox seam have unit/compile evidence only. Single-machine Windows evidence only. The URLs must come from the Gateway grant flow; the runner does not infer a target from a URL, profile or current tab. A selector is real-machine evidence only when its command exits 0.
 
-**状态限定 / Status qualification (2026-10-12; PARTIAL, not production ready):** Native IPC evidence is narrow: QA-owned-root + fake Gateway + in-memory backend only (`desktop/shell` `qa-owned-root`), see [native-ipc-qa-audit.md](../docs/reports/verify-20261007/native-ipc-qa-audit.md); it is not production OS-keyring, protected pairing, or full-Panel proof (仅限 QA 范围，非生产 OS keyring / protected pairing / 完整 Panel). Windows `src/sandbox/platforms/windows/managed_launch.rs` is contract-only; its production module was type-checked by `cargo check -p alephcore`, but its fake-API tests remain uncompiled and untested, with no production caller and no WFP / admin evidence; the runtime still returns `UnsupportedPolicy` and `managed-companion` stays BLOCKED (仅契约；生产模块已类型检查，但 fake-API 测试未编译未测试，无生产调用方 / WFP / admin 证据). No #48 / #53 completion and no #56 production completion is claimed.
+**历史证据 / Historical evidence (2026-10-12):** The retired native IPC fixture exercised QA-owned-root + fake Gateway + in-memory backend only (`desktop/shell` `qa-owned-root`), see [native-ipc-qa-audit.md](../docs/reports/verify-20261007/native-ipc-qa-audit.md); it is not production OS-keyring, protected pairing, or full-Panel proof (仅限 QA 范围，非生产 OS keyring / protected pairing / 完整 Panel). Windows `src/sandbox/platforms/windows/managed_launch.rs` is contract-only; its production module was type-checked by `cargo check -p alephcore`, but its fake-API tests remain uncompiled and untested, with no production caller and no WFP / admin evidence; the runtime still returns `UnsupportedPolicy` and `managed-companion` stays BLOCKED (仅契约；生产模块已类型检查，但 fake-API 测试未编译未测试，无生产调用方 / WFP / admin 证据). No #48 / #53 completion and no #56 production completion is claimed.
 
 - **共同边界 / Shared boundary**：Gateway 独占 CDP（Gateway owns CDP）；Panel/TUI 仅 I/O only 呈现；仅显式合法 `[gateway] browser_viewer_origin` 才 opt-in，默认（None / 非法）deny-only；producer 的 `Safe` 被钳为 `Pending`，`Safe` 只来自用户经 `browser.viewer.resource.decide` 的 revision CAS；绑定走精确 binding / owner / generation；#27 TUI paired/browser 已接线，Windows Credential Manager standalone probe 1/1 已通过；macOS/Linux provider 与真实 pairing/browser E2E 仍 blocked；`NetworkContextGrant` / proxy 未触碰；**not production ready**。
 Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[gateway] browser_viewer_origin`, default deny-only; producer `Safe` is clamped to `Pending` and `Safe` comes only from the user's decision CAS; exact binding/owner/generation; #27 TUI paired/browser wiring is implemented; the Windows Credential Manager standalone probe passed 1/1; macOS/Linux providers and real pairing/browser E2E remain blocked; network grants untouched; not production ready.

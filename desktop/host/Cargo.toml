@@ -9,8 +9,6 @@ gateway-admission = ["dep:aleph-protocol", "dep:reqwest", "dep:serde", "dep:serd
 
 [dependencies]
 aleph-protocol = { path = "../../shared/protocol", optional = true }
-base64 = "0.22"
-minisign-verify = "=0.3.0"
 reqwest = { version = "0.13", default-features = false, optional = true }
 semver = "1.0"
 serde = { workspace = true, optional = true }

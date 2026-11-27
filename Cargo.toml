@@ -10,7 +10,6 @@ members = [
     "desktop/linux",
     "desktop/windows",
     "desktop/nsh-shell",
-    "desktop/shell",
     "shared/logging",
     "shared/protocol",
     "shared/ui_logic",
@@ -119,7 +118,7 @@ lru = "0.18"
 # mDNS service discovery
 mdns-sd = "0.21"
 
-# Crypto / cert parsing (shared with desktop/shell cert_trust)
+# Crypto / cert parsing
 sha2 = "0.11"
 hex = "0.4"
 x509-parser = "0.18"
@@ -170,7 +169,6 @@ loom = ["dep:loom"]
 # feature does not compile it and does not need the fake peer. The integration
 # tests get `aleph-cdp/testkit` through the dev-dependency, as before.
 test-helpers = []
-native-qa = []
 # Control plane UI (Leptos/WASM dashboard)
 control-plane = []
 # Disabled test modules awaiting rewrite
@@ -414,13 +412,6 @@ bench = false
 name = "aleph-migrate"
 path = "src/bin/aleph-migrate/main.rs"
 # The binary has no independent test harness; skip it during `cargo test`.
-test = false
-bench = false
-
-[[bin]]
-name = "aleph-panel-native-qa-gateway"
-path = "src/bin/aleph-panel-native-qa-gateway/main.rs"
-required-features = ["native-qa"]
 test = false
 bench = false
 

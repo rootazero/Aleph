@@ -36,6 +36,7 @@ mod voice;
 use voice::{CaptureOwner, VoiceSlots};
 
 /// The Desktop IPC socket of an already-running Gateway (an absolute path).
+#[cfg(feature = "tsx-panel")]
 pub(crate) const IPC_ENV: &str = "ALEPH_SHELL_PANEL_IPC";
 
 /// The endpoint the Panel keys its saved layout by. Not the socket path: the

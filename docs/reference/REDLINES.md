@@ -27,7 +27,7 @@
 
 ## 🛠 Tech Stack & Do NOT introduce
 
-**核心栈 / Core stack**: Rust Core (tokio + serde) · 记忆层 SQLite + sqlite-vec · 接口 JSON Schema (schemars)。当前 Leptos/WASM Panel 由 NSH WebView 或 Tauri 承载；Tauri `desktop/shell` 仍在发版，宿主切换由 Phase 11 门禁控制。目标是共享 TSX、Native Components 与 Web fallback，尚未切换默认。 / See [current and target mounts](DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移).
+**核心栈 / Core stack**: Rust Core (tokio + serde) · 记忆层 SQLite + sqlite-vec · 接口 JSON Schema (schemars)。生产 Leptos/WASM Panel 由浏览器与 NSH WebView 共用，TSX 和 Native Components 经显式开发入口启用。 / See [current and target mounts](DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移).
 
 **Do NOT introduce unless explicitly requested**（基于 R1/R3/R7 推导，违者不得合入）:
 

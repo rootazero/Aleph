@@ -10,7 +10,6 @@ panel_dir       := "interfaces/webchat"
 panel_dist      := "interfaces/webchat/dist"
 panel_tsx_dir   := "interfaces/panel"
 server_bin      := "aleph-server"
-shell_dir       := "desktop/shell"
 memory_gate     := "qa/browser_live/check_memory.py"
 
 # ─── Default ───
@@ -45,17 +44,13 @@ swift-bridge:
     # (`{{release_dir}}`) or built from `$PWD`, so letting it leak wrote both
     # links to `desktop/macos/bridge/target/release/` and pointed them at
     # `…/bridge/desktop/macos/bridge/.build/…` — a doubled path, in a `target/`
-    # dir nothing reads. The bridge built fine and `_stage-shell-binaries` then
-    # failed on `install: target/release/aleph-bridge: No such file or
-    # directory`, so the error named the consumer and never the cause.
+    # directory outside the workspace target.
     bridge=".build/release/AlephBridge"
     ( cd desktop/macos/bridge && swift build -c release --product AlephBridge )
     mkdir -p {{release_dir}} {{debug_dir}}
     ln -sf "$PWD/desktop/macos/bridge/$bridge" {{release_dir}}/aleph-bridge
     ln -sf "$PWD/desktop/macos/bridge/$bridge" {{debug_dir}}/aleph-bridge
-    # Fail here rather than three recipes later: a dangling symlink resolves to
-    # "No such file" at the `install` in `_stage-shell-binaries`, which reads
-    # like the bridge was never built.
+    # Check the symlink before the server build consumes it.
     test -x "{{release_dir}}/aleph-bridge" \
         || { echo "✗ Swift bridge: {{release_dir}}/aleph-bridge is missing or dangling"; exit 1; }
     echo "✓ Swift bridge: desktop/macos/bridge/$bridge"
@@ -89,100 +84,11 @@ nsh-dev: build-debug
         | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' | sed 's/\\\\/\//g')"
     cd desktop/nsh-shell && PATH="$target_dir/debug:$PATH" nsh run
 
-# ─── Desktop App (Tauri v2 native shell, with aleph-server bundled in) ───
+# Build the server and package the desktop app
+shell-build: build nsh-package
 
-# Stage the daemon (+ macOS Swift bridge) as Tauri externalBin inputs.
-# `profile` is the target/ subdir to copy the daemon from (debug | release).
-#
-# Uses `install -m 0755` instead of `cp` so the staged file is guaranteed
-# executable. cargo can drop +x on the friendly-name binary (target/<profile>/
-# aleph-server) when its hardlink fast-path falls back to copy on certain
-# filesystems — without this, the Tauri bundler ships a non-executable
-# aleph-server in Aleph.app/Contents/MacOS/ and the shell fails to spawn
-# the daemon with EACCES.
-_stage-shell-binaries profile:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    triple="$(rustc -vV | sed -n 's/host: //p')"
-    ext=""; [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]] && ext=".exe"
-    mkdir -p {{shell_dir}}/binaries
-    install -m 0755 "target/{{profile}}/{{server_bin}}$ext" "{{shell_dir}}/binaries/aleph-server-$triple$ext"
-    if [[ "$OSTYPE" == darwin* ]]; then
-        install -m 0755 "{{release_dir}}/aleph-bridge" "{{shell_dir}}/binaries/AlephBridge-$triple"
-    fi
-
-# Create empty externalBin placeholders so `cargo check` / `clippy` of the
-# shell crate pass without a full daemon build (tauri-build requires the
-# externalBin files to exist). `touch` leaves any real staged binary intact.
-#
-# The derivation lives in scripts/stage_shell_placeholders.sh, because CI needs
-# the same three lines and copies of it had already started to drift.
-_stage-shell-placeholders:
-    bash scripts/stage_shell_placeholders.sh {{shell_dir}}
-
-# Run the desktop app in dev mode (rebuilds + stages the daemon first)
-shell-dev: build-debug
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "$OSTYPE" == darwin* ]]; then just swift-bridge; fi
-    just _stage-shell-binaries debug
-    version="$(tr -d '[:space:]' < VERSION)"
-    cd {{shell_dir}} && cargo tauri dev --config "{\"version\":\"$version\"}"
-
-# Build the desktop app installers (.dmg/.msi/.deb/…), daemon bundled inside.
-#
-# CI=true is exported so tauri-bundler passes --skip-jenkins to bundle_dmg.sh,
-# which skips the osascript "tell Finder" step. That AppleScript call requires
-# a TCC Automation→Finder grant on the parent process and silently exits 64
-# from non-Terminal contexts (Claude Code, CI runners, ssh sessions), leaving
-# rw.PID.*.dmg orphans in bundle/macos/. Skipping it produces a working DMG
-# without the fancy icon layout — same as what CI ships.
-shell-build: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    just _stage-shell-binaries release
-    version="$(tr -d '[:space:]' < VERSION)"
-    root="$PWD"
-    (cd {{shell_dir}} && CI=true cargo tauri build --config "{\"version\":\"$version\"}")
-    # macOS: Tauri signs the bundled aleph-server with the linker's per-build
-    # ad-hoc identifier and ignores its embedded Info.plist. Re-sign so codesign
-    # adopts the STABLE CFBundleIdentifier (ai.aleph.server), then re-seal the
-    # outer app. The daemon detaches (--daemon: double-fork + setsid) so it is
-    # its own macOS Local Network Privacy subject; a stable identity is what
-    # lets its LAN-host access (self-hosted SearXNG / Firecrawl, …) be granted
-    # once and persist across rebuilds instead of silently blocked.
-    # See src/bin/aleph-server/Info.plist + build.rs.
-    if [[ "$OSTYPE" == darwin* ]]; then
-        app="$root/{{release_dir}}/bundle/macos/Aleph.app"
-        codesign -s - -f "$app/Contents/MacOS/aleph-server"
-        codesign -s - -f "$app"
-    fi
-    echo "✓ Installers: {{release_dir}}/bundle/"
-
-# Build the panel-only desktop shell (no embedded aleph-server daemon).
-#
-# A distinct bundle identifier + productName ("Aleph Panel") so it installs
-# alongside the full app. `--no-default-features` (forwarded to cargo after
-# `--`) drops the embedded-core code path; `tauri.lite.conf.json` clears
-# externalBin so no daemon is bundled. The splash frontend is self-contained
-# HTML, so this needs no WASM/Swift build.
-shell-build-lite:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    version="$(tr -d '[:space:]' < VERSION)"
-    cd {{shell_dir}} && CI=true cargo tauri build \
-        --config tauri.lite.conf.json --config "{\"version\":\"$version\"}" \
-        -- --no-default-features
-    echo "✓ Lite installers: {{release_dir}}/bundle/"
-
-# Run the panel-only shell in dev mode (no embedded daemon).
-shell-dev-lite:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    version="$(tr -d '[:space:]' < VERSION)"
-    cd {{shell_dir}} && cargo tauri dev \
-        --config tauri.lite.conf.json --config "{\"version\":\"$version\"}" \
-        -- --no-default-features
+# Run the desktop app against a freshly built debug server
+shell-dev: nsh-dev
 
 # ─── Single Stage ───
 
@@ -484,8 +390,8 @@ check-desktop:
     cargo check -p aleph-desktop
 
 # Quick check: desktop shell compiles
-check-shell: _stage-shell-placeholders
-    cargo check -p aleph-desktop-shell
+check-shell:
+    cargo check -p aleph-nsh-shell
 
 # Run core tests
 test:
@@ -685,8 +591,8 @@ clippy-desktop-macos:
     cargo clippy -p aleph-desktop-macos -- -D warnings
 
 # Clippy on the desktop shell
-clippy-shell: _stage-shell-placeholders
-    cargo clippy -p aleph-desktop-shell -- -D warnings
+clippy-shell:
+    cargo clippy -p aleph-nsh-shell -- -D warnings
 
 # Clippy everything
 clippy-all: clippy clippy-desktop clippy-desktop-macos clippy-shell
@@ -751,65 +657,68 @@ deps:
 # ─── Release ───
 
 # Verify the full release matrix builds on CI without publishing.
-# Triggers aleph-app-release.yml in build-only mode (publish=off): builds all
-# three deliverables across macOS / Windows / Linux — the full desktop App
-# (aleph-server bundled), the Aleph Panel lite shell (no daemon), and the
-# standalone aleph-server binary — and uploads artifacts; no tag, no Release.
-# Runs against the current origin/main — push local commits first if needed.
+# Verify packages and standalone server binaries on all three platforms.
+# Runs against origin/main and uploads build artifacts.
 verify-build:
     git submodule update --init --recursive
-    gh workflow run aleph-app-release.yml --field publish=false
-    @echo ""
-    @echo "✓ Build-only verification triggered (no tag, no Release)."
+    gh workflow run aleph-app-release.yml --ref main --field publish=false
+    @echo "✓ Build-only verification triggered."
     @echo "  Monitor: gh run list --workflow aleph-app-release.yml --limit 1"
 
-# Release a new version: bump VERSION, commit, push, trigger the app workflow.
-# Runs the workflow in publish mode — builds and publishes all three
-# deliverables (full desktop App with aleph-server bundled, Aleph Panel lite
-# shell, standalone aleph-server binary + install.sh) across the three
-# platforms in a single GitHub Release. CHANGELOG.md must be written by AI
-# (Claude) BEFORE running this command.
+# Bump the release version, push the release commit, and publish through CI.
 # Usage: just release 26.5.21
-release version:
+release $ALEPH_RELEASE_VERSION:
     #!/usr/bin/env bash
     set -euo pipefail
-    VERSION="{{version}}"
-
-    # Verify CHANGELOG.md has an entry for this version
-    if ! grep -q "## \[${VERSION}\]" CHANGELOG.md 2>/dev/null; then
-        echo "Error: No changelog entry found for [${VERSION}] in CHANGELOG.md"
-        echo "Write the changelog first, then run: just release ${VERSION}"
+    version="$ALEPH_RELEASE_VERSION"
+    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo 'Expected a CalVer version (YY.M.D).' >&2
         exit 1
     fi
+    if [ "$(git branch --show-current)" != main ]; then
+        echo 'Run the release recipe from main.' >&2
+        exit 1
+    fi
+    if ! grep -Fq "## [$version]" CHANGELOG.md; then
+        echo "Add a changelog entry for [$version] before releasing." >&2
+        exit 1
+    fi
+    if git ls-remote --exit-code --tags origin "refs/tags/v$version"; then
+        echo "Tag v$version already exists. Choose a fresh version." >&2
+        exit 1
+    else
+        test "$?" -eq 2
+    fi
 
-    # Update VERSION file (single source of truth) AND mirror it into
-    # [workspace.package].version so every workspace member (alephcore,
-    # aleph-cli, aleph-tui, aleph-desktop-*, etc.) inherits the same
-    # CalVer at compile time. ALEPH_VERSION (set by build.rs from VERSION)
-    # remains authoritative for any code that reads env!("ALEPH_VERSION").
-    echo "$VERSION" > VERSION
-    sed -i '' -E "s/^version = \"[0-9.]+\"$/version = \"${VERSION}\"/" Cargo.toml
+    python3 - <<'PY'
+    import os
+    from pathlib import Path
+    import re
 
-    # Bump bundled skills/plugins submodules to their latest upstream main so
-    # this release embeds the newest official content (the offline fallback).
+    version = os.environ['ALEPH_RELEASE_VERSION']
+    for filename, pattern in (
+        ('Cargo.toml', r'(?m)^(version = ")[0-9.]+("$)'),
+        ('desktop/nsh-shell/nsh.json', r'(?m)^( +"version": ")[0-9.]+(",?$)'),
+    ):
+        path = Path(filename)
+        updated, count = re.subn(pattern, lambda match: match[1] + version + match[2], path.read_text())
+        if count != 1:
+            raise SystemExit(f'Expected one version declaration in {filename}, found {count}')
+        path.write_text(updated)
+    Path('VERSION').write_text(version + '\n')
+    PY
+    cargo metadata --format-version 1 > /dev/null
+
+    # Embed the latest official skills and plugins in the release commit.
     git submodule update --remote --recursive
-
-    # Stage, commit, push (submodule pointer bump rides along, recorded in the release commit)
-    git add -f VERSION Cargo.toml CHANGELOG.md
+    git add -f VERSION Cargo.toml Cargo.lock desktop/nsh-shell/nsh.json CHANGELOG.md
     git add skills plugins
-    git commit -m "release: v${VERSION}"
+    git commit -m "release: v$version"
     git push origin main
+    gh workflow run aleph-app-release.yml --ref main --field publish=true
 
-    # Delete old release if exists
-    gh release delete "v${VERSION}" --yes 2>/dev/null || true
-    git push origin ":refs/tags/v${VERSION}" 2>/dev/null || true
-
-    # Trigger the app build + publish workflow
-    gh workflow run aleph-app-release.yml --field publish=true
-
-    echo ""
-    echo "✓ Release v${VERSION} triggered!"
-    echo "  Monitor: gh run list --limit 1"
+    echo "✓ Release v$version triggered!"
+    echo "  Monitor: gh run list --workflow aleph-app-release.yml --limit 1"
 
 # ─── Integration Probes ───
 

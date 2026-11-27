@@ -36,7 +36,7 @@ The CLA ensures that:
 Please review [CLAUDE.md](CLAUDE.md) for architectural redlines and design principles. Key rules:
 
 - Core must not depend on platform-specific APIs (R1)
-- Business logic lives in the Leptos/WASM Panel, not in the desktop host (R2) — the host is only a WebView shell, and it is dual-track today: legacy Tauri (`desktop/shell`, still the released build) and the forward NSH host (`desktop/nsh-shell`)
+- Core owns business rules and authorization. The Leptos/WASM Panel provides the shared business UI, and `desktop/nsh-shell` adapts it to the native window and system APIs (R2).
 - Prefer Skills/MCP Servers over adding heavy dependencies to core (R3)
 
 ## License

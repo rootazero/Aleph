@@ -1,53 +1,49 @@
 name: Aleph Release
 
-# Manual trigger only — build from a tested, stable commit.
-# Version is read from the VERSION file in the repo root.
-#
-# The `publish` input selects the run mode:
-#   off (default) — build all three deliverables and upload artifacts only
-#                   (CI verification: no tag, no GitHub Release).
-#   on            — also tag the commit and publish a GitHub Release.
-#
-# Aleph ships three deliverables from one tag: the full desktop app (the Tauri
-# shell bundles the `aleph-server` daemon — and, on macOS, the Swift bridge —
-# inside the app), the Aleph Panel lite shell (no bundled daemon), and the
-# standalone `aleph-server` binary with `scripts/install.sh` for curl | bash.
 on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "Tag and publish a GitHub Release (off = build-only)"
+        description: "Publish all three platform packages to GitHub Releases (off = build-only)"
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
+  NSH_VERSION: v0.6.0
+  NSH_INSTALLER_BASE: https://raw.githubusercontent.com/longbridge/nsh/v0.6.0/website/public
 
 jobs:
-  # Hard gate: never ship a release whose committed panel dist is a mismatched
-  # js+wasm pair (the v26.6.22 blank-panel bug). Runs first; all builds depend
-  # on it, so a broken dist fails fast before the expensive matrix build.
   panel-dist-check:
-    name: Panel dist pairing
+    name: Panel dist pairing and WebView baseline
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Verify panel js+wasm are a matched pair
-        run: node scripts/check_panel_dist.mjs
+      - run: node scripts/check_panel_dist.mjs
+      - run: node scripts/check_webview_baseline.mjs
 
   desktop-app:
-    name: Desktop App (${{ matrix.asset }})
+    name: Desktop App (${{ matrix.platform }})
     needs: panel-dist-check
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
-            asset: aleph-macos
+            platform: macos
+            triple: aarch64-apple-darwin
+            suffix: ''
           - os: ubuntu-24.04
-            asset: aleph-linux
+            platform: linux
+            triple: x86_64-unknown-linux-gnu
+            suffix: ''
           - os: windows-latest
-            asset: aleph-windows
+            platform: windows
+            triple: x86_64-pc-windows-msvc
+            suffix: .exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -57,330 +53,139 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install protoc (macOS)
-        if: startsWith(matrix.os, 'macos')
+        if: runner.os == 'macOS'
         run: brew install protobuf
 
       - name: Install protoc (Windows)
-        if: startsWith(matrix.os, 'windows')
+        if: runner.os == 'Windows'
         run: choco install protoc -y
 
-      # The 26.9.1 cycle put the ubuntu *test* job over this runner's 16 GB —
-      # not a plateau near the floor but a decline into exit 143 — and this leg
-      # links the same tree twice (`--release` daemon, then the Tauri bundle).
-      # It has not died yet; a swapfile is the cheap way to keep it that way,
-      # since an OOM here costs the whole ~30-minute matrix and, with
-      # publish=on, leaves a tag with no assets under it. /mnt is the roomy
-      # ephemeral volume on GitHub's Linux runners.
       - name: Enlarge swap (Linux)
-        if: startsWith(matrix.os, 'ubuntu')
+        if: runner.os == 'Linux'
         run: |
-          set -euo pipefail
-          sudo swapoff -a || true
+          sudo swapoff -a
           sudo rm -f /mnt/swapfile /swapfile
           sudo fallocate -l 16G /mnt/swapfile
           sudo chmod 600 /mnt/swapfile
           sudo mkswap /mnt/swapfile
           sudo swapon /mnt/swapfile
-          free -h
 
-      # The daemon needs xcb/X11/etc.; Tauri needs the WebView + GTK headers.
       - name: Install Linux system libraries
-        if: startsWith(matrix.os, 'ubuntu')
+        if: runner.os == 'Linux'
         run: |
-          sudo apt-get update && sudo apt-get install -y \
-            protobuf-compiler \
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler \
             libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev \
             libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev \
-            libx11-dev libxrandr-dev libxi-dev libxtst-dev \
+            libx11-dev libxrandr-dev libxi-dev libxtst-dev libxdo-dev \
             libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
-            libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev \
-            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
-            libayatana-appindicator3-dev patchelf
+            libdrm-dev libgbm-dev libegl-dev clang libclang-dev \
+            libgtk-4-dev libwebkitgtk-6.0-dev
 
-      - name: Build Swift bridge (macOS)
-        if: startsWith(matrix.os, 'macos')
-        run: cd desktop/macos/bridge && swift build -c release
+      - name: Install NSH (macOS and Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          curl -fsSL "$NSH_INSTALLER_BASE/install.sh" -o "$RUNNER_TEMP/install-nsh.sh"
+          bash "$RUNNER_TEMP/install-nsh.sh"
+          echo "$HOME/.nsh/bin" >> "$GITHUB_PATH"
 
-      # Panel WASM dist is pre-built and committed to git — no WASM build here.
-      - name: Build aleph-server daemon
-        run: cargo build --bin aleph-server --release
+      - name: Install NSH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'install-nsh.ps1'
+          Invoke-WebRequest "$env:NSH_INSTALLER_BASE/install.ps1" -OutFile $installer
+          & $installer
+          (Join-Path $env:LOCALAPPDATA 'nsh\bin') >> $env:GITHUB_PATH
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
-
-      # Stage the daemon (+ Swift bridge) as Tauri externalBin inputs, then
-      # bundle. Tauri cannot cross-compile — each runner builds its own app.
-      #
-      # Auto-update artifacts (signed update bundles + `.sig` files) are
-      # produced only when the TAURI_SIGNING_PRIVATE_KEY secret is set; the
-      # CalVer release model is otherwise unchanged. Without the secret the
-      # build still produces the normal installers.
-      - name: Stage bundled binaries and build the app
+      - name: Build and package NSH with the bundled server
         shell: bash
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          PLATFORM: ${{ matrix.platform }}
+          TRIPLE: ${{ matrix.triple }}
+          SUFFIX: ${{ matrix.suffix }}
         run: |
-          triple="$(rustc -vV | sed -n 's/host: //p')"
-          mkdir -p desktop/shell/binaries
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            cp "target/release/aleph-server.exe" "desktop/shell/binaries/aleph-server-$triple.exe"
-          else
-            cp "target/release/aleph-server" "desktop/shell/binaries/aleph-server-$triple"
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "$TRIPLE"
+          nsh --version | grep -E '^nsh 0\.6\.0( |$)'
+          cargo build --locked --release -p alephcore --bin aleph-server
+          server="target/release/aleph-server$SUFFIX"
+          scripts/nsh_package.sh --target "$PLATFORM" --out target/nsh-out --server "$server"
+          mkdir -p target/release-assets
+          cp target/nsh-out/Aleph-*-"$PLATFORM"-* target/release-assets/
+          if [ -f target/nsh-out/Aleph-setup.exe ]; then
+            cp target/nsh-out/Aleph-setup.exe target/release-assets/
           fi
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            cp "desktop/macos/bridge/.build/release/AlephBridge" \
-               "desktop/shell/binaries/AlephBridge-$triple"
-          fi
-          version="$(tr -d '[:space:]' < VERSION)"
-          config="{\"version\":\"$version\"}"
-          # Both the key AND its password must be configured. If the key has a
-          # password but the password secret is missing / wrong, tauri-cli
-          # exits 1 at the signing step and the installers we already built
-          # never get uploaded. Require both so installers always ship; the
-          # updater is silently skipped when the password is unavailable.
-          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
-            echo "Signing key + password present — enabling auto-update artifacts."
-            config="{\"version\":\"$version\",\"bundle\":{\"createUpdaterArtifacts\":true}}"
-          else
-            echo "Signing key or password missing — building installers only (no auto-update artifacts)."
-          fi
-          cd desktop/shell && cargo tauri build --verbose --config "$config"
-
-      # The macOS dmg and Linux AppImage bundlers wipe their output
-      # subdirectory before regenerating, so the second (lite) `tauri build`
-      # below would delete the full app's Aleph_*.dmg / Aleph_*.AppImage this
-      # step just produced (deb/rpm/msi/nsis survive — they only add a file).
-      # Move the full app's bundles aside now, while they are the only outputs
-      # present, so the lite build cannot clobber them. The full upload below
-      # reads from this preserved tree.
-      - name: Preserve full app bundle outputs (pre-lite)
-        shell: bash
-        run: |
-          shopt -s nullglob
-          src="target/release/bundle"
-          dst="full-bundle"
-          for sub in dmg deb appimage rpm msi nsis macos; do
-            for f in "$src/$sub/"*; do
-              mkdir -p "$dst/$sub"
-              mv "$f" "$dst/$sub/"
-              echo "  preserved $f"
-            done
-          done
-
-      # Panel-only ("lite") variant: same matrix, distinct identifier +
-      # productName ("Aleph Panel"). `-- --no-default-features` is forwarded to
-      # cargo (there is no top-level tauri flag for it), dropping the
-      # embedded-core path; tauri.lite.conf.json clears externalBin (no daemon)
-      # and repoints the updater at its own channel (latest-panel.json).
-      # Updater artifacts are produced under the same signing gate as the full
-      # app so lite can self-update from latest-panel.json.
-      - name: Build panel-only shell (lite)
-        shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          version="$(tr -d '[:space:]' < VERSION)"
-          config="{\"version\":\"$version\"}"
-          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
-            config="{\"version\":\"$version\",\"bundle\":{\"createUpdaterArtifacts\":true}}"
-          fi
-          cd desktop/shell && cargo tauri build --verbose \
-            --config tauri.lite.conf.json --config "$config" -- --no-default-features
-
-      # Full and lite bundles land in the same target/release/bundle/** tree.
-      # Move the lite outputs (always prefixed "Aleph Panel") into a separate
-      # tree so the full upload glob below stays unambiguous and lite uploads
-      # / the latest-panel.json manifest never cross-match the full app.
-      - name: Separate lite bundle outputs
-        shell: bash
-        run: |
-          shopt -s nullglob
-          src="target/release/bundle"
-          dst="lite-bundle"
-          for sub in dmg deb appimage rpm msi nsis macos; do
-            for f in "$src/$sub/Aleph Panel"*; do
-              mkdir -p "$dst/$sub"
-              mv "$f" "$dst/$sub/"
-              echo "  moved $f"
-            done
-          done
+          cp "$server" "target/release-assets/aleph-server-$TRIPLE$SUFFIX"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.asset }}
-          if-no-files-found: warn
-          path: |
-            full-bundle/dmg/*.dmg
-            full-bundle/deb/*.deb
-            full-bundle/appimage/*.AppImage
-            full-bundle/rpm/*.rpm
-            full-bundle/msi/*.msi
-            full-bundle/nsis/*.exe
-            full-bundle/macos/*.app.tar.gz
-            full-bundle/macos/*.app.tar.gz.sig
-            full-bundle/appimage/*.AppImage.sig
-            full-bundle/nsis/*.exe.sig
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: aleph-panel-${{ matrix.asset }}
-          if-no-files-found: warn
-          path: |
-            lite-bundle/dmg/*.dmg
-            lite-bundle/deb/*.deb
-            lite-bundle/appimage/*.AppImage
-            lite-bundle/rpm/*.rpm
-            lite-bundle/msi/*.msi
-            lite-bundle/nsis/*.exe
-            lite-bundle/macos/*.app.tar.gz
-            lite-bundle/macos/*.app.tar.gz.sig
-            lite-bundle/appimage/*.AppImage.sig
-            lite-bundle/nsis/*.exe.sig
-
-      # The standalone server binary the curl|bash installer downloads. Already
-      # staged as a Tauri externalBin input above — no extra build.
-      - name: Upload standalone server binary
-        uses: actions/upload-artifact@v7
-        with:
-          name: server-${{ matrix.asset }}
+          name: aleph-${{ matrix.platform }}
           if-no-files-found: error
-          path: desktop/shell/binaries/aleph-server-*
+          path: target/release-assets/
 
   release:
-    name: Create Release
-    needs: [desktop-app]
-    # Runs only when `publish` is on. `!cancelled()` (not `success()`) so one
-    # platform's build failure still ships the installers that did build.
-    if: ${{ !cancelled() && inputs.publish }}
-    runs-on: ubuntu-latest
+    name: Create release
+    needs: desktop-app
+    if: inputs.publish
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Read version from VERSION file
-        id: version
-        run: echo "value=v$(cat VERSION | tr -d '[:space:]')" >> $GITHUB_OUTPUT
-
       - uses: actions/download-artifact@v8
         with:
+          pattern: aleph-*
           path: artifacts
+          merge-multiple: true
 
-      - name: Tag release
+      - name: Install NSH
         run: |
-          git tag "${{ steps.version.outputs.value }}" || true
-          git push origin "${{ steps.version.outputs.value }}" || true
+          curl -fsSL "$NSH_INSTALLER_BASE/install.sh" -o "$RUNNER_TEMP/install-nsh.sh"
+          bash "$RUNNER_TEMP/install-nsh.sh"
+          echo "$HOME/.nsh/bin" >> "$GITHUB_PATH"
 
-      - name: Build release body from CHANGELOG.md
+      - name: Stage archives and update manifest
+        shell: bash
+        env:
+          NSH_UPDATE_SECRET_KEY: ${{ secrets.NSH_UPDATE_SECRET_KEY }}
         run: |
-          VERSION=$(cat VERSION | tr -d '[:space:]')
-          # Extract changelog section for this version
-          awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{if(found) exit} found{print}" CHANGELOG.md > /tmp/release_body.md
-          # Fallback if no changelog entry found
-          if [ ! -s /tmp/release_body.md ]; then
-            echo "See [CHANGELOG.md](https://github.com/rootazero/Aleph/blob/main/CHANGELOG.md) for details." > /tmp/release_body.md
+          version=$(tr -d '[:space:]' < VERSION)
+          archives=(
+            "artifacts/Aleph-$version-macos-aarch64.tar.gz"
+            "artifacts/Aleph-$version-linux-x86_64.tar.gz"
+            "artifacts/Aleph-$version-windows-x86_64.zip"
+          )
+          for archive in "${archives[@]}"; do test -s "$archive"; done
+          test -s artifacts/aleph-server-aarch64-apple-darwin
+          test -s artifacts/aleph-server-x86_64-unknown-linux-gnu
+          test -s artifacts/aleph-server-x86_64-pc-windows-msvc.exe
+          if [ -n "$NSH_UPDATE_SECRET_KEY" ]; then
+            scripts/nsh_update_manifest.sh --out artifacts "${archives[@]}"
+          else
+            echo 'NSH_UPDATE_SECRET_KEY is unset. Publishing archives without an update manifest.'
           fi
+          cp scripts/install.sh scripts/install.ps1 artifacts/
 
-      # Assemble the Tauri updater manifest from each platform's signed
-      # update bundle. Skipped cleanly when no `.sig` artifacts are present
-      # (the signing secret was not configured for this build).
-      - name: Generate updater manifest (latest.json)
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ steps.version.outputs.value }}"
-          VERSION="${TAG#v}"
-          BASE="https://github.com/${{ github.repository }}/releases/download/$TAG"
-          platforms='{}'
-          add() {
-            if [ -f "$2" ] && [ -f "$3" ]; then
-              # GitHub normalizes spaces in release asset names to "." on upload,
-              # so the download URL must use the normalized name, not the raw
-              # local basename (no-op for the space-free full-app bundles).
-              platforms=$(jq --arg k "$1" --arg s "$(cat "$3")" \
-                --arg u "$BASE/$(basename "$2" | tr ' ' '.')" \
-                '.[$k]={signature:$s,url:$u}' <<<"$platforms")
-              echo "  + $1 -> $(basename "$2")"
-            else
-              echo "  - $1 skipped (no updater artifact)"
-            fi
-          }
-          add darwin-aarch64  artifacts/aleph-macos/macos/*.app.tar.gz     artifacts/aleph-macos/macos/*.app.tar.gz.sig
-          add linux-x86_64    artifacts/aleph-linux/appimage/*.AppImage    artifacts/aleph-linux/appimage/*.AppImage.sig
-          add windows-x86_64  artifacts/aleph-windows/nsis/*-setup.exe     artifacts/aleph-windows/nsis/*-setup.exe.sig
-          if [ "$platforms" = '{}' ]; then
-            echo "No updater artifacts — skipping latest.json (auto-update not configured)."
-            exit 0
+          version=$(tr -d '[:space:]' < VERSION)
+          awk -v heading="## [$version]" '
+            index($0, heading) == 1 { found = 1; next }
+            /^## \[/ && found { exit }
+            found { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          if [ ! -s "$RUNNER_TEMP/release-notes.md" ]; then
+            echo 'See CHANGELOG.md for details.' > "$RUNNER_TEMP/release-notes.md"
           fi
-          jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --argjson p "$platforms" \
-            '{version:$v,pub_date:$d,platforms:$p}' > latest.json
-          echo "--- latest.json ---"
-          cat latest.json
-
-      # The panel-only ("lite") updater manifest, on its own channel so the lite
-      # app never pulls the full app's bundle. Built from the separated
-      # aleph-panel-* artifacts. Same skip-when-unsigned behaviour as latest.json.
-      # The lite bundle filenames contain a space ("Aleph Panel.app.tar.gz"), so
-      # globs are resolved into quoted variables (never passed as bare args) AND
-      # the manifest URL must use GitHub's space->"." asset-name normalization
-      # (see the `tr ' ' '.'` below) — otherwise the updater 404s on download.
-      - name: Generate panel updater manifest (latest-panel.json)
-        run: |
-          shopt -s nullglob
-          TAG="${{ steps.version.outputs.value }}"
-          VERSION="${TAG#v}"
-          BASE="https://github.com/${{ github.repository }}/releases/download/$TAG"
-          platforms='{}'
-          add() {
-            local key="$1" bundle="$2" sig="$3"
-            if [ -n "$bundle" ] && [ -f "$bundle" ] && [ -n "$sig" ] && [ -f "$sig" ]; then
-              platforms=$(jq --arg k "$key" --arg s "$(cat "$sig")" \
-                --arg u "$BASE/$(basename "$bundle" | tr ' ' '.')" \
-                '.[$k]={signature:$s,url:$u}' <<<"$platforms")
-              echo "  + $key -> $(basename "$bundle")"
-            else
-              echo "  - $key skipped (no updater artifact)"
-            fi
-          }
-          mac=(artifacts/aleph-panel-aleph-macos/macos/*.app.tar.gz)
-          mac_sig=(artifacts/aleph-panel-aleph-macos/macos/*.app.tar.gz.sig)
-          lin=(artifacts/aleph-panel-aleph-linux/appimage/*.AppImage)
-          lin_sig=(artifacts/aleph-panel-aleph-linux/appimage/*.AppImage.sig)
-          win=(artifacts/aleph-panel-aleph-windows/nsis/*-setup.exe)
-          win_sig=(artifacts/aleph-panel-aleph-windows/nsis/*-setup.exe.sig)
-          add darwin-aarch64  "${mac[0]-}"  "${mac_sig[0]-}"
-          add linux-x86_64    "${lin[0]-}"  "${lin_sig[0]-}"
-          add windows-x86_64  "${win[0]-}"  "${win_sig[0]-}"
-          if [ "$platforms" = '{}' ]; then
-            echo "No panel updater artifacts — skipping latest-panel.json (auto-update not configured)."
-            exit 0
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version"; then
+            echo "Tag v$version already exists. Set a fresh VERSION and matching nsh.json version." >&2
+            exit 1
+          else
+            test "$?" -eq 2
           fi
-          jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --argjson p "$platforms" \
-            '{version:$v,pub_date:$d,platforms:$p}' > latest-panel.json
-          echo "--- latest-panel.json ---"
-          cat latest-panel.json
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.value }}
-          name: Aleph ${{ steps.version.outputs.value }}
-          body_path: /tmp/release_body.md
-          files: |
-            artifacts/**/*.dmg
-            artifacts/**/*.deb
-            artifacts/**/*.AppImage
-            artifacts/**/*.rpm
-            artifacts/**/*.msi
-            artifacts/**/*.exe
-            artifacts/**/*.app.tar.gz
-            artifacts/**/*.sig
-            artifacts/server-*/aleph-server-*
-            scripts/install.sh
-            scripts/install.ps1
-            latest.json
-            latest-panel.json
+          gh release create "v$version" artifacts/* --target "$GITHUB_SHA" \
+            --title "Aleph v$version" --notes-file "$RUNNER_TEMP/release-notes.md"

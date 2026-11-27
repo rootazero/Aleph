@@ -53,7 +53,7 @@ L3 文件名通常带日期（`2026-10-15-rightpane-stage1-slot-spec.md`），**
 
 1. **改代码时同步改 L2**。契约、路径、默认值变了，先改 `docs/reference/` 里对应那份，再改代码——顺序反过来就会留下过期描述。
 2. **历史结论加横幅，不要删**。L2 里也混着时点文档（文件名带日期的那几份），已在开头标注"历史文档 / point-in-time"，当前状态指向代码。
-3. **守卫脚本盯住漂移**。`scripts/doc_wiring_audit.py`（`just check-doc-wiring`，已并入 `just check-wiring`）检查：入口层必须同时提到 Tauri 与 NSH 两轨、L1 的 AGENTS/CLAUDE 除登记过的差异章节外必须一致、L2 里点名的路径和代码符号必须真实存在（已知失效项记在 `scripts/doc_wiring_audit_baseline.json`，新增失效才算失败）、`just` 目标必须存在。新写的文档跑一次 `python3 scripts/doc_wiring_audit.py`。
+3. **守卫脚本盯住漂移**。`scripts/doc_wiring_audit.py`（`just check-doc-wiring`，已并入 `just check-wiring`）检查：入口层必须指向当前桌面宿主 `desktop/nsh-shell`、L1 的 AGENTS/CLAUDE 除登记过的差异章节外必须一致、L2 里点名的路径和代码符号必须真实存在（已知失效项记在 `scripts/doc_wiring_audit_baseline.json`，新增失效才算失败）、`just` 目标必须存在。新写的文档跑一次 `python3 scripts/doc_wiring_audit.py`。
 
 ## 🗂 全部 reference 文档（完整清单）
 

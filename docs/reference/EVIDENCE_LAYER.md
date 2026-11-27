@@ -92,7 +92,7 @@ L2 里带日期的那几份已按此格式标注。
 
 | 检查 | 规则 |
 |---|---|
-| `DUAL` | 每个入口层文档必须同时提到 Tauri 与 NSH —— 防止入口层只描述一轨 |
+| `HOST` | 入口层文档指向当前桌面宿主 `desktop/nsh-shell` / Entry docs point to the production desktop host |
 | `SYNC` | `AGENTS.md` 与 `CLAUDE.md` 归一化后必须一致，只允许 `SYNC_ALLOWED_DIFFS` 列出的章节不同 —— 两份宪法不能各说一套 |
 | `STALE` | 禁止单轨断言（把桌面宿主整体说成"只有 Tauri"的写法；具体字面量见 `scripts/doc_wiring_audit.py` 的 `CUT_PHRASES`） |
 | `PATHS` | 文档里点名的仓库路径必须真实存在（带 baseline 棘轮：新出现的失效路径算失败） |
@@ -107,5 +107,5 @@ L2 里带日期的那几份已按此格式标注。
 
 - 文档地图：[`docs/README.md`](../README.md)
 - 当前架构：[`docs/reference/ARCHITECTURE.md`](ARCHITECTURE.md)
-- 桌面宿主双轨现状：[`docs/reference/DESKTOP_SHELL.md`](DESKTOP_SHELL.md) · [`docs/reference/PRODUCT_TOPOLOGY.md`](PRODUCT_TOPOLOGY.md)
+- 桌面宿主现状 / Desktop host：[`docs/reference/DESKTOP_SHELL.md`](DESKTOP_SHELL.md) · [`docs/reference/PRODUCT_TOPOLOGY.md`](PRODUCT_TOPOLOGY.md)
 - 本轮校对计划：`docs/superpowers/plans/2026-11-23-doc-architecture-realignment.md`

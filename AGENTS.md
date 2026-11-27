@@ -50,31 +50,18 @@
 
 ## 🛠 Tech Stack & Do NOT introduce
 
-**核心栈 / Core stack**: Rust Core (tokio + serde) · 记忆 SQLite + sqlite-vec · 接口 JSON Schema (schemars)。当前 Panel 为 Leptos/WASM，桌面宿主双轨（见下节）。迁移目标是 Desktop/Web 共享 TSX、Native Components 与 Web fallback；尚未切换默认。 / See [current and target mounts](docs/reference/DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移).
+**核心栈 / Core stack**: Rust Core (tokio + serde) · 记忆 SQLite + sqlite-vec · 接口 JSON Schema (schemars) · Leptos/WASM Panel · NSH 0.6.0 桌面宿主。TSX Panel 是显式启用的开发入口。/ The production Panel runs in the browser and in the NSH WebView. [Panel migration](docs/reference/DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移)
 
 **Do NOT introduce**（基于 R1/R3/R7 推导，违者不得合入）→ [REDLINES.md](docs/reference/REDLINES.md)
 
 ---
 
-## 🖥 桌面宿主：双轨现状（2026-11）
+## 🖥 桌面宿主 / Desktop host
 
-> **一个 Panel，两个宿主。** Panel 代码只有一份（`interfaces/webchat` → `aleph-panel`，Leptos 0.8 CSR/WASM），
-> 由 `aleph-server` 内嵌资源（`rust_embed`）在 `http://127.0.0.1:18790` 提供；宿主只是 WebView 外壳。
-
-| 宿主 | 位置 | 现状（2026-11-23） |
-|---|---|---|
-| 遗留 Tauri 宿主 | `desktop/shell`（`aleph-desktop-shell`，Tauri v2） | **仍在发版**：CI `aleph-app-release.yml` 与 `just shell-build` 走它；自带 updater / `aleph://` deeplink / macOS 菜单 / 服务管理 |
-| NSH 宿主 | `desktop/nsh-shell`（`aleph-nsh-shell`，nsh 0.6.0） | **目标形态**：窗口 + 托盘 + 全局快捷键 + 通知授权 + 面板桥；尚无 updater / deeplink / macOS 菜单 / 服务控制，**尚无 release 流水线与构建 `just` 目标**（仅有开发入口 `just shell-tsx-dev`） |
-
-- **宿主↔Panel 走类型化契约**：`shared/protocol/src/panel_shell.rs`（宿主发 `ShellRequest`、收 `PanelReply`；凭据与自启动状态以 `CredentialCall` / `CredentialReply` / `AutostartStatus` 嵌在其中）。
-  宿主侧实现 `desktop/nsh-shell/src/panel_bridge.rs`，Panel 侧消费 `interfaces/webchat/src/app/shell_bridge.rs`。
-  旧的 `__TAURI_INTERNALS__` 只剩两处未迁移消费者：`interfaces/webchat/src/api/native_credentials.rs`、
-  `interfaces/webchat/src/platform/wide/views/voice/audio.rs`。
-- **迁移门禁**：Phase 11（P11-A…P11-H）要求三平台证据 + ≥14 天双轨并行运行；Tauri 宿主的去留由门禁决定，不由文档决定。
-  计划与证据 → `docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md`。
-- **文档纪律**：证据层（`docs/superpowers/`、`docs/reports/`、`docs/engineering-reports/`、`docs/research/`）是时点记录，
-  **不是当前架构**；证据与代码冲突时以代码为准。规则与路线图 → `docs/superpowers/plans/2026-11-23-doc-architecture-realignment.md`。
-  文档地图 → [docs/README.md](docs/README.md)；三层契约 → [EVIDENCE_LAYER.md](docs/reference/EVIDENCE_LAYER.md)。
+- `desktop/nsh-shell` 是唯一桌面宿主，由 NSH 打包同一份 Leptos/WASM Panel 与 Rust Core。Panel 由 `aleph-server` 内嵌资源提供，Local 默认监听 `http://127.0.0.1:18790`，Remote 连接现有 Gateway。/ One desktop package supports Local and Remote modes. [Desktop shell](docs/reference/DESKTOP_SHELL.md)
+- **宿主↔Panel 类型化契约 / Typed contract**：`shared/protocol/src/panel_shell.rs` 定义 `ShellRequest` 与 `PanelReply`；NSH 宿主通过 `desktop/nsh-shell/src/panel_bridge.rs` 连接 Panel 的 `interfaces/webchat/src/app/shell_bridge.rs`。Core 持有授权与业务数据。
+- **发版与回退 / Release and rollback**：`just shell-build` 与 `.github/workflows/aleph-app-release.yml` 走 NSH。R7 三平台门禁与最后一版已验签回退包见[切换回执](docs/superpowers/runs/2026-11-27-nsh-r7-cutover-receipt.md)和[发版流程](docs/reference/RELEASE.md)。
+- **文档纪律 / Documentation**：`docs/superpowers/`、`docs/reports/`、`docs/engineering-reports/`、`docs/research/` 记录各时点证据。当前架构以代码与参考文档为准。 [文档地图](docs/README.md) · [三层契约](docs/reference/EVIDENCE_LAYER.md)
 
 ---
 

@@ -75,7 +75,7 @@ Only live, same-user Desktop IPC can use installed STT, and only when no configu
 
 ### NSH 桌面候选版：安装前检查 / NSH desktop candidate preflight
 
-在 Linux 桌面上，从 Aleph 源码检出的根目录运行以下命令，再启动 NSH 候选版。这个入口**不安装 Aleph 本身**，不适用于独立 `aleph-server` 安装器或当前 Tauri 分发。/ Run these from the root of the Aleph source checkout before launching the Linux NSH candidate. This does **not** install Aleph itself or affect the standalone server installer or current Tauri distribution.
+在 Linux 桌面上，从 Aleph 源码检出的根目录运行以下命令，补齐 NSH 桌面包的系统依赖。/ Run these commands from the Aleph checkout to install the system dependencies of the Linux desktop package.
 
 ```sh
 bash scripts/install-desktop-deps.sh --check
