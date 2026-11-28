@@ -10,21 +10,24 @@ use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::{FutureExt, Stream};
-use tracing::{error, info};
+use tracing::info;
 
 use crate::a2a::domain::{
     A2AError, A2AMessage, A2ARole, A2ATask, Artifact, Part, TaskArtifactUpdateEvent, TaskState,
-    TaskStatus, TaskStatusUpdateEvent, UpdateEvent,
+    TaskStatusUpdateEvent, UpdateEvent,
 };
-use crate::a2a::port::{A2AMessageHandler, A2AResult, A2AStreamingHandler, A2ATaskManager};
+use crate::a2a::port::{A2AMessageHandler, A2AResult, A2AStreamingHandler};
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
-use crate::gateway::execution_engine::RunRequest;
+use crate::gateway::execution_engine::{
+    ExecutionError, RunRequest, BUSY_INPUT_MODE_KEY, UNATTENDED_KEY,
+};
 use crate::gateway::router::SessionKey;
 use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+use super::task_store::{TaskClaim, TaskStore};
 
 /// Fallback response text when a run finished without a final response.
 const DEFAULT_COMPLETION_TEXT: &str = "Task completed successfully";
@@ -33,10 +36,11 @@ const DEFAULT_COMPLETION_TEXT: &str = "Task completed successfully";
 ///
 /// Holds references to the execution infrastructure and task management ports,
 /// translating between A2A domain concepts and Gateway execution primitives.
+#[derive(Clone)]
 pub struct AgentLoopBridge {
     pub(crate) agent_registry: Arc<AgentRegistry>,
     pub(crate) execution_adapter: Arc<dyn ExecutionAdapter>,
-    pub(crate) task_manager: Arc<dyn A2ATaskManager>,
+    pub(crate) task_manager: Arc<TaskStore>,
     pub(crate) streaming: Arc<dyn A2AStreamingHandler>,
 }
 
@@ -87,78 +91,12 @@ impl EventEmitter for FinalResponseEmitter {
     }
 }
 
-/// Whether the task already reached a terminal state.
-///
-/// A cancel that lands while a run is in flight moves the task to `Canceled`
-/// and publishes its own terminal event. The run's own result must not
-/// overwrite that state, and the event stream must not receive a second,
-/// contradictory terminal event.
-async fn task_is_terminal(task_manager: &Arc<dyn A2ATaskManager>, task_id: &str) -> bool {
-    match task_manager.get_task(task_id, None).await {
-        Ok(task) => task.status.state.is_terminal(),
-        Err(e) => {
-            tracing::error!(
-                task_id,
-                error = %e,
-                "A2A bridge: failed to read task state"
-            );
-            false
-        }
-    }
-}
-
-/// Store `text` as the task's artifact and publish the artifact event.
-///
-/// A2A tasks carry their output in `artifacts`; the artifact machinery (the
-/// `artifact-update` push-notification filter, the SSE `ArtifactUpdate`
-/// branch) had no server-side producer, so a completed task came back with an
-/// empty artifact list and an artifact-only subscriber never heard anything.
-async fn publish_artifact(
-    task_manager: &Arc<dyn A2ATaskManager>,
-    streaming: &Arc<dyn A2AStreamingHandler>,
-    task_id: &str,
-    context_id: &str,
-    text: &str,
-) {
-    let artifact = Artifact {
-        artifact_id: uuid::Uuid::new_v4().to_string(),
-        kind: "text".to_string(),
-        parts: vec![Part::Text {
-            text: text.to_string(),
-            metadata: None,
-        }],
-        metadata: None,
-    };
-    if let Err(e) = task_manager.add_artifact(task_id, artifact.clone()).await {
-        tracing::debug!(
-            task_id,
-            error = %e,
-            "A2A bridge: could not store the task artifact"
-        );
-    }
-    let event = TaskArtifactUpdateEvent {
-        task_id: task_id.to_string(),
-        context_id: context_id.to_string(),
-        artifact,
-        append: false,
-        last_chunk: true,
-        metadata: None,
-    };
-    if let Err(e) = streaming.broadcast_artifact(task_id, event).await {
-        tracing::debug!(
-            task_id,
-            error = %e,
-            "A2A bridge: no live subscriber for the artifact event"
-        );
-    }
-}
-
 impl AgentLoopBridge {
     /// Create a new bridge with all required dependencies.
     pub fn new(
         agent_registry: Arc<AgentRegistry>,
         execution_adapter: Arc<dyn ExecutionAdapter>,
-        task_manager: Arc<dyn A2ATaskManager>,
+        task_manager: Arc<TaskStore>,
         streaming: Arc<dyn A2AStreamingHandler>,
     ) -> Self {
         Self {
@@ -181,16 +119,16 @@ impl AgentLoopBridge {
     /// approval card on and no human to press it, so the run is marked
     /// unattended and confirm-gated tools fail closed instead of parking on an
     /// approval nobody can give.
-    fn build_run_request(task_id: &str, input: &str) -> RunRequest {
+    fn build_run_request(task_id: &str, run_id: uuid::Uuid, input: &str) -> RunRequest {
         RunRequest {
-            run_id: uuid::Uuid::new_v4().to_string(),
+            run_id: run_id.to_string(),
             input: input.to_string(),
             session_key: SessionKey::task("main", "a2a", task_id),
             timeout_secs: None,
-            metadata: HashMap::from([(
-                crate::gateway::execution_engine::UNATTENDED_KEY.to_string(),
-                "true".to_string(),
-            )]),
+            metadata: HashMap::from([
+                (UNATTENDED_KEY.into(), "true".into()),
+                (BUSY_INPUT_MODE_KEY.into(), "queue".into()),
+            ]),
             attachments: Vec::new(),
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             workspace_override: None,
@@ -201,45 +139,9 @@ impl AgentLoopBridge {
         }
     }
 
-    /// The `TurnContext` installed around a spawned A2A streaming run.
-    ///
-    /// PR-7 / BT-D-R4-06 + BT-D-R4-07: PR-4 taught
-    /// [`crate::gateway::visibility::ambient_actor`] to fall back to
-    /// `TURN_CONTEXT`. Without this scope wrap nothing set the task-local
-    /// around the spawn, so the bridge's tool dispatch reached the actor-less
-    /// (unrestricted) arm.
-    ///
-    /// What this does NOT do — the comment that used to stand here asserted
-    /// both of the following as fact, and both were false:
-    ///
-    /// - There is no machine sentinel. `TurnContext` has no actor field for one
-    ///   to live in; the only identity it carries is `session_key`, and
-    ///   [`AgentLoopBridge::build_run_request`] pins
-    ///   `SessionKey::task("main", ...)`. So `ambient_actor()`'s third arm hands
-    ///   the literal AGENT id `"main"` to predicates that compare against USER
-    ///   ids — every one of them answers false and an A2A streaming run is
-    ///   silently DENIED, rather than being unrestricted or being a separate
-    ///   (machine) actor.
-    /// - Installing this context was not behaviour-preserving. It moved the
-    ///   streaming run OFF the unrestricted arm; "denied everywhere" is a
-    ///   behaviour change, not "today's behavior unchanged".
-    ///
-    /// [`crate::gateway::pty::session::SpawnOptions::created_by`] names the same
-    /// two-kinds-of-identity hazard correctly and is worth reading first: a
-    /// column that holds a user id everywhere else starts holding an agent id
-    /// the moment a run is the caller.
-    ///
-    /// Pinned by `a2a_streaming_run_acts_as_the_agent_id_not_a_machine_sentinel`
-    /// so the sentinel cannot be re-derived from prose.
-    ///
-    /// Promoting this to a real machine principal (a new identity kind plus an
-    /// `ambient_actor()` arm) is deliberately NOT done here — it would have zero
-    /// consumers today. Filed, not built.
-    ///
-    /// UNVERIFIED, stated so the next reader checks rather than assumes: the
-    /// synchronous `handle_message` path installs no `TURN_CONTEXT` at all, and
-    /// the two A2A faces are believed to agree only because the engine supplies
-    /// its own at dispatch.
+    /// Both legacy send faces have the same unattended tool and visibility scope.
+    /// The ambient actor is the default agent ID. A credential scope in A2A's
+    /// task authority does not grant access to per-person Core resources.
     fn a2a_turn_context(request: &RunRequest) -> TurnContext {
         TurnContext {
             session_key: request.session_key.clone(),
@@ -255,472 +157,173 @@ impl AgentLoopBridge {
         }
     }
 
-    /// Determine the `context_id`: use `session_id` if provided, otherwise `task_id`.
-    fn context_id<'a>(task_id: &'a str, session_id: Option<&'a str>) -> &'a str {
-        session_id.unwrap_or(task_id)
+    async fn start(
+        &self,
+        claim: TaskClaim,
+        message: A2AMessage,
+        subscribe: bool,
+    ) -> A2AResult<(
+        tokio::task::JoinHandle<A2AResult<A2ATask>>,
+        Option<TaskUpdateStream>,
+    )> {
+        let input = message.text_content();
+        if input.trim().is_empty() {
+            return Err(A2AError::InvalidParams(
+                "Message contains no text content".into(),
+            ));
+        }
+        let (stream_tx, stream_rx) = tokio::sync::oneshot::channel();
+        let bridge = self.clone();
+        let handle = tokio::spawn(async move {
+            if subscribe {
+                let stream = bridge.streaming.subscribe_all(&claim.instance_id).await;
+                let _ = stream_tx.send(stream);
+            }
+            let working = TaskStatusUpdateEvent::new(
+                claim.task.id.clone(),
+                claim.task.context_id.clone(),
+                claim.task.status.clone(),
+                None,
+            );
+            if let Err(error) = bridge
+                .streaming
+                .broadcast_status(&claim.instance_id, working)
+                .await
+            {
+                tracing::warn!(%error, "A2A working update could not be published");
+            }
+            let emitter = Arc::new(FinalResponseEmitter::default());
+            let execution = async {
+                let agent = bridge.agent_registry.get_default().await.ok_or_else(|| {
+                    crate::gateway::execution_engine::ExecutionError::Failed(
+                        "No default agent registered".into(),
+                    )
+                })?;
+                let input = match &claim.pending_question {
+                    Some(question) => format!("Previous clarification requested for this task:\n{question}\n\nRemote caller follow-up:\n{input}"),
+                    None => input,
+                };
+                let request = Self::build_run_request(&claim.session_id, claim.run_id, &input);
+                let turn = Self::a2a_turn_context(&request);
+                info!(run_id = %request.run_id, task_id = %claim.task.id, "Executing A2A task");
+                TURN_CONTEXT
+                    .scope(
+                        turn,
+                        bridge.execution_adapter.execute_chat_run(
+                            request,
+                            agent,
+                            emitter.clone(),
+                            claim.cancellation.clone(),
+                        ),
+                    )
+                    .await
+            };
+            let outcome = AssertUnwindSafe(execution).catch_unwind().await;
+            let clarification = claim.cancellation.clarification();
+            let (state, text) = match (outcome, clarification) {
+                (Ok(_), Some(question)) => (TaskState::InputRequired, question),
+                (Ok(Ok(())), None) => (
+                    TaskState::Completed,
+                    emitter
+                        .take_final_response()
+                        .unwrap_or_else(|| DEFAULT_COMPLETION_TEXT.into()),
+                ),
+                (Ok(Err(ExecutionError::Cancelled)), None) => {
+                    (TaskState::Canceled, "Task canceled".into())
+                }
+                (Ok(Err(error)), None) => (TaskState::Failed, format!("Execution failed: {error}")),
+                (Err(_), _) => (TaskState::Failed, "Execution failed unexpectedly".into()),
+            };
+            let result = bridge.finish(&claim, state, text).await;
+            if let Err(error) = bridge.streaming.cleanup_task(&claim.instance_id).await {
+                tracing::warn!(%error, "A2A task stream cleanup failed");
+            }
+            bridge.task_manager.release_run(&claim).await;
+            result
+        });
+        let stream =
+            if subscribe {
+                Some(stream_rx.await.map_err(|_| {
+                    A2AError::InternalError("A2A stream could not be opened".into())
+                })??)
+            } else {
+                None
+            };
+        Ok((handle, stream))
     }
 
-    /// Publish the task's terminal state to the event stream.
-    ///
-    /// The task store and the event stream are separate views: the synchronous
-    /// path wrote the task store but never notified subscribers, so a client
-    /// that registered a push-notification webhook and used `message/send`
-    /// never received the completion.
-    async fn publish_terminal_status(&self, task: &A2ATask) {
-        let event = TaskStatusUpdateEvent::new(
+    async fn finish(
+        &self,
+        claim: &TaskClaim,
+        state: TaskState,
+        text: String,
+    ) -> A2AResult<A2ATask> {
+        let message = A2AMessage::text(A2ARole::Agent, &text);
+        let artifact = (state == TaskState::Completed).then(|| Artifact {
+            artifact_id: uuid::Uuid::new_v4().to_string(),
+            kind: "text".into(),
+            parts: vec![Part::Text {
+                text,
+                metadata: None,
+            }],
+            metadata: None,
+        });
+        let task = self
+            .task_manager
+            .finish_run(claim, state, Some(message), artifact.clone())
+            .await?;
+        if let Some(artifact) = artifact {
+            let event = TaskArtifactUpdateEvent {
+                task_id: task.id.clone(),
+                context_id: task.context_id.clone(),
+                artifact,
+                append: false,
+                last_chunk: true,
+                metadata: None,
+            };
+            if let Err(error) = self
+                .streaming
+                .broadcast_artifact(&claim.instance_id, event)
+                .await
+            {
+                tracing::warn!(%error, "A2A artifact update could not be published");
+            }
+        }
+        let mut event = TaskStatusUpdateEvent::new(
             task.id.clone(),
             task.context_id.clone(),
             task.status.clone(),
             None,
         );
-        if let Err(e) = self.streaming.broadcast_status(&task.id, event).await {
-            tracing::debug!(
-                task_id = %task.id,
-                error = %e,
-                "A2A bridge: no live subscriber for the terminal event"
-            );
+        event.is_final = true;
+        if let Err(error) = self
+            .streaming
+            .broadcast_status(&claim.instance_id, event)
+            .await
+        {
+            tracing::warn!(%error, "A2A terminal update could not be published");
         }
-        // The synchronous path opens no subscription of its own, so the hub
-        // channel the broadcast just created would linger for every task.
-        if let Err(e) = self.streaming.cleanup_task(&task.id).await {
-            tracing::warn!(
-                task_id = %task.id,
-                error = %e,
-                "A2A bridge: cleanup_task failed after a synchronous completion"
-            );
-        }
-    }
-
-    /// Store the run's answer as the task's artifact and publish it.
-    ///
-    /// The A2A task shape carries its output in `artifacts`, and the artifact
-    /// machinery (the `artifact-update` push-notification filter, the SSE
-    /// `ArtifactUpdate` branch) had no server-side producer: a completed task
-    /// came back with an empty artifact list.
-    async fn publish_terminal_artifact(&self, task: &A2ATask, text: &str) {
-        publish_artifact(
-            &self.task_manager,
-            &self.streaming,
-            &task.id,
-            &task.context_id,
-            text,
-        )
-        .await;
+        Ok(task)
     }
 }
 
+type TaskUpdateStream = Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>;
+
 #[async_trait]
 impl A2AMessageHandler for AgentLoopBridge {
-    async fn handle_message(
-        &self,
-        task_id: &str,
-        message: A2AMessage,
-        session_id: Option<&str>,
-    ) -> A2AResult<A2ATask> {
-        let input = message.text_content();
-        if input.trim().is_empty() {
-            return Err(A2AError::InvalidParams(
-                "Message contains no text content".to_string(),
-            ));
-        }
-
-        // Atomically create-or-claim the task. `claim_task` either
-        // creates a new task and promotes it to `Working` in a single
-        // critical section (returning `Ok(true)`), or sees the task
-        // already owned by another run and returns `Ok(false)`. This
-        // closes the A2A-R3-04 TOCTOU window between
-        // `create_task` + `update_status(Working)` that previously
-        // allowed a concurrent delegation to also reach `execute()`.
-        let context_id = Self::context_id(task_id, session_id);
-        let claimed = self.task_manager.claim_task(task_id, context_id).await?;
-        if !claimed {
-            return Err(A2AError::InvalidRequest(format!(
-                "Task {task_id} is already being processed by another request"
-            )));
-        }
-
-        // Get the default agent before running so a missing default fails
-        // fast. (The task is already in `Working`; if the agent is missing
-        // we transition it to `Failed` so callers do not see a stuck
-        // `Working` task.)
-        let agent = match self.agent_registry.get_default().await {
-            Some(a) => a,
-            None => {
-                // The task was atomically claimed by `claim_task` and is now in
-                // `Working`. A swallowed `update_status` failure here leaves it
-                // stuck in `Working` forever; surface the error in logs and
-                // still return the user-facing `InternalError` so the caller
-                // does not block waiting for a completion that will never come.
-                if let Err(e) = self
-                    .task_manager
-                    .update_status(
-                        task_id,
-                        TaskState::Failed,
-                        Some(A2AMessage::text(
-                            A2ARole::Agent,
-                            "No default agent registered",
-                        )),
-                    )
-                    .await
-                {
-                    tracing::error!(
-                        task_id,
-                        error = %e,
-                        "A2A bridge: failed to mark task Failed after missing-default-agent"
-                    );
-                }
-                return Err(A2AError::InternalError(
-                    "No default agent registered".to_string(),
-                ));
-            }
-        };
-
-        // Build and execute the run request
-        let request = Self::build_run_request(task_id, &input);
-        let run_id = request.run_id.clone();
-        let emitter = Arc::new(FinalResponseEmitter::default());
-
-        info!(task_id, run_id = %run_id, "A2A bridge: executing synchronous run");
-
-        match self
-            .execution_adapter
-            .execute(request, agent, emitter.clone())
-            .await
-        {
-            Ok(()) => {
-                // Execution succeeded — mark task as Completed with the answer
-                // the agent produced.
-                let final_text = emitter
-                    .take_final_response()
-                    .unwrap_or_else(|| DEFAULT_COMPLETION_TEXT.to_string());
-                let response_msg = A2AMessage::text(A2ARole::Agent, final_text.clone());
-                // A cancel that landed while the run was in flight wins: the
-                // task is already terminal, so the run's result must not
-                // overwrite it.
-                if task_is_terminal(&self.task_manager, task_id).await {
-                    let task = self.task_manager.get_task(task_id, None).await?;
-                    info!(
-                        task_id,
-                        "A2A bridge: task already terminal; keeping its terminal state"
-                    );
-                    return Ok(task);
-                }
-                let task = self
-                    .task_manager
-                    .update_status(task_id, TaskState::Completed, Some(response_msg))
-                    .await?;
-                self.publish_terminal_artifact(&task, &final_text).await;
-                self.publish_terminal_status(&task).await;
-                info!(task_id, "A2A bridge: task completed");
-                Ok(task)
-            }
-            Err(e) => {
-                // Execution failed — mark task as Failed
-                let error_msg = A2AMessage::text(A2ARole::Agent, format!("Execution failed: {e}"));
-                if task_is_terminal(&self.task_manager, task_id).await {
-                    let task = self.task_manager.get_task(task_id, None).await?;
-                    error!(task_id, error = %e, "A2A bridge: task already terminal; keeping its terminal state");
-                    return Ok(task);
-                }
-                let task = self
-                    .task_manager
-                    .update_status(task_id, TaskState::Failed, Some(error_msg))
-                    .await?;
-                self.publish_terminal_status(&task).await;
-                error!(task_id, error = %e, "A2A bridge: task failed");
-                Ok(task)
-            }
-        }
+    async fn handle_message(&self, claim: TaskClaim, message: A2AMessage) -> A2AResult<A2ATask> {
+        let (run, _) = self.start(claim, message, false).await?;
+        run.await
+            .map_err(|e| A2AError::InternalError(format!("A2A run join failed: {e}")))?
     }
 
     async fn handle_message_stream(
         &self,
-        task_id: &str,
+        claim: TaskClaim,
         message: A2AMessage,
-        session_id: Option<&str>,
-    ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>> {
-        let input = message.text_content();
-        if input.trim().is_empty() {
-            return Err(A2AError::InvalidParams(
-                "Message contains no text content".to_string(),
-            ));
-        }
-
-        // Atomically claim the task (see handle_message for rationale).
-        let context_id = Self::context_id(task_id, session_id);
-        let claimed = self.task_manager.claim_task(task_id, context_id).await?;
-        if !claimed {
-            return Err(A2AError::InvalidRequest(format!(
-                "Task {task_id} is already being processed by another request"
-            )));
-        }
-
-        // Get the default agent before subscribing so a missing default
-        // fails fast and we do not need to clean up a half-set-up stream.
-        let agent = match self.agent_registry.get_default().await {
-            Some(a) => a,
-            None => {
-                // Companion arm of the sync path above — see that block for the
-                // rationale. The streaming path additionally has a
-                // half-subscribed SSE stream attached, so the log line must be
-                // just as loud here.
-                if let Err(e) = self
-                    .task_manager
-                    .update_status(
-                        task_id,
-                        TaskState::Failed,
-                        Some(A2AMessage::text(
-                            A2ARole::Agent,
-                            "No default agent registered",
-                        )),
-                    )
-                    .await
-                {
-                    tracing::error!(
-                        task_id,
-                        error = %e,
-                        "A2A bridge: failed to mark task Failed after missing-default-agent (streaming)"
-                    );
-                }
-                return Err(A2AError::InternalError(
-                    "No default agent registered".to_string(),
-                ));
-            }
-        };
-
-        // Subscribe to streaming updates AFTER the task has been atomically
-        // claimed and promoted to `Working`. The cleanup guard below
-        // guarantees the broadcast channel is released on every error
-        // path, including panics in `execution_adapter.execute`.
-        let stream = self.streaming.subscribe_all(task_id).await?;
-
-        let working_event = TaskStatusUpdateEvent::new(
-            task_id.to_string(),
-            context_id.to_string(),
-            TaskStatus {
-                state: TaskState::Working,
-                message: None,
-                timestamp: Utc::now(),
-            },
-            None,
-        );
-        if let Err(e) = self
-            .streaming
-            .broadcast_status(task_id, working_event)
-            .await
-        {
-            // A dropped `Working` event silently turns the consumer-side
-            // `fold_stream` into a `success=false` outcome even when the run
-            // later completes. Log loudly so this is at least diagnosable.
-            tracing::error!(
-                task_id,
-                error = %e,
-                "A2A bridge: failed to broadcast Working event; SSE consumers may miss task progression"
-            );
-        }
-
-        // Build the run request
-        let request = Self::build_run_request(task_id, &input);
-        let run_id = request.run_id.clone();
-        let emitter = Arc::new(FinalResponseEmitter::default());
-
-        info!(task_id, run_id = %run_id, "A2A bridge: executing streaming run");
-
-        // Spawn execution in background
-        let task_manager = Arc::clone(&self.task_manager);
-        let streaming = Arc::clone(&self.streaming);
-        let execution_adapter = Arc::clone(&self.execution_adapter);
-        let task_id_owned = task_id.to_string();
-        let context_id_owned = context_id.to_string();
-        // Kept for the panic path below: `context_id_owned` is moved into the
-        // execution body, but a panic still has to publish a terminal event.
-        let context_id_for_panic = context_id_owned.clone();
-
-        // What this actor actually is, and what it is NOT, is written on
-        // `a2a_turn_context` — read it before adding an identity here.
-        let a2a_turn = Self::a2a_turn_context(&request);
-
-        tokio::spawn(TURN_CONTEXT.scope(
-            a2a_turn,
-            // Catch panics so the trailing `cleanup_task` ALWAYS runs. The
-            // previous `AssertUnwindSafe(async move { ... })` was a no-op: it
-            // satisfies the `UnwindSafe` trait bound, but does NOT catch
-            // panics. A panic inside `execution_adapter.execute` / `update_status`
-            // / `broadcast_status` would unwind past the trailing
-            // `cleanup_task` call and leak the broadcast channel entry —
-            // see A2A-R4-06. `catch_unwind` converts a panic into a `Result`
-            // arm so the cleanup runs in both branches.
-            async move {
-                let body = async {
-                    match execution_adapter.execute(request, agent, emitter.clone()).await {
-                        Ok(()) => {
-                            let final_text = emitter
-                                .take_final_response()
-                                .unwrap_or_else(|| DEFAULT_COMPLETION_TEXT.to_string());
-                            let response_msg = A2AMessage::text(A2ARole::Agent, final_text.clone());
-                            // A cancel that landed while the run was in flight
-                            // already moved the task to a terminal state and
-                            // published its own terminal event: the run's result
-                            // must not overwrite it, and the stream must not see
-                            // a second, contradictory terminal event.
-                            if task_is_terminal(&task_manager, &task_id_owned).await {
-                                info!(task_id = %task_id_owned, "A2A bridge: task already terminal; keeping its terminal state");
-                                return;
-                            }
-                            if let Err(e) = task_manager
-                                .update_status(
-                                    &task_id_owned,
-                                    TaskState::Completed,
-                                    Some(response_msg.clone()),
-                                )
-                                .await
-                            {
-                                // Do not abort the broadcast: the stored state
-                                // and the event stream are separate views, and a
-                                // consumer that only watches the stream would
-                                // otherwise see the channel close with no
-                                // terminal event at all.
-                                error!(task_id = %task_id_owned, error = %e, "Failed to update task to Completed");
-                            }
-
-                            let completed_event = TaskStatusUpdateEvent::new(
-                                task_id_owned.clone(),
-                                context_id_owned.clone(),
-                                TaskStatus {
-                                    state: TaskState::Completed,
-                                    message: Some(response_msg),
-                                    timestamp: Utc::now(),
-                                },
-                                None,
-                            );
-                            publish_artifact(
-                                &task_manager,
-                                &streaming,
-                                &task_id_owned,
-                                &context_id_owned,
-                                &final_text,
-                            )
-                            .await;
-                            if let Err(e) = streaming
-                                .broadcast_status(&task_id_owned, completed_event)
-                                .await
-                            {
-                                tracing::error!(
-                                    task_id = %task_id_owned,
-                                    error = %e,
-                                    "A2A bridge: failed to broadcast completion event; \
-                                     downstream SSE consumers may not see the task as finished"
-                                );
-                            }
-                            info!(task_id = %task_id_owned, "A2A bridge: streaming task completed");
-                        }
-                        Err(e) => {
-                            let error_msg = A2AMessage::text(
-                                A2ARole::Agent,
-                                format!("Execution failed: {e}"),
-                            );
-                            // Same guard as the completion arm: a cancel that
-                            // landed during the run owns the terminal state.
-                            if task_is_terminal(&task_manager, &task_id_owned).await {
-                                error!(task_id = %task_id_owned, error = %e, "A2A bridge: task already terminal; keeping its terminal state");
-                                return;
-                            }
-                            if let Err(update_err) = task_manager
-                                .update_status(
-                                    &task_id_owned,
-                                    TaskState::Failed,
-                                    Some(error_msg.clone()),
-                                )
-                                .await
-                            {
-                                // Same reasoning as the Completed branch: the
-                                // failure event must still reach subscribers.
-                                error!(task_id = %task_id_owned, error = %update_err, "Failed to update task to Failed");
-                            }
-
-                            let failed_event = TaskStatusUpdateEvent::new(
-                                task_id_owned.clone(),
-                                context_id_owned,
-                                TaskStatus {
-                                    state: TaskState::Failed,
-                                    message: Some(error_msg),
-                                    timestamp: Utc::now(),
-                                },
-                                None,
-                            );
-                            if let Err(bcast_err) = streaming
-                                .broadcast_status(&task_id_owned, failed_event)
-                                .await
-                            {
-                                tracing::error!(
-                                    task_id = %task_id_owned,
-                                    error = %bcast_err,
-                                    "A2A bridge: failed to broadcast failed-state event"
-                                );
-                            }
-                            error!(task_id = %task_id_owned, error = %e, "A2A bridge: streaming task failed");
-                        }
-                    }
-                };
-                // `catch_unwind` returns a `Result<(), Box<dyn Any + Send>>`.
-                // Log the panic (the only thing left to do — cleanup_task is
-                // already awaited unconditionally below).
-                if let Err(panic_payload) = AssertUnwindSafe(body).catch_unwind().await {
-                    error!(
-                        task_id = %task_id_owned,
-                        ?panic_payload,
-                        "panic in A2A streaming bridge; task will be marked Failed"
-                    );
-                    // A panic strands the task in `Working`: no terminal status
-                    // is recorded, so the task id stays unusable for later
-                    // callers and SSE subscribers never receive a final event.
-                    // Drive the task to `Failed` and publish that event.
-                    let already_terminal = task_is_terminal(&task_manager, &task_id_owned).await;
-                    if !already_terminal {
-                        if let Err(e) = task_manager
-                            .update_status(&task_id_owned, TaskState::Failed, None)
-                            .await
-                        {
-                            tracing::error!(
-                                task_id = %task_id_owned,
-                                error = %e,
-                                "A2A bridge: failed to mark task Failed after panic"
-                            );
-                        }
-                        let failed_event = TaskStatusUpdateEvent::new(
-                            task_id_owned.clone(),
-                            context_id_for_panic,
-                            TaskStatus {
-                                state: TaskState::Failed,
-                                message: None,
-                                timestamp: Utc::now(),
-                            },
-                            None,
-                        );
-                        if let Err(e) = streaming
-                            .broadcast_status(&task_id_owned, failed_event)
-                            .await
-                        {
-                            tracing::error!(
-                                task_id = %task_id_owned,
-                                error = %e,
-                                "A2A bridge: failed to broadcast failed-state event after panic"
-                            );
-                        }
-                    }
-                }
-                // Cleanup runs in BOTH the success and the panic branches.
-                if let Err(e) = streaming.cleanup_task(&task_id_owned).await {
-                    tracing::warn!(
-                        task_id = %task_id_owned,
-                        error = %e,
-                        "A2A bridge: cleanup_task failed; broadcast channel entry may leak in StreamHub"
-                    );
-                }
-            },
-        ));
-
-        Ok(stream)
+    ) -> A2AResult<TaskUpdateStream> {
+        let (_, stream) = self.start(claim, message, true).await?;
+        Ok(stream.expect("stream requested"))
     }
 }
 
@@ -730,10 +333,9 @@ mod tests {
 
     use crate::a2a::adapter::server::StreamHub;
     use crate::a2a::adapter::server::TaskStore;
-    use crate::a2a::domain::Part;
+    use crate::a2a::port::authenticator::TaskOwner;
     use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
     use crate::gateway::event_emitter::EventEmitter;
-    use crate::gateway::execution_engine::ExecutionError;
 
     use futures::StreamExt;
 
@@ -777,6 +379,17 @@ mod tests {
             } else {
                 Ok(())
             }
+        }
+
+        async fn execute_chat_run(
+            &self,
+            request: RunRequest,
+            agent: Arc<AgentInstance>,
+            emitter: Arc<dyn EventEmitter + Send + Sync>,
+            cancellation: crate::gateway::execution_adapter::ChatRunCancellation,
+        ) -> Result<(), ExecutionError> {
+            cancellation.check()?;
+            self.execute(request, agent, emitter).await
         }
 
         async fn cancel(&self, _run_id: &str) -> Result<(), ExecutionError> {
@@ -831,6 +444,57 @@ mod tests {
         (temp, bridge)
     }
 
+    async fn claim(bridge: &AgentLoopBridge, alias: &str, context: Option<&str>) -> TaskClaim {
+        bridge
+            .task_manager
+            .claim_legacy(TaskOwner::Loopback, alias, context, None)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn clarification_is_owned_and_resumes_with_a_new_run() {
+        let (_temp, bridge) = make_bridge(MockExecutionAdapter::succeeding()).await;
+        let owner = TaskOwner::Credential(uuid::Uuid::new_v4());
+        let other = TaskOwner::Credential(uuid::Uuid::new_v4());
+        let request = A2AMessage::text(A2ARole::User, "choose a color");
+        let initial = bridge
+            .task_manager
+            .claim_standard(owner, None, None, &[], &request)
+            .await
+            .unwrap();
+        let id = initial.task.id.clone();
+        let context = initial.task.context_id.clone();
+        let previous_run = initial.run_id;
+        initial
+            .cancellation
+            .request_clarification("Which color?".into())
+            .unwrap();
+        assert!(!initial.cancellation.request().await.unwrap());
+        let (run, _) = bridge.start(initial, request, false).await.unwrap();
+        let paused = run.await.unwrap().unwrap();
+        assert_eq!(paused.status.state, TaskState::InputRequired);
+        let answer = A2AMessage::text(A2ARole::User, "blue");
+        assert!(matches!(
+            bridge
+                .task_manager
+                .claim_standard(other, Some(&id), Some(&context), &[], &answer)
+                .await,
+            Err(A2AError::TaskNotFound(_))
+        ));
+        let resumed = bridge
+            .task_manager
+            .claim_standard(owner, Some(&id), Some(&context), &[], &answer)
+            .await
+            .unwrap();
+        assert_ne!(resumed.run_id, previous_run);
+        assert_eq!(resumed.pending_question.as_deref(), Some("Which color?"));
+        let completed = bridge.handle_message(resumed, answer).await.unwrap();
+        assert_eq!(completed.id, id);
+        assert_eq!(completed.context_id, context);
+        assert_eq!(completed.status.state, TaskState::Completed);
+    }
+
     /// The peer on an A2A wire is a machine. There is no channel to render an
     /// approval card on and no human to press it, so a delegated run must fail
     /// closed on confirm-gated tools rather than park on the 120 s approval
@@ -838,7 +502,7 @@ mod tests {
     #[test]
     fn a_delegated_run_is_unattended() {
         use crate::gateway::execution_engine::UNATTENDED_KEY;
-        let request = AgentLoopBridge::build_run_request("task-1", "hi");
+        let request = AgentLoopBridge::build_run_request("task-1", uuid::Uuid::new_v4(), "hi");
         assert_eq!(
             request.metadata.get(UNATTENDED_KEY).map(String::as_str),
             Some("true")
@@ -851,7 +515,7 @@ mod tests {
         let msg = A2AMessage::text(A2ARole::User, "Hello, agent!");
 
         let task = bridge
-            .handle_message("task-1", msg, None)
+            .handle_message(claim(&bridge, "task-1", None).await, msg)
             .await
             .expect("should succeed");
 
@@ -866,7 +530,7 @@ mod tests {
         let msg = A2AMessage::text(A2ARole::User, "Do something");
 
         let task = bridge
-            .handle_message("task-fail", msg, None)
+            .handle_message(claim(&bridge, "task-fail", None).await, msg)
             .await
             .expect("should return task even on execution failure");
 
@@ -894,7 +558,9 @@ mod tests {
             metadata: None,
         };
 
-        let result = bridge.handle_message("task-empty", msg, None).await;
+        let result = bridge
+            .handle_message(claim(&bridge, "task-empty", None).await, msg)
+            .await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), A2AError::InvalidParams(_)));
     }
@@ -904,7 +570,9 @@ mod tests {
         let (_scratch, bridge) = make_bridge(MockExecutionAdapter::succeeding()).await;
         let msg = A2AMessage::text(A2ARole::User, "   \n\t  ");
 
-        let result = bridge.handle_message("task-ws", msg, None).await;
+        let result = bridge
+            .handle_message(claim(&bridge, "task-ws", None).await, msg)
+            .await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), A2AError::InvalidParams(_)));
     }
@@ -915,7 +583,7 @@ mod tests {
         let msg = A2AMessage::text(A2ARole::User, "With session");
 
         let task = bridge
-            .handle_message("task-ctx", msg, Some("session-abc"))
+            .handle_message(claim(&bridge, "task-ctx", Some("session-abc")).await, msg)
             .await
             .expect("should succeed");
 
@@ -928,7 +596,7 @@ mod tests {
         let msg = A2AMessage::text(A2ARole::User, "No session");
 
         let task = bridge
-            .handle_message("task-nosess", msg, None)
+            .handle_message(claim(&bridge, "task-nosess", None).await, msg)
             .await
             .expect("should succeed");
 
@@ -961,7 +629,7 @@ mod tests {
 
         let msg = A2AMessage::text(A2ARole::User, "Test call count");
         bridge
-            .handle_message("task-count", msg, None)
+            .handle_message(claim(&bridge, "task-count", None).await, msg)
             .await
             .unwrap();
 
@@ -974,11 +642,11 @@ mod tests {
         let msg = A2AMessage::text(A2ARole::User, "Stream me");
 
         let mut stream = bridge
-            .handle_message_stream("task-stream", msg, None)
+            .handle_message_stream(claim(&bridge, "task-stream", None).await, msg)
             .await
             .expect("should return stream");
 
-        // Read exactly 2 events (Working + Completed) with timeout
+        // A successful run publishes its artifact before terminal status.
         let first = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
             .await
             .expect("should receive first event within timeout")
@@ -999,12 +667,21 @@ mod tests {
             .expect("stream should have second event")
             .expect("second event should be Ok");
 
-        match &second {
+        assert!(
+            matches!(second, UpdateEvent::ArtifactUpdate(ref event) if event.task_id == "task-stream")
+        );
+        let third = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        match &third {
             UpdateEvent::StatusUpdate(e) => {
+                assert_eq!(e.task_id, "task-stream");
                 assert_eq!(e.status.state, TaskState::Completed);
                 assert!(e.is_final);
             }
-            _ => panic!("Expected Completed StatusUpdate, got {:?}", second),
+            _ => panic!("Expected Completed StatusUpdate, got {:?}", third),
         }
     }
 
@@ -1014,7 +691,7 @@ mod tests {
         let msg = A2AMessage::text(A2ARole::User, "Will fail");
 
         let mut stream = bridge
-            .handle_message_stream("task-stream-fail", msg, None)
+            .handle_message_stream(claim(&bridge, "task-stream-fail", None).await, msg)
             .await
             .expect("should return stream");
 
@@ -1053,7 +730,9 @@ mod tests {
             metadata: None,
         };
 
-        let result = bridge.handle_message_stream("task-empty", msg, None).await;
+        let result = bridge
+            .handle_message_stream(claim(&bridge, "task-empty", None).await, msg)
+            .await;
         match result {
             Err(A2AError::InvalidParams(_)) => {} // expected
             Err(other) => panic!("Expected InvalidParams, got: {other}"),
@@ -1066,7 +745,9 @@ mod tests {
         let (_scratch, bridge) = make_bridge(MockExecutionAdapter::succeeding()).await;
         let msg = A2AMessage::text(A2ARole::User, "   \n\t  ");
 
-        let result = bridge.handle_message_stream("task-ws", msg, None).await;
+        let result = bridge
+            .handle_message_stream(claim(&bridge, "task-ws", None).await, msg)
+            .await;
         match result {
             Err(A2AError::InvalidParams(_)) => {}
             Err(other) => panic!("Expected InvalidParams, got: {other}"),
@@ -1076,7 +757,7 @@ mod tests {
 
     #[test]
     fn build_run_request_uses_task_session_key() {
-        let req = AgentLoopBridge::build_run_request("task-42", "hello");
+        let req = AgentLoopBridge::build_run_request("task-42", uuid::Uuid::new_v4(), "hello");
         assert_eq!(req.input, "hello");
         assert!(!req.run_id.is_empty());
         match &req.session_key {
@@ -1104,7 +785,8 @@ mod tests {
     /// assertion with it.
     #[tokio::test]
     async fn a2a_streaming_run_acts_as_the_agent_id_not_a_machine_sentinel() {
-        let request = AgentLoopBridge::build_run_request("task-actor", "hello");
+        let request =
+            AgentLoopBridge::build_run_request("task-actor", uuid::Uuid::new_v4(), "hello");
         let turn = AgentLoopBridge::a2a_turn_context(&request);
 
         let actor = TURN_CONTEXT
@@ -1118,14 +800,5 @@ mod tests {
              machine sentinel, and an agent id is not comparable against the \
              user ids the visibility predicates hold"
         );
-    }
-
-    #[test]
-    fn context_id_prefers_session_id() {
-        assert_eq!(
-            AgentLoopBridge::context_id("task-1", Some("sess-x")),
-            "sess-x"
-        );
-        assert_eq!(AgentLoopBridge::context_id("task-1", None), "task-1");
     }
 }

@@ -2,6 +2,7 @@ use std::pin::Pin;
 
 use futures::Stream;
 
+use crate::a2a::adapter::server::task_store::TaskClaim;
 use crate::a2a::domain::{A2AMessage, A2ATask, UpdateEvent};
 
 use super::task_manager::A2AResult;
@@ -14,18 +15,12 @@ use super::task_manager::A2AResult;
 #[async_trait::async_trait]
 pub trait A2AMessageHandler: Send + Sync {
     /// Handle a message synchronously — returns the task after processing completes
-    async fn handle_message(
-        &self,
-        task_id: &str,
-        message: A2AMessage,
-        session_id: Option<&str>,
-    ) -> A2AResult<A2ATask>;
+    async fn handle_message(&self, claim: TaskClaim, message: A2AMessage) -> A2AResult<A2ATask>;
 
     /// Handle a message with streaming updates — returns a stream of events
     async fn handle_message_stream(
         &self,
-        task_id: &str,
+        claim: TaskClaim,
         message: A2AMessage,
-        session_id: Option<&str>,
     ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>>;
 }

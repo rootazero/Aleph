@@ -18,6 +18,8 @@ pub(in crate::commands::start) struct StartupResources {
     events: Option<Arc<alephcore::capability::events::InMemoryEventStream>>,
     bridge: Option<alephcore::gateway::capability_events::CapabilityEventBridge>,
     pty: Option<&'static alephcore::gateway::pty::PtyManager>,
+    a2a_registry: Option<Arc<alephcore::a2a::service::CardRegistry>>,
+    a2a_workers: Vec<tokio::task::JoinHandle<()>>,
     cleanup_called: AtomicBool,
 }
 
@@ -35,6 +37,8 @@ impl StartupResources {
             events: None,
             bridge: None,
             pty: None,
+            a2a_registry: None,
+            a2a_workers: Vec::new(),
             cleanup_called: AtomicBool::new(false),
         }
     }
@@ -84,6 +88,20 @@ impl StartupResources {
         self.pty = Some(manager);
     }
 
+    pub(in crate::commands::start) fn install_a2a_registry(
+        &mut self,
+        registry: Arc<alephcore::a2a::service::CardRegistry>,
+    ) {
+        self.a2a_registry = Some(registry);
+    }
+
+    pub(in crate::commands::start) fn install_a2a_worker(
+        &mut self,
+        worker: tokio::task::JoinHandle<()>,
+    ) {
+        self.a2a_workers.push(worker);
+    }
+
     pub(in crate::commands::start) async fn cleanup(&mut self) -> Result<(), AlephError> {
         if self.cleanup_called.load(Ordering::SeqCst) {
             return Ok(()); // Already cleaned up
@@ -99,6 +117,21 @@ impl StartupResources {
             policy.stop_admission();
         }
         let mut observation_failure = None;
+        if let Some(registry) = &self.a2a_registry {
+            registry.close().await;
+        }
+        for worker in &self.a2a_workers {
+            worker.abort();
+        }
+        while let Some(worker) = self.a2a_workers.last_mut() {
+            if let Err(error) = worker.await {
+                if !error.is_cancelled() {
+                    tracing::error!(%error, "A2A background worker failed");
+                    observation_failure = Some(AlephError::other("A2A worker join failed"));
+                }
+            }
+            self.a2a_workers.pop();
+        }
         if let Some(manager) = &self.acp_manager {
             manager.shutdown_all().await;
         }
@@ -109,7 +142,9 @@ impl StartupResources {
         }
         if let Some(drain) = self.acp_drain.as_mut() {
             // Retain the join future if the cleanup caller is cancelled.
-            observation_failure = drain.await.err();
+            if let Err(error) = drain.await {
+                observation_failure.get_or_insert(error);
+            }
             self.acp_drain = None;
         }
         if let Some(host) = &self.projection_host {
@@ -230,6 +265,48 @@ mod tests {
     use futures::FutureExt;
 
     use super::StartupResources;
+
+    #[tokio::test]
+    async fn shutdown_joins_a2a_workers_and_closes_the_registry() {
+        use alephcore::a2a::domain::{A2AError, AgentCard, TrustLevel};
+        use alephcore::a2a::port::AgentResolver;
+        use alephcore::a2a::service::CardRegistry;
+
+        let registry = Arc::new(CardRegistry::new());
+        let mut resources = StartupResources::new();
+        resources.install_a2a_registry(registry.clone());
+
+        let mut worker_stops = Vec::new();
+        for _ in 0..2 {
+            let (ready, running) = tokio::sync::oneshot::channel();
+            let (alive, stopped) = tokio::sync::oneshot::channel::<()>();
+            resources.install_a2a_worker(tokio::spawn(async move {
+                ready.send(()).unwrap();
+                std::future::pending::<()>().await;
+                drop(alive);
+            }));
+            running.await.unwrap();
+            worker_stops.push(stopped);
+        }
+
+        resources.cleanup().await.unwrap();
+        for mut stopped in worker_stops {
+            assert!(matches!(
+                stopped.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+            ));
+        }
+        let card: AgentCard = serde_json::from_value(serde_json::json!({
+            "id": "late", "name": "Late arrival", "version": "1", "interfaces": [],
+        }))
+        .unwrap();
+        assert!(matches!(
+            registry
+                .register_with_token(card, "https://example.com", TrustLevel::Trusted, None)
+                .await,
+            Err(A2AError::AgentUnreachable(_))
+        ));
+    }
 
     struct ShutdownTool(alephcore::tools::service::ToolDefinition);
 

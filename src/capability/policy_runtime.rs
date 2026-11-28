@@ -25,6 +25,24 @@ pub struct CapabilityCallContext {
     call_id: String,
 }
 impl CapabilityCallContext {
+    pub(crate) fn for_current_turn(call_id: impl Into<String>) -> Self {
+        let turn = crate::tools::turn_context::current_turn_context();
+        let actor = turn
+            .as_ref()
+            .filter(|turn| !turn.run_id.is_empty())
+            .map_or(OwnerRef::Runtime, |turn| {
+                OwnerRef::Run(crate::capability::ownership::RunId(turn.run_id.clone()))
+            });
+        Self::from_trusted_parts(
+            actor,
+            crate::gateway::visibility::ambient_principal(),
+            turn.as_ref().map(|turn| turn.session_key.to_key_string()),
+            None,
+            crate::gateway::caller_identity::current_caller_conn_id(),
+            call_id.into(),
+        )
+    }
+
     pub(crate) fn from_trusted_parts(
         actor: OwnerRef,
         principal: Option<String>,

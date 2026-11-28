@@ -3,13 +3,11 @@
 //! Integrates `SmartRouter` (explicit agent resolution) + `A2AClientPool` (communication) to delegate
 //! tasks to remote agents via the A2A protocol.
 
-#[cfg(test)]
-use async_trait::async_trait;
-
-use crate::a2a::adapter::client::{fold_stream, A2AClient, A2AClientPool};
-use crate::a2a::domain::{A2AMessage, A2ARole};
+use crate::a2a::adapter::client::sse_stream::artifact_text;
+use crate::a2a::adapter::client::{fold_stream, A2AClientPool, DelegationResponse, DeliveryStatus};
+use crate::a2a::domain::{A2AMessage, A2ARole, A2ATask, TaskState};
 use crate::a2a::port::RegisteredAgent;
-use crate::a2a::service::SmartRouter;
+use crate::a2a::service::{CardRegistry, SmartRouter};
 use crate::agents::sub_agents::{SubAgentRequest, SubAgentResult};
 use crate::memory::extensions::insert_helper::insert_with_runtime_capture_filter;
 use crate::memory::extensions::types::CaptureCtx;
@@ -23,7 +21,8 @@ use crate::sync_primitives::Arc;
 /// Uses `SmartRouter` for explicit quoted name/alias resolution and `A2AClientPool`
 /// for managing HTTP connections to remote agents.
 pub struct A2ASubAgent {
-    smart_router: Arc<SmartRouter>,
+    card_registry: Arc<CardRegistry>,
+    smart_router: SmartRouter,
     client_pool: Arc<A2AClientPool>,
     /// Optional writer for raw memory delegation hooks (Spec 1 G2).
     /// When set, `execute` will write a `RawMemory(Delegation{child_agent_id})`
@@ -34,30 +33,44 @@ pub struct A2ASubAgent {
     /// Task 11 wires the real registry at startup; `None` falls back to direct insert.
     capture_registry: Option<Arc<MemoryExtensionRegistry>>,
     memory_runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
+    capability_facade: std::sync::Weak<crate::capability::zahir_facade::ZahirFacade>,
 }
 
 /// Outcome of an A2A delegation via [`A2ASubAgent::execute_delegation`].
 ///
 /// Unlike the bare [`SubAgentResult`], this also reports *which* remote agent
 /// handled the task, so the `a2a_delegate` tool can surface it to the model.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DelegationOutcome {
     /// Name of the remote agent that handled the task, or `None` when explicit
     /// agent resolution found no matching agent.
     pub agent: Option<String>,
     /// The delegation result (success summary or failure error).
     pub result: SubAgentResult,
+    /// Whether an application response established the delivery outcome.
+    pub delivery: DeliveryStatus,
 }
 
 impl A2ASubAgent {
-    pub fn new(smart_router: Arc<SmartRouter>, client_pool: Arc<A2AClientPool>) -> Self {
+    pub fn new(card_registry: Arc<CardRegistry>, client_pool: Arc<A2AClientPool>) -> Self {
+        let smart_router = SmartRouter::new(card_registry.clone());
         Self {
+            card_registry,
             smart_router,
             client_pool,
             raw_memory_writer: None,
             capture_registry: None,
             memory_runtime: None,
+            capability_facade: std::sync::Weak::new(),
         }
+    }
+
+    pub fn with_capability_facade(
+        mut self,
+        facade: &Arc<crate::capability::zahir_facade::ZahirFacade>,
+    ) -> Self {
+        self.capability_facade = Arc::downgrade(facade);
+        self
     }
 
     /// Drop the cached HTTP client of an agent that is no longer registered.
@@ -116,120 +129,77 @@ impl A2ASubAgent {
         }
     }
 
-    /// Send a delegation request to an already-resolved remote agent.
-    ///
-    /// Streaming-first: consumes the remote agent's SSE stream (idle-timeout
-    /// liveness + live progress). When the remote has no `/a2a/stream` route
-    /// (non-Aleph agents), transparently falls back to [`Self::dispatch_sync`].
-    /// Used by [`Self::execute_delegation`].
     async fn dispatch(
         &self,
         agent: &RegisteredAgent,
         request: &SubAgentRequest,
-    ) -> crate::error::Result<SubAgentResult> {
-        let client = self.client_pool.get_or_create(agent).await.map_err(|e| {
-            crate::error::AlephError::other(format!("A2A client creation failed: {e}"))
-        })?;
-
+    ) -> (SubAgentResult, DeliveryStatus) {
+        let failure = |message| SubAgentResult::failure(request.id.clone(), message);
+        let agent = match self
+            .card_registry
+            .dispatch_target(&agent.card.id, agent.invocation_generation())
+        {
+            Ok(agent) => agent,
+            Err(error) => return (failure(error.to_string()), DeliveryStatus::NotSent),
+        };
+        let client = match self.client_pool.get_or_create(&agent).await {
+            Ok(client) => client,
+            Err(error) => return (failure(error.to_string()), DeliveryStatus::NotSent),
+        };
         let message = A2AMessage::text(A2ARole::User, &request.prompt);
-        let task_id = uuid::Uuid::new_v4().to_string();
+        let prepared = match client.prepare_delegation(&request.id, &message).await {
+            Ok(prepared) => prepared,
+            Err(error) => return (failure(error.to_string()), DeliveryStatus::NotSent),
+        };
+        let dispatched = match self.card_registry.start_dispatch(
+            &agent.card.id,
+            agent.invocation_generation(),
+            prepared,
+        ) {
+            Ok(dispatched) => dispatched,
+            Err(error) => return (failure(error.to_string()), DeliveryStatus::NotSent),
+        };
+        let response = match dispatched.await {
+            Ok(response) => response,
+            Err(error) => {
+                let result = failure(format!("A2A dispatch outcome unavailable: {error}"));
+                self.record_delegation_memory(request, &result, &agent.card.id)
+                    .await;
+                return (result, DeliveryStatus::Unknown);
+            }
+        };
 
-        match client.send_message_stream(&task_id, &message, None).await {
-            Ok(stream) => {
+        let (result, delivery) = match response {
+            Ok(DelegationResponse::Unary(task)) => (
+                unary_result(&request.id, task),
+                DeliveryStatus::ResponseReceived,
+            ),
+            Ok(DelegationResponse::Streaming(stream)) => {
                 let outcome = fold_stream(stream, |chunk| {
                     crate::builtin_tools::notify_tool_streaming_chunk("a2a_delegate", chunk);
                 })
                 .await;
-
+                let delivery = if outcome.final_state.is_some() {
+                    DeliveryStatus::ResponseReceived
+                } else {
+                    DeliveryStatus::Unknown
+                };
                 let result = if outcome.success {
                     SubAgentResult::success(request.id.clone(), outcome.summary)
                 } else {
-                    SubAgentResult::failure(
-                        request.id.clone(),
+                    failure(
                         outcome
                             .error
                             .unwrap_or_else(|| "A2A streaming delegation failed".to_string()),
                     )
                 };
-
-                // Spec 1 G2: record delegation outcome for parent-agent memory.
-                // Record unconditionally (matching sync path behaviour) so the
-                // parent sees failed attempts and can learn / retry.
-                self.record_delegation_memory(request, &result, &agent.card.id)
-                    .await;
-                Ok(result)
+                (result, delivery)
             }
-            Err(e) => {
-                tracing::info!(
-                    error = %e,
-                    "A2A streaming unavailable; falling back to sync send_message"
-                );
-                self.dispatch_sync(&client, agent, request, &task_id, &message)
-                    .await
-            }
-        }
-    }
-
-    /// Synchronous delegation — POSTs `message/send` and waits for the full
-    /// task. Fallback for remote agents without a streaming endpoint.
-    async fn dispatch_sync(
-        &self,
-        client: &A2AClient,
-        agent: &RegisteredAgent,
-        request: &SubAgentRequest,
-        task_id: &str,
-        message: &A2AMessage,
-    ) -> crate::error::Result<SubAgentResult> {
-        match client.send_message(task_id, message, None).await {
-            Ok(task) => {
-                let summary = if !task.history.is_empty() {
-                    task.history
-                        .iter()
-                        .rev()
-                        .find(|m| m.role == A2ARole::Agent)
-                        .map_or_else(
-                            || format!("Task {} completed", task.id),
-                            |m| m.text_content(),
-                        )
-                } else if let Some(ref msg) = task.status.message {
-                    msg.text_content()
-                } else {
-                    format!(
-                        "Task {} completed with state: {:?}",
-                        task.id, task.status.state
-                    )
-                };
-
-                let output = serde_json::to_value(&task).unwrap_or_else(|e| {
-                    tracing::warn!("Failed to serialize A2ATask: {}", e);
-                    serde_json::Value::Null
-                });
-                // A transport-level success can still carry a task that ended in
-                // a failed terminal state — mirror fold_stream (streaming path)
-                // and report it as a failure instead of a false success.
-                let failed = matches!(
-                    task.status.state,
-                    crate::a2a::domain::TaskState::Failed
-                        | crate::a2a::domain::TaskState::Rejected
-                        | crate::a2a::domain::TaskState::Canceled
-                );
-                let result = if failed {
-                    SubAgentResult::failure(request.id.clone(), summary).with_output(output)
-                } else {
-                    SubAgentResult::success(request.id.clone(), summary).with_output(output)
-                };
-
-                // Spec 1 G2: record delegation outcome for parent-agent memory.
-                self.record_delegation_memory(request, &result, &agent.card.id)
-                    .await;
-
-                Ok(result)
-            }
-            Err(e) => Ok(SubAgentResult::failure(
-                request.id.clone(),
-                format!("A2A call failed: {e}"),
-            )),
-        }
+            Err(error) => (failure(error.to_string()), error.delivery),
+        };
+        self.record_delegation_memory(request, &result, &agent.card.id)
+            .await;
+        (result, delivery)
     }
 
     /// Delegate a task to a remote A2A agent — the entry point for the
@@ -289,24 +259,77 @@ impl A2ASubAgent {
                 };
                 return Ok(DelegationOutcome {
                     agent: None,
+                    delivery: DeliveryStatus::NotSent,
                     result: SubAgentResult::failure(uuid::Uuid::new_v4().to_string(), msg),
                 });
             }
         };
 
         let mut request = SubAgentRequest::new(prompt);
-        if let Some(aid) = parent_agent_id {
-            request = request.with_parent_agent(aid);
+        request.parent_agent_id = parent_agent_id;
+        request.parent_session_id = parent_session_id;
+        if let Some(facade) = self.capability_facade.upgrade() {
+            return super::capability::invoke_remote_agent(
+                &facade,
+                &self.card_registry,
+                &target,
+                &request,
+            )
+            .await;
         }
-        if let Some(sid) = parent_session_id {
-            request = request.with_parent_session(sid);
-        }
-        let result = self.dispatch(&target, &request).await?;
-        Ok(DelegationOutcome {
+        #[cfg(test)]
+        return Ok(self.execute_registered_delegation(&target, &request).await);
+        #[cfg(not(test))]
+        Err(crate::error::AlephError::tool(
+            "A2A capability source is unavailable",
+        ))
+    }
+
+    /// Dispatch a selection carrying the invocation generation read from the registry.
+    pub(crate) async fn execute_registered_delegation(
+        &self,
+        target: &RegisteredAgent,
+        request: &SubAgentRequest,
+    ) -> DelegationOutcome {
+        let (result, delivery) = self.dispatch(target, request).await;
+        DelegationOutcome {
             agent: Some(target.card.name.clone()),
             result,
-        })
+            delivery,
+        }
     }
+}
+
+fn unary_result(request_id: &str, task: A2ATask) -> SubAgentResult {
+    let artifacts = task
+        .artifacts
+        .iter()
+        .map(artifact_text)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>();
+    let summary = if artifacts.is_empty() {
+        task.history
+            .iter()
+            .rev()
+            .find(|message| message.role == A2ARole::Agent)
+            .or(task.status.message.as_ref())
+            .map_or_else(
+                || format!("Task {} reported state {:?}", task.id, task.status.state),
+                A2AMessage::text_content,
+            )
+    } else {
+        artifacts.join("\n")
+    };
+    let result = if task.status.state == TaskState::Completed {
+        SubAgentResult::success(request_id.to_string(), summary)
+    } else {
+        SubAgentResult::failure(request_id.to_string(), summary)
+    };
+    let output = serde_json::to_value(&task).unwrap_or_else(|error| {
+        tracing::warn!(%error, "Failed to serialize A2A task");
+        serde_json::Value::Null
+    });
+    result.with_output(output)
 }
 
 /// SubAgentRequest/Result shaped wrapper around `emit_delegation_primitives`.
@@ -388,56 +411,30 @@ pub(crate) async fn emit_delegation_primitives(
 mod tests {
     use super::*;
     use crate::a2a::domain::*;
-    use crate::a2a::port::{A2AResult, AgentHealth, AgentResolver, RegisteredAgent};
-    // --- Mock AgentResolver for SmartRouter ---
+    use crate::a2a::port::{legacy_endpoint, AgentHealth, AgentResolver};
+    use crate::security::ssrf::SsrfPolicy;
 
-    struct MockResolver {
-        agents: tokio::sync::Mutex<Vec<RegisteredAgent>>,
-    }
-
-    impl MockResolver {
-        fn new(agents: Vec<RegisteredAgent>) -> Self {
-            Self {
-                agents: tokio::sync::Mutex::new(agents),
-            }
+    pub(super) fn local_policy() -> SsrfPolicy {
+        SsrfPolicy {
+            enabled: false,
+            ..SsrfPolicy::default()
         }
     }
 
-    #[async_trait]
-    impl AgentResolver for MockResolver {
-        async fn register_with_token(
-            &self,
-            _card: AgentCard,
-            _base_url: &str,
-            _trust_level: TrustLevel,
-            _auth_token: Option<String>,
-        ) -> A2AResult<()> {
-            Ok(())
+    async fn build_sub_agent(agents: Vec<RegisteredAgent>) -> A2ASubAgent {
+        let registry = Arc::new(CardRegistry::with_ssrf_policy(local_policy()));
+        for agent in agents {
+            registry.upsert(agent).await;
         }
-        async fn unregister(&self, _agent_id: &str) -> A2AResult<()> {
-            Ok(())
-        }
-
-        async fn list_agents(&self) -> A2AResult<Vec<RegisteredAgent>> {
-            let agents = self.agents.lock().await;
-            Ok(agents.clone())
-        }
-
-        async fn resolve_by_id(&self, _agent_id: &str) -> A2AResult<Option<RegisteredAgent>> {
-            Ok(None)
-        }
-    }
-
-    fn build_sub_agent(agents: Vec<RegisteredAgent>) -> A2ASubAgent {
-        let resolver = Arc::new(MockResolver::new(agents));
-        let router = Arc::new(SmartRouter::new(resolver));
-        let pool = Arc::new(A2AClientPool::new());
-        A2ASubAgent::new(router, pool)
+        A2ASubAgent::new(
+            registry,
+            Arc::new(A2AClientPool::with_ssrf_policy(local_policy())),
+        )
     }
 
     #[tokio::test]
     async fn execute_delegation_no_agents_returns_outcome_without_agent() {
-        let agent = build_sub_agent(vec![]);
+        let agent = build_sub_agent(vec![]).await;
         let outcome = agent
             .execute_delegation("do something", None, None, None)
             .await
@@ -454,7 +451,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_delegation_explicit_unknown_agent_reports_name() {
-        let agent = build_sub_agent(vec![]);
+        let agent = build_sub_agent(vec![]).await;
         let outcome = agent
             .execute_delegation("do something", Some("ghost-agent"), None, None)
             .await
@@ -472,9 +469,9 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn streaming_registered(name: &str, url: &str) -> RegisteredAgent {
+    pub(super) fn legacy_registered(name: &str, url: &str, streaming: bool) -> RegisteredAgent {
         let card = AgentCard {
-            id: "streamer".to_string(),
+            id: name.to_lowercase(),
             name: name.to_string(),
             version: "1.0".to_string(),
             description: None,
@@ -488,13 +485,14 @@ mod tests {
             default_output_modes: vec![],
         };
         RegisteredAgent::new(
-            card,
+            card.clone(),
             TrustLevel::Trusted,
             url.to_string(),
             chrono::Utc::now(),
             AgentHealth::Healthy,
             None,
         )
+        .with_resolution(card, legacy_endpoint(url, streaming).unwrap())
     }
 
     fn sse_completed_body(answer: &str) -> String {
@@ -525,7 +523,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let sub = build_sub_agent(vec![streaming_registered("Streamer", &server.uri())]);
+        let sub = build_sub_agent(vec![legacy_registered("Streamer", &server.uri(), true)]).await;
         let outcome = sub
             .execute_delegation("do the thing", Some("Streamer"), None, None)
             .await
@@ -536,12 +534,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_delegation_falls_back_to_sync_when_no_stream_route() {
+    async fn execute_delegation_selects_legacy_unary_before_sending() {
         let server = MockServer::start().await;
-        // No streaming endpoint.
         Mock::given(method("POST"))
             .and(path("/a2a/stream"))
             .respond_with(ResponseTemplate::new(404))
+            .expect(0)
             .mount(&server)
             .await;
         // Synchronous JSON-RPC endpoint returns a completed task.
@@ -556,13 +554,88 @@ mod tests {
             .mount(&server)
             .await;
 
-        let sub = build_sub_agent(vec![streaming_registered("Streamer", &server.uri())]);
+        let sub = build_sub_agent(vec![legacy_registered("Streamer", &server.uri(), false)]).await;
         let outcome = sub
             .execute_delegation("do it", Some("Streamer"), None, None)
             .await
             .unwrap();
         assert!(outcome.result.success, "got: {:?}", outcome.result);
         assert!(outcome.result.summary.contains("sync answer 99"));
+    }
+
+    #[tokio::test]
+    async fn ambiguous_stream_open_never_resends_unary() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/stream"))
+            .respond_with(ResponseTemplate::new(502))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/a2a"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let sub = build_sub_agent(vec![legacy_registered("Streamer", &server.uri(), true)]).await;
+        let outcome = sub
+            .execute_delegation("do it", Some("Streamer"), None, None)
+            .await
+            .unwrap();
+        assert!(!outcome.result.success);
+        assert_eq!(outcome.delivery, DeliveryStatus::Unknown);
+    }
+
+    #[tokio::test]
+    async fn final_dispatch_handoff_orders_against_withdrawal() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a"))
+            .respond_with(ResponseTemplate::new(502))
+            .expect(1)
+            .mount(&server)
+            .await;
+        for withdraw_first in [true, false] {
+            let sub = build_sub_agent(vec![legacy_registered("Peer", &server.uri(), false)]).await;
+            let selected = sub.card_registry.snapshot().await.remove(0);
+            let client = sub.client_pool.get_or_create(&selected).await.unwrap();
+            let prepared = client
+                .prepare_delegation("handoff", &A2AMessage::text(A2ARole::User, "do it"))
+                .await
+                .unwrap();
+            if withdraw_first {
+                sub.card_registry.unregister("peer").await.unwrap();
+            }
+            let handoff = sub.card_registry.start_dispatch(
+                "peer",
+                selected.invocation_generation(),
+                prepared,
+            );
+            if withdraw_first {
+                assert!(handoff.is_err());
+                assert!(server.received_requests().await.unwrap().is_empty());
+            } else {
+                sub.card_registry.unregister("peer").await.unwrap();
+                let result = handoff.unwrap().await.unwrap();
+                assert!(result.is_err());
+                assert_eq!(server.received_requests().await.unwrap().len(), 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_registered_delegation_rejects_removed_generation() {
+        let server = MockServer::start().await;
+        let sub = build_sub_agent(vec![legacy_registered("Peer", &server.uri(), false)]).await;
+        let selected = sub.card_registry.snapshot().await.remove(0);
+        sub.card_registry.unregister("peer").await.unwrap();
+        let outcome = sub
+            .execute_registered_delegation(&selected, &SubAgentRequest::new("do it"))
+            .await;
+        assert_eq!(outcome.delivery, DeliveryStatus::NotSent);
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 }
 
@@ -687,11 +760,8 @@ mod spec1_tests {
     async fn execute_delegation_stamps_parent_identity_on_delegation_row() {
         use crate::a2a::adapter::client::A2AClientPool;
         use crate::a2a::domain::{
-            A2AMessage, A2ARole, AgentCard, TaskState, TaskStatus, TaskStatusUpdateEvent,
-            TrustLevel, UpdateEvent,
+            A2AMessage, A2ARole, TaskState, TaskStatus, TaskStatusUpdateEvent, UpdateEvent,
         };
-        use crate::a2a::port::{AgentHealth, RegisteredAgent};
-        use crate::a2a::service::{CardRegistry, SmartRouter};
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -717,36 +787,15 @@ mod spec1_tests {
             .mount(&server)
             .await;
 
-        let registry = Arc::new(CardRegistry::new());
+        let registry = Arc::new(CardRegistry::with_ssrf_policy(tests::local_policy()));
         registry
-            .upsert(RegisteredAgent::new(
-                AgentCard {
-                    id: "remote".to_string(),
-                    name: "Remote".to_string(),
-                    version: "1.0".to_string(),
-                    description: None,
-                    provider: None,
-                    documentation_url: None,
-                    interfaces: vec![],
-                    skills: vec![],
-                    security: vec![],
-                    extensions: vec![],
-                    default_input_modes: vec![],
-                    default_output_modes: vec![],
-                },
-                TrustLevel::Trusted,
-                server.uri(),
-                chrono::Utc::now(),
-                AgentHealth::Healthy,
-                None,
-            ))
+            .upsert(tests::legacy_registered("Remote", &server.uri(), true))
             .await;
 
         let fake = Arc::new(FakeWriter::default());
         let writer: Arc<dyn RawMemoryStore> = fake.clone();
-        let router = Arc::new(SmartRouter::new(registry));
-        let pool = Arc::new(A2AClientPool::new());
-        let sub = A2ASubAgent::new(router, pool).with_raw_memory_writer(writer);
+        let pool = Arc::new(A2AClientPool::with_ssrf_policy(tests::local_policy()));
+        let sub = A2ASubAgent::new(registry, pool).with_raw_memory_writer(writer);
 
         let outcome = sub
             .execute_delegation(

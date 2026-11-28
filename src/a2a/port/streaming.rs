@@ -6,6 +6,8 @@ use crate::a2a::domain::{TaskArtifactUpdateEvent, TaskStatusUpdateEvent, UpdateE
 
 use super::task_manager::A2AResult;
 
+pub type TaskUpdateStream = Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>;
+
 /// Port for real-time streaming of task updates.
 ///
 /// Supports pub/sub semantics: subscribers receive status and artifact events
@@ -13,10 +15,7 @@ use super::task_manager::A2AResult;
 #[async_trait::async_trait]
 pub trait A2AStreamingHandler: Send + Sync {
     /// Subscribe to all update events (status + artifact) for a task
-    async fn subscribe_all(
-        &self,
-        task_id: &str,
-    ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>>;
+    async fn subscribe_all(&self, task_id: &str) -> A2AResult<TaskUpdateStream>;
 
     /// Broadcast a status update to all subscribers of a task
     async fn broadcast_status(&self, task_id: &str, update: TaskStatusUpdateEvent)

@@ -2678,10 +2678,8 @@ async fn start_server_body(
             use alephcore::a2a::adapter::server::A2AServerState;
             use alephcore::a2a::adapter::server::{AgentLoopBridge, StreamHub, TaskStore};
             use alephcore::a2a::port::authenticator::A2AAuthenticator;
-            use alephcore::a2a::port::{A2AMessageHandler, A2AStreamingHandler, A2ATaskManager};
-            use alephcore::a2a::service::{
-                CardBuilder, CardRegistry, NotificationService, SmartRouter,
-            };
+            use alephcore::a2a::port::{A2AMessageHandler, A2AStreamingHandler};
+            use alephcore::a2a::service::{CardBuilder, CardRegistry, NotificationService};
             use alephcore::a2a::sub_agent::A2ASubAgent;
 
             // 1. Create server-side components. The notification service is
@@ -2695,9 +2693,11 @@ async fn start_server_body(
             let notification = Arc::new(NotificationService::with_ssrf_policy(
                 webhook_ssrf_policy.clone(),
             ));
-            let task_store: Arc<dyn A2ATaskManager> = Arc::new(TaskStore::new());
-            let stream_hub: Arc<dyn A2AStreamingHandler> =
-                Arc::new(StreamHub::with_notification(notification.clone()));
+            let task_store = Arc::new(TaskStore::new());
+            let stream_hub: Arc<dyn A2AStreamingHandler> = Arc::new(StreamHub::with_notification(
+                task_store.clone(),
+                notification.clone(),
+            ));
 
             // 2. Create bridge (needs execution adapter + agent registry)
             if let (Some(exec_adapter), Some(registry)) = (
@@ -2732,35 +2732,33 @@ async fn start_server_body(
                 });
                 server.set_a2a_state(a2a_server_state);
 
-                // 7. Create client-side components (CardRegistry, explicit resolver, ClientPool)
-                let card_registry = Arc::new(CardRegistry::new());
+                let card_registry =
+                    Arc::new(CardRegistry::with_ssrf_policy(webhook_ssrf_policy.clone()));
                 card_registry.load_from_config(&a2a_config).await;
-                let smart_router = Arc::new(SmartRouter::new(card_registry.clone()));
-
-                let client_pool = Arc::new(A2AClientPool::new());
-
-                // 9. Create A2ASubAgent — the outbound delegation engine.
-                // Spec 1 G2: wire raw-memory writer so the delegation hook fires.
+                let client_pool =
+                    Arc::new(A2AClientPool::with_ssrf_policy(webhook_ssrf_policy.clone()));
                 let a2a_sub_agent = Arc::new(
-                    A2ASubAgent::new(smart_router, client_pool.clone())
+                    A2ASubAgent::new(card_registry.clone(), client_pool.clone())
                         .with_raw_memory_writer(raw_store.clone())
                         .with_capture_registry(agent_result.memory_ext_registry.clone())
-                        .with_memory_runtime(Arc::downgrade(&memory_runtime)),
+                        .with_memory_runtime(Arc::downgrade(&memory_runtime))
+                        .with_capability_facade(&projection_host.facade()),
+                );
+                startup_resources.install_a2a_registry(card_registry.clone());
+                startup_resources.install_a2a_worker(
+                    alephcore::a2a::capability::mount_remote_agents(
+                        &projection_host,
+                        ownership_tree.clone(),
+                        card_registry.clone(),
+                        a2a_sub_agent.clone(),
+                    )
+                    .await,
                 );
 
-                // 10. Publish the late-bound handle so the `a2a_delegate` and
-                // `a2a_agents` builtin tools (registered earlier in the tool
-                // registry) become live. Before this fix the A2ASubAgent was
-                // constructed here and immediately dropped — the whole A2A
-                // *outbound* path was unreachable dead code.
                 if let Some(ref handle) = a2a_tool_handle {
                     handle.store(Some(Arc::new(alephcore::builtin_tools::A2AToolDeps {
                         sub_agent: a2a_sub_agent.clone(),
                         card_registry: card_registry.clone(),
-                        // Share the same SSRF policy the webhook target
-                        // is gated by so the operator's `[ssrf]` config
-                        // reaches the tool face (not a per-tool default).
-                        ssrf_policy: webhook_ssrf_policy.clone(),
                     })));
                     tracing::info!("A2A outbound tools wired (a2a_delegate, a2a_agents)");
                 } else {
@@ -2770,7 +2768,9 @@ async fn start_server_body(
                 // 11. One-shot startup card refresh: upgrade config agents'
                 // placeholder cards to their real Agent Cards in the
                 // background. Non-blocking — never delays startup.
-                alephcore::a2a::service::spawn_card_refresh(card_registry.clone());
+                startup_resources.install_a2a_worker(alephcore::a2a::service::spawn_card_refresh(
+                    card_registry.clone(),
+                ));
 
                 // 12. Optional periodic agent health monitor (opt-in via
                 // `a2a.health_check_interval_secs`). Probes registered agents
@@ -2778,10 +2778,12 @@ async fn start_server_body(
                 // explicit agent resolution can avoid unreachable agents.
                 let health_interval = a2a_config.health_check_interval_secs;
                 if health_interval > 0 {
-                    alephcore::a2a::service::spawn_health_monitor(
-                        card_registry.clone(),
-                        client_pool.clone(),
-                        std::time::Duration::from_secs(health_interval),
+                    startup_resources.install_a2a_worker(
+                        alephcore::a2a::service::spawn_health_monitor(
+                            card_registry.clone(),
+                            client_pool.clone(),
+                            std::time::Duration::from_secs(health_interval),
+                        ),
                     );
                     tracing::info!(
                         interval_secs = health_interval,
@@ -2792,7 +2794,8 @@ async fn start_server_body(
                 if !args.daemon {
                     println!("A2A protocol: enabled");
                     println!("  - Agent Card: /.well-known/agent-card.json");
-                    println!("  - RPC:        /a2a (sync), /a2a/stream (SSE)");
+                    println!("  - RPC:        /a2a/rpc (A2A 0.3 and 1.0)");
+                    println!("  - Legacy RPC: /a2a (sync), /a2a/stream (SSE)");
                     println!();
                 }
             } else {

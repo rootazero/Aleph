@@ -61,6 +61,7 @@ impl ChannelRegistry {
                     }
                     .into(),
                 ),
+                ..ProjectionMetadata::default()
             },
             capabilities: cut
                 .descriptors

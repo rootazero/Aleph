@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::capability::backend::TOOL_NAMESPACE;
 use crate::capability::descriptor::CapabilityId;
 use crate::capability::facade::{BackendLease, Reference, Zahir};
-use crate::capability::ownership::{OwnerRef, RunId, VisibilityScope};
+use crate::capability::ownership::VisibilityScope;
 use crate::capability::policy_runtime::{
     CapabilityCallContext, PolicyAttachment, ResourceUse, RunningCapabilityCall,
 };
@@ -1689,8 +1689,15 @@ impl ScopedToolService {
                 }
                 _ => None,
             };
-            // carry restores the original turn, call identity and tier; the
-            // desktop context adds only the held invocation's authority.
+            let remote_clarification = self.remote_clarification.clone().filter(|_| {
+                entry.descriptor.name == "ask_user"
+                    && matches!(
+                        entry.descriptor.source,
+                        crate::tools::service::ToolSource::Builtin
+                    )
+            });
+            // The canonical owner carries the admitted invocation's turn and
+            // its optional desktop or A2A authority through settlement.
             let owned = crate::memory::runtime::carry(async move {
                 let _running_call = running_call;
                 let result = crate::tools::dispatch_verdict::with_gate_admission(
@@ -1714,6 +1721,14 @@ impl ScopedToolService {
                                 ),
                             ),
                         );
+                        let invocation = async move {
+                            match remote_clarification {
+                                Some(run) => crate::builtin_tools::ask_user::REMOTE_CLARIFICATION
+                                    .scope(run, invocation)
+                                    .await,
+                                None => invocation.await,
+                            }
+                        };
                         let result = match domain_call {
                             Some(call) => {
                                 crate::capability::special_dispatch::DOMAIN_TOOL_CALL
@@ -1841,22 +1856,7 @@ impl ScopedToolService {
     }
 
     fn capability_call_context(call_id: &str) -> CapabilityCallContext {
-        let turn = crate::tools::turn_context::current_turn_context();
-        // Routing sessions and agent actors never stand in for human identity.
-        let actor = turn
-            .as_ref()
-            .filter(|turn| !turn.run_id.is_empty())
-            .map_or(OwnerRef::Runtime, |turn| {
-                OwnerRef::Run(RunId(turn.run_id.clone()))
-            });
-        CapabilityCallContext::from_trusted_parts(
-            actor,
-            crate::gateway::visibility::ambient_principal(),
-            turn.as_ref().map(|turn| turn.session_key.to_key_string()),
-            None,
-            crate::gateway::caller_identity::current_caller_conn_id(),
-            call_id.into(),
-        )
+        CapabilityCallContext::for_current_turn(call_id)
     }
 
     fn validate_plugin_capture(

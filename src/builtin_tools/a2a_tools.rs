@@ -15,13 +15,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{notify_tool_result, notify_tool_start};
-use crate::a2a::adapter::client::A2AClient;
-use crate::a2a::domain::TrustLevel;
-use crate::a2a::port::{AgentHealth, AgentResolver, RegisteredAgent};
+use crate::a2a::adapter::client::DeliveryStatus;
+use crate::a2a::port::{AgentResolver, RegisteredAgent};
 use crate::a2a::service::CardRegistry;
 use crate::a2a::sub_agent::A2ASubAgent;
 use crate::error::{AlephError, Result};
-use crate::security::ssrf::{validate_url_with_pinned, SsrfPolicy};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -39,12 +37,6 @@ pub struct A2AToolDeps {
     pub sub_agent: Arc<A2ASubAgent>,
     /// Registry of known remote agents (backs the `a2a_agents` tool).
     pub card_registry: Arc<CardRegistry>,
-    /// SSRF policy for the pre-flight URL check in `a2a_agents.add`.
-    /// Threaded from the operator's `[ssrf]` config block so the
-    /// allow/deny rules reach the tool face — the previous
-    /// `SsrfPolicy::default()` shape made the operator's audit
-    /// (`config_audit`) findings a no-op against the actual gate.
-    pub ssrf_policy: SsrfPolicy,
 }
 
 /// Shared, swappable handle to [`A2AToolDeps`].
@@ -93,6 +85,8 @@ pub struct A2ADelegateOutput {
     pub agent: Option<String>,
     /// Whether the delegation succeeded.
     pub success: bool,
+    /// Transport delivery status. An unknown outcome may have reached the peer.
+    pub delivery: DeliveryStatus,
     /// The remote agent's response summary, or the failure reason.
     pub result: String,
 }
@@ -115,7 +109,8 @@ impl AlephTool for A2ADelegateTool {
     const DESCRIPTION: &'static str = "Delegate a task to a remote agent over the A2A \
         (Agent-to-Agent) protocol. Use this to hand specialised work to an external agent \
         registered via `a2a_agents`. The remote agent runs independently and returns a \
-        result; it cannot see this conversation, so write a self-contained prompt.";
+        result; it cannot see this conversation, so write a self-contained prompt. \
+        Treat unknown delivery as potentially executed.";
 
     type Args = A2ADelegateArgs;
     type Output = A2ADelegateOutput;
@@ -160,6 +155,7 @@ impl AlephTool for A2ADelegateTool {
             agent: outcome.agent,
             success,
             result: result_text,
+            delivery: outcome.delivery,
         })
     }
 }
@@ -185,7 +181,7 @@ pub enum A2AAgentsAction {
 pub struct A2AAgentsArgs {
     /// What to do: `list`, `add`, or `remove`.
     pub action: A2AAgentsAction,
-    /// Base URL of the remote agent (required for `add`), e.g. `https://host:8080`.
+    /// Remote agent root or Agent Card URL (required for `add`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Agent id or name (required for `remove`).
@@ -298,75 +294,18 @@ impl AlephTool for A2AAgentsTool {
                     &format!("add {}", crate::utils::text_format::truncate_text(&url, 60)),
                 );
 
-                // BT-B-R4-05: validate the URL against the SSRF policy
-                // before any outbound connection. Previously the URL was
-                // passed straight to A2AClient::new / with_auth with no
-                // host-policy gate, so an LLM-supplied url like
-                // `http://169.254.169.254/latest/meta-data/` or
-                // `http://127.0.0.1:8123/` would be happily registered and
-                // called on every delegated request, with the persisted token
-                // attached. validate_url_with_pinned returns the same
-                // host-policy decision web_fetch uses, so the operator's
-                // existing config controls both surfaces.
-                let url_for_card = url::Url::parse(&url)
-                    .map_err(|e| AlephError::tool(format!("`url` is not a valid URL: {e}")))?;
-                let scheme = url_for_card.scheme();
-                if scheme != "http" && scheme != "https" {
-                    return Err(AlephError::tool(format!(
-                        "`url` must be http:// or https:// (got '{scheme}://'); \
-                         refusing to register a non-HTTP A2A agent"
-                    )));
-                }
-                validate_url_with_pinned(
-                    &url,
-                    // Plumb the operator's `[ssrf]` config through
-                    // A2AToolDeps instead of the hard-coded default.
-                    &deps.ssrf_policy,
-                )
-                .await
-                .map_err(|e| {
-                    AlephError::tool(format!(
-                        "`url` blocked by SSRF policy ({e}); \
-                             A2A `add` rejects private/loopback hosts unless \
-                             the operator widens the policy"
-                    ))
-                })?;
-
-                // Fetch the remote Agent Card so explicit name/alias resolution
-                // has current skill data.
-                let client = match args.token.clone() {
-                    Some(token) => A2AClient::with_auth(&url, token),
-                    None => A2AClient::new(&url),
-                };
-                let card = client.fetch_agent_card().await.map_err(|e| {
-                    AlephError::tool(format!(
-                        "Could not reach A2A agent at {url}: {e}. \
-                         Check the URL and that the remote agent is running."
-                    ))
-                })?;
-
-                let trust = TrustLevel::infer_from_url(&url);
-                // `upsert`, not `register_with_token`: both carry the
-                // token, but only `upsert` also evicts by base URL, so
-                // re-adding an agent replaces the placeholder card held
-                // against that URL instead of leaving two for one endpoint.
-                registry
-                    .upsert(RegisteredAgent::new(
-                        card.clone(),
-                        trust,
-                        url.clone(),
-                        chrono::Utc::now(),
-                        AgentHealth::Healthy,
-                        args.token.clone(),
-                    ))
-                    .await;
+                let card = registry
+                    .add_remote(&url, args.token.clone())
+                    .await
+                    .map_err(|error| {
+                        AlephError::tool(format!("A2A registration failed: {error}"))
+                    })?;
 
                 let agents = list_summaries(registry).await?;
                 let message = format!(
-                    "Registered remote A2A agent '{}' ({} skill(s), trust={})",
+                    "Registered remote A2A agent '{}' ({} skill(s))",
                     card.name,
                     card.skills.len(),
-                    format!("{trust:?}").to_lowercase(),
                 );
                 notify_tool_result(Self::NAME, &message, true);
                 Ok(A2AAgentsOutput {
@@ -425,24 +364,19 @@ impl AlephTool for A2AAgentsTool {
 mod tests {
     use super::*;
     use crate::a2a::adapter::client::A2AClientPool;
-    use crate::a2a::domain::AgentCard;
-    use crate::a2a::service::SmartRouter;
+    use crate::a2a::domain::{AgentCard, TrustLevel};
+    use crate::a2a::port::AgentHealth;
 
     /// Build a filled handle backed by an empty in-memory `CardRegistry`,
     /// returning the registry too so tests can seed agents.
     fn build_handle() -> (A2AToolHandle, Arc<CardRegistry>) {
         let registry = Arc::new(CardRegistry::new());
-        let router = Arc::new(SmartRouter::new(registry.clone()));
         let pool = Arc::new(A2AClientPool::new());
-        let sub_agent = Arc::new(A2ASubAgent::new(router, pool));
+        let sub_agent = Arc::new(A2ASubAgent::new(registry.clone(), pool));
         let handle = new_a2a_tool_handle();
         handle.store(Some(Arc::new(A2AToolDeps {
             sub_agent,
             card_registry: registry.clone(),
-            // Tests don't exercise the SSRF path; the default
-            // policy keeps the unit tests focused on the
-            // tool-level surface.
-            ssrf_policy: SsrfPolicy::default(),
         })));
         (handle, registry)
     }

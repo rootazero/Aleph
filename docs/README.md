@@ -21,7 +21,7 @@ L3 的完整契约见 [`docs/reference/EVIDENCE_LAYER.md`](reference/EVIDENCE_LA
 | 桌面与客户端 | `DESKTOP_SHELL.md` · `DESKTOP_BRIDGE.md` · `PRODUCT_TOPOLOGY.md` · `BROWSER_LIVE_VIEWER.md` · `WINDOWS_RUNTIME.md` · `LINUX_DESKTOP.md` · `CANVAS.md` | 桌面宿主、Panel、画布怎么跑 |
 | 运行与内核 | `HARNESS_PHILOSOPHY.md` · `AGENT_SYSTEM.md` · `AGENT_IDENTITY.md` · `AGENT_LOOP_TOOL_EXECUTION.md` · `AGENT_LOOP_CONTEXT_BUDGET.md` · `MULTI_AGENT_SYSTEM.md` · `SESSION_KNOBS.md` · `SESSION_SERVICE.md` · `BOOT_ASSEMBLY.md` | 大脑怎么思考、循环怎么转、会话怎么存 |
 | 能力与工具 | `TOOL_SYSTEM.md` · `PLUGIN_SYSTEM.md` · `EXTENSION_SYSTEM.md` · `SKILL_MODEL_TAXONOMY.md` · `MULTI_AGENT_SYSTEM.md` · `GRAPH_LAYER.md` | 能力怎么注册、扩展怎么装载 |
-| 网关与通道 | `GATEWAY.md` · `SANDBOX.md` · `SECURITY.md` · `CLUSTER.md` · `MODEL_CATALOG.md` · `MODEL_PERCEIVABLE_ECOSYSTEM.md` | 消息怎么进来、模型怎么选、权限怎么管 |
+| 网关与通道 | `GATEWAY.md` · [A2A.md](reference/A2A.md) · `SANDBOX.md` · `SECURITY.md` · `CLUSTER.md` · `MODEL_CATALOG.md` · `MODEL_PERCEIVABLE_ECOSYSTEM.md` | 消息怎么进来、模型怎么选、权限怎么管 |
 | 记忆与状态 | `MEMORY_SYSTEM.md` · `docs/reference/memory/`（`NOTES.md` · `RETRIEVAL.md` · `DREAM_DAEMON.md` · `RAW_MEMORY.md`） | 记忆怎么存、怎么召回 |
 | 特性定位 | `FEATURE_LOCATOR.md`（6611 行，功能→实现位置的索引）· `FEATURE_LOCATOR_BACKLOG.md` | "这个功能在哪实现 / 还没实现" |
 | 运维与开发 | `DEVELOPMENT.md` · `SERVER_DEVELOPMENT.md` · `RELEASE.md` · `PROCESS_MANAGEMENT.md` · `WORKSPACE.md` · `SUBSYSTEM_ROUTING.md` · `TOOL_USAGE.md` | 怎么构建、怎么发版、怎么定位子系统 |
@@ -57,7 +57,7 @@ L3 文件名通常带日期（`2026-10-15-rightpane-stage1-slot-spec.md`），**
 
 ## 🗂 全部 reference 文档（完整清单）
 
-共 75 份（含 `docs/reference/memory/` 子目录）。点进去之前先看 [EVIDENCE_LAYER.md](reference/EVIDENCE_LAYER.md) 判断它是当前层还是时点文档。
+共 76 份（含 `docs/reference/memory/` 子目录）。点进去之前先看 [EVIDENCE_LAYER.md](reference/EVIDENCE_LAYER.md) 判断它是当前层还是时点文档。
 
 - [2026-03-20-cli-tui-separation-design.md](reference/2026-03-20-cli-tui-separation-design.md)
 - [2026-03-21-hierarchical-slash-commands-design.md](reference/2026-03-21-hierarchical-slash-commands-design.md)
@@ -88,6 +88,7 @@ L3 文件名通常带日期（`2026-10-15-rightpane-stage1-slot-spec.md`），**
 - [EXTENSION_SYSTEM.md](reference/EXTENSION_SYSTEM.md)
 - [FEATURE_LOCATOR.md](reference/FEATURE_LOCATOR.md)
 - [FEATURE_LOCATOR_BACKLOG.md](reference/FEATURE_LOCATOR_BACKLOG.md)
+- [A2A.md](reference/A2A.md)
 - [GATEWAY.md](reference/GATEWAY.md)
 - [GLOSSARY.md](reference/GLOSSARY.md)
 - [GOOGLE_MEET_BRIDGE.md](reference/GOOGLE_MEET_BRIDGE.md)

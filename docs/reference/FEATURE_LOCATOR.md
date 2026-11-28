@@ -3047,6 +3047,12 @@ English mirror: ACP is a client-side slice. Model tools (`acp_delegate`, `acp_se
 
 ---
 
+### 4.15 A2A 远程代理互操作 / A2A remote agent interoperability
+
+- **入口 / Entry points** · `[a2a]`、`/.well-known/agent-card.json`、`/a2a/rpc`、`a2a_agents`、`a2a_delegate`。配置、兼容路由和协议支持见 [A2A.md](A2A.md)。 See the A2A reference for configuration, compatibility routes, and the protocol matrix.
+- **入站 / Inbound** · [`task_store.rs`](../../src/a2a/adapter/server/task_store.rs) 按凭据准入任务与观察者， [`bridge.rs`](../../src/a2a/adapter/server/bridge.rs) 把请求接到 Core 的运行和取消。 The task store scopes runs and observers to the verified credential. The bridge binds the run and cancellation to Core.
+- **出站 / Outbound** · [`capability.rs`](../../src/a2a/capability.rs) 从注册表投影远程 Agent。客户端在委派前选择卡片接口，最终准入检查注册代次。 The registry projects remote Agent capabilities. Card selection and the final registration check precede dispatch.
+
 ## 5. 横切关注点
 
 ### 5.1 安全原语 (Security Primitives)

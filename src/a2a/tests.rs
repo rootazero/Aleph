@@ -20,15 +20,18 @@ use crate::a2a::adapter::server::request_processor::{
     A2ARequestProcessor, A2AServerState, JsonRpcRequest,
 };
 use crate::a2a::adapter::server::routes::a2a_routes;
-use crate::a2a::adapter::server::{StreamHub, TaskStore};
+use crate::a2a::adapter::server::{
+    task_store::{TaskClaim, TaskScope},
+    StreamHub, TaskStore,
+};
 use crate::a2a::config::{A2ASecurityConfig, A2AServerConfig, A2ASkillConfig};
 use crate::a2a::domain::*;
 use crate::a2a::port::authenticator::{
-    A2AAction, A2AAuthContext, A2AAuthPrincipal, A2AAuthenticator,
+    A2AAction, A2AAuthContext, A2AAuthPrincipal, A2AAuthenticator, TaskOwner,
 };
 use crate::a2a::port::message_handler::A2AMessageHandler;
 use crate::a2a::port::streaming::A2AStreamingHandler;
-use crate::a2a::port::task_manager::{A2AResult, A2ATaskManager};
+use crate::a2a::port::task_manager::A2AResult;
 use crate::a2a::service::card_builder::CardBuilder;
 use crate::a2a::service::card_registry::CardRegistry;
 use crate::a2a::service::notification::NotificationService;
@@ -71,30 +74,22 @@ fn test_agent_card() -> AgentCard {
 
 /// Stub message handler that immediately completes the task
 struct StubMessageHandler {
-    task_manager: Arc<dyn A2ATaskManager>,
+    task_manager: Arc<TaskStore>,
 }
 
 #[async_trait::async_trait]
 impl A2AMessageHandler for StubMessageHandler {
-    async fn handle_message(
-        &self,
-        task_id: &str,
-        _message: A2AMessage,
-        session_id: Option<&str>,
-    ) -> A2AResult<A2ATask> {
-        let context_id = session_id.unwrap_or(task_id);
-        let _task = self.task_manager.create_task(task_id, context_id).await?;
+    async fn handle_message(&self, claim: TaskClaim, _message: A2AMessage) -> A2AResult<A2ATask> {
         let response = A2AMessage::text(A2ARole::Agent, "Stub response");
         self.task_manager
-            .update_status(task_id, TaskState::Completed, Some(response))
+            .update_status(&claim.instance_id, TaskState::Completed, Some(response))
             .await
     }
 
     async fn handle_message_stream(
         &self,
-        _task_id: &str,
+        _claim: TaskClaim,
         _message: A2AMessage,
-        _session_id: Option<&str>,
     ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>> {
         Ok(Box::pin(futures::stream::empty()))
     }
@@ -107,7 +102,7 @@ struct AllowAllAuth;
 impl A2AAuthenticator for AllowAllAuth {
     async fn authenticate(&self, _context: &A2AAuthContext) -> A2AResult<A2AAuthPrincipal> {
         Ok(A2AAuthPrincipal {
-            agent_id: None,
+            owner: crate::a2a::port::TaskOwner::Loopback,
             trust_level: TrustLevel::Local,
             permissions: vec!["*".to_string()],
         })
@@ -131,7 +126,7 @@ fn test_server_state() -> Arc<A2AServerState> {
     let task_store: Arc<TaskStore> = Arc::new(TaskStore::new());
     let stream_hub = Arc::new(StreamHub::new());
     let message_handler = Arc::new(StubMessageHandler {
-        task_manager: Arc::clone(&task_store) as Arc<dyn A2ATaskManager>,
+        task_manager: Arc::clone(&task_store),
     });
 
     Arc::new(A2AServerState {
@@ -162,7 +157,7 @@ fn make_auth_context(addr: SocketAddr, creds: Credentials) -> A2AAuthContext {
 
 fn local_auth_principal() -> A2AAuthPrincipal {
     A2AAuthPrincipal {
-        agent_id: None,
+        owner: crate::a2a::port::TaskOwner::Loopback,
         trust_level: TrustLevel::Local,
         permissions: vec!["*".to_string()],
     }
@@ -178,6 +173,7 @@ async fn test_agent_card_discovery() {
         card_name: Some("Integration Test Agent".to_string()),
         card_description: Some("An agent for testing".to_string()),
         card_version: Some("0.5.0".to_string()),
+        advertised_base_url: None,
         security: A2ASecurityConfig {
             local_bypass: true,
             tokens: vec!["secret-token".to_string()],
@@ -255,7 +251,14 @@ async fn test_task_crud_lifecycle() {
     assert_eq!(task.history.len(), 2);
 
     // Cancel completed task -> should fail
-    let err = store.cancel_task("task-1").await.unwrap_err();
+    let err = store
+        .cancel_owned(
+            TaskScope::Legacy(TaskOwner::Loopback),
+            "task-1",
+            &StreamHub::new(),
+        )
+        .await
+        .unwrap_err();
     assert!(matches!(
         err,
         A2AError::TaskNotCancelable(TaskState::Completed)
@@ -533,7 +536,7 @@ async fn test_routes_agent_card_endpoint() {
 
     let request = Request::builder()
         .method("GET")
-        .uri("/.well-known/agent-card.json")
+        .uri("/a2a/legacy/.well-known/agent-card.json")
         .body(Body::empty())
         .unwrap();
 
@@ -669,4 +672,296 @@ async fn test_stream_endpoint_rejects_unknown_method() {
         body.contains("does not support streaming"),
         "non-streaming method must be rejected on /a2a/stream, got body: {body}"
     );
+}
+
+fn credential_scoped_state() -> Arc<A2AServerState> {
+    let mut state = test_server_state();
+    Arc::get_mut(&mut state).unwrap().authenticator = Arc::new(TieredAuthenticator::new(
+        true,
+        vec!["alpha-test".into(), "beta-test".into()],
+    ));
+    state
+}
+
+async fn credential_rpc(
+    app: &axum::Router,
+    credential: Option<(&str, &str)>,
+    method: &str,
+    params: serde_json::Value,
+) -> serde_json::Value {
+    let request_body = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": method, "params": params
+    });
+    let streaming = method == "tasks/resubscribe";
+    let mut request = Request::post(if streaming { "/a2a/stream" } else { "/a2a" })
+        .extension(axum::extract::ConnectInfo(localhost_addr()))
+        .header("content-type", "application/json");
+    if let Some((header, value)) = credential {
+        request = request.header(header, value);
+    }
+    let response = app
+        .clone()
+        .oneshot(request.body(Body::from(request_body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let bytes = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        axum::body::to_bytes(response.into_body(), 65_536),
+    )
+    .await
+    .expect("task ownership denial must close the response")
+    .unwrap();
+    if streaming {
+        let frame = std::str::from_utf8(&bytes).unwrap();
+        let data = frame
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .unwrap();
+        serde_json::from_str(data).unwrap()
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    }
+}
+
+fn legacy_send_params(id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "taskId": id,
+        "message": {
+            "messageId": "credential-scope",
+            "role": "user",
+            "parts": [{"type": "text", "text": "test task"}]
+        }
+    })
+}
+
+#[tokio::test]
+async fn distinct_credentials_scope_every_task_face() {
+    use serde_json::json;
+
+    let app = a2a_routes(credential_scoped_state());
+    let alpha = Some(("authorization", "Bearer alpha-test"));
+    let alpha_key = Some(("x-api-key", "alpha-test"));
+    let beta = Some(("authorization", "Bearer beta-test"));
+    let invalid = Some(("authorization", "Bearer invalid-test"));
+    let created = credential_rpc(&app, alpha, "message/send", legacy_send_params("shared")).await;
+    assert_eq!(created["result"]["id"], "shared");
+    let via_key = credential_rpc(&app, alpha_key, "tasks/get", json!({"id": "shared"})).await;
+    assert_eq!(via_key["result"]["id"], "shared");
+
+    for other in [beta, None] {
+        for method in ["tasks/get", "tasks/cancel", "tasks/resubscribe"] {
+            let foreign = credential_rpc(&app, other, method, json!({"id": "shared"})).await;
+            let absent = credential_rpc(&app, other, method, json!({"id": "absent"})).await;
+            assert_eq!(foreign["error"]["code"], -32001, "{method}");
+            assert_eq!(foreign["error"], absent["error"], "{method}");
+        }
+        for method in ["get", "delete", "set"] {
+            let method = format!("tasks/pushNotificationConfig/{method}");
+            let foreign = credential_rpc(
+                &app,
+                other,
+                &method,
+                json!({
+                    "taskId": "shared", "url": "https://8.8.8.8/unused"
+                }),
+            )
+            .await;
+            let absent = credential_rpc(
+                &app,
+                other,
+                &method,
+                json!({
+                    "taskId": "absent", "url": "https://8.8.8.8/unused"
+                }),
+            )
+            .await;
+            assert_eq!(foreign["error"]["code"], -32001, "{method}");
+            assert_eq!(foreign["error"], absent["error"], "{method}");
+        }
+        let listed = credential_rpc(&app, other, "tasks/list", json!({})).await;
+        assert_eq!(listed["result"]["tasks"], json!([]));
+        let created =
+            credential_rpc(&app, other, "message/send", legacy_send_params("shared")).await;
+        assert_eq!(created["result"]["id"], "shared");
+    }
+    let denied = credential_rpc(&app, invalid, "tasks/get", json!({"id": "shared"})).await;
+    assert_eq!(denied["error"]["code"], -32000);
+    let config = credential_rpc(
+        &app,
+        alpha,
+        "tasks/pushNotificationConfig/get",
+        json!({"taskId": "shared"}),
+    )
+    .await;
+    assert!(config["result"].is_null());
+}
+
+#[tokio::test]
+async fn terminal_resubscribe_reports_the_retained_outcome_and_closes() {
+    let app = a2a_routes(credential_scoped_state());
+    let credential = Some(("authorization", "Bearer alpha-test"));
+    let sent = credential_rpc(&app, credential, "message/send", legacy_send_params("done")).await;
+    assert_eq!(sent["result"]["status"]["state"], "completed");
+
+    let observed = credential_rpc(
+        &app,
+        credential,
+        "tasks/resubscribe",
+        serde_json::json!({"id": "done"}),
+    )
+    .await;
+    assert_eq!(observed["result"]["taskId"], "done");
+    assert_eq!(observed["result"]["status"]["state"], "completed");
+    assert_eq!(observed["result"]["final"], true);
+}
+
+#[tokio::test]
+async fn recycled_alias_has_a_new_instance_and_no_inherited_push() {
+    use serde_json::json;
+
+    let state = credential_scoped_state();
+    let app = a2a_routes(Arc::clone(&state));
+    let alpha = Some(("authorization", "Bearer alpha-test"));
+    let first = credential_rpc(&app, alpha, "message/send", legacy_send_params("reusable")).await;
+    assert_eq!(first["result"]["id"], "reusable");
+    let stored = credential_rpc(
+        &app,
+        alpha,
+        "tasks/pushNotificationConfig/set",
+        json!({
+            "taskId": "reusable", "url": "https://8.8.8.8/unused"
+        }),
+    )
+    .await;
+    assert_eq!(stored["result"]["taskId"], "reusable");
+
+    // Fill retained slots without making any HTTP calls or invoking Core.
+    for index in 0..10_000 {
+        let id = format!("filler-{index}");
+        state.task_manager.create_task(&id, &id).await.unwrap();
+    }
+    let gone = credential_rpc(&app, alpha, "tasks/get", json!({"id": "reusable"})).await;
+    assert_eq!(gone["error"]["code"], -32001);
+    // An eviction frees only terminal slots. Settle one filler so the alias can be admitted again.
+    state
+        .task_manager
+        .update_status("filler-0", TaskState::Failed, None)
+        .await
+        .unwrap();
+    let next = credential_rpc(&app, alpha, "message/send", legacy_send_params("reusable")).await;
+    assert_eq!(next["result"]["id"], "reusable");
+    let config = credential_rpc(
+        &app,
+        alpha,
+        "tasks/pushNotificationConfig/get",
+        json!({"taskId": "reusable"}),
+    )
+    .await;
+    assert!(config["error"].is_null());
+    assert!(
+        config["result"].is_null(),
+        "the old callback cannot belong to the new task"
+    );
+}
+
+#[tokio::test]
+async fn standard_discovery_and_rpc_use_advertised_binding_and_scoped_ids() {
+    use serde_json::{json, Value};
+
+    let app = a2a_routes(credential_scoped_state());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get("/.well-known/agent-card.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let card: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(card["protocolVersion"], "0.3.0");
+    let endpoint = url::Url::parse(card["url"].as_str().unwrap()).unwrap();
+    assert_eq!(endpoint.path(), "/a2a/rpc");
+    assert_eq!(card["supportedInterfaces"][0]["url"], card["url"]);
+    assert_eq!(card["supportedInterfaces"][0]["protocolVersion"], "1.0");
+
+    let rpc =
+        |version, token, method, params| {
+            let app = app.clone();
+            let path = endpoint.path().to_owned();
+            async move {
+                let mut request = Request::post(path)
+                    .header("content-type", "application/json")
+                    .header("authorization", token);
+                if let Some(version) = version {
+                    request = request.header("a2a-version", version);
+                }
+                let response = app.oneshot(request.body(Body::from(json!({
+                "jsonrpc": "2.0", "id": "probe", "method": method, "params": params,
+            }).to_string())).unwrap()).await.unwrap();
+                let bytes = axum::body::to_bytes(response.into_body(), 65_536)
+                    .await
+                    .unwrap();
+                serde_json::from_slice::<Value>(&bytes).unwrap()
+            }
+        };
+    let alpha = "Bearer alpha-test";
+    let beta = "Bearer beta-test";
+    let older = rpc(None::<&str>, alpha, "message/send", json!({"message": {
+        "kind": "message", "messageId": "old", "role": "user", "parts": [{"kind": "text", "text": "hello"}],
+    }})).await;
+    assert_eq!(older["result"]["kind"], "task", "{older}");
+    let newer = rpc(
+        Some("1.0"),
+        alpha,
+        "SendMessage",
+        json!({"message": {
+            "messageId": "new", "role": "ROLE_USER", "parts": [{"text": "hello"}],
+        }}),
+    )
+    .await;
+    let task_id = newer["result"]["task"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{newer}"));
+    assert_ne!(task_id, "new");
+    assert_eq!(
+        newer["result"]["task"]["status"]["state"],
+        "TASK_STATE_COMPLETED"
+    );
+    let default_list = rpc(Some("1.0"), alpha, "ListTasks", json!({})).await;
+    assert!(
+        default_list["result"]["tasks"]
+            .as_array()
+            .is_some_and(|tasks| {
+                !tasks.is_empty() && tasks.iter().all(|task| task.get("artifacts").is_none())
+            }),
+        "{default_list}"
+    );
+    let artifact_list = rpc(
+        Some("1.0"),
+        alpha,
+        "ListTasks",
+        json!({"includeArtifacts": true}),
+    )
+    .await;
+    assert!(artifact_list["result"]["tasks"][0]["artifacts"].is_array());
+    let foreign = rpc(Some("1.0"), beta, "GetTask", json!({"id": task_id})).await;
+    let absent = rpc(Some("1.0"), beta, "GetTask", json!({"id": "absent"})).await;
+    assert_eq!(foreign["error"], absent["error"]);
+    assert_eq!(foreign["error"]["code"], -32001);
+    let tenant = rpc(
+        Some("1.0"),
+        alpha,
+        "GetTask",
+        json!({"id": task_id, "tenant": "other"}),
+    )
+    .await;
+    assert_eq!(tenant["error"]["code"], -32602);
+    let unsupported = rpc(Some("1.1"), alpha, "GetTask", json!({"id": task_id})).await;
+    assert_eq!(unsupported["error"]["code"], -32009);
 }

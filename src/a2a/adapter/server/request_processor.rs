@@ -7,7 +7,10 @@ use crate::a2a::domain::{A2AError, A2AMessage, AgentCard, ListTasksParams, Part}
 use crate::a2a::port::authenticator::{A2AAction, A2AAuthPrincipal, A2AAuthenticator};
 use crate::a2a::port::message_handler::A2AMessageHandler;
 use crate::a2a::port::streaming::A2AStreamingHandler;
-use crate::a2a::port::task_manager::A2ATaskManager;
+use crate::a2a::port::task_manager::A2AResult;
+use crate::a2a::service::notification::PushNotificationConfig;
+
+use super::task_store::{TaskClaim, TaskScope, TaskStore};
 use crate::a2a::service::notification::NotificationService;
 
 /// Shared state for the A2A HTTP server.
@@ -15,7 +18,7 @@ use crate::a2a::service::notification::NotificationService;
 /// Holds references to all port implementations and the agent card.
 /// Passed as axum state to all route handlers.
 pub struct A2AServerState {
-    pub task_manager: Arc<dyn A2ATaskManager>,
+    pub task_manager: Arc<TaskStore>,
     pub message_handler: Arc<dyn A2AMessageHandler>,
     pub streaming: Arc<dyn A2AStreamingHandler>,
     pub authenticator: Arc<dyn A2AAuthenticator>,
@@ -75,6 +78,9 @@ impl JsonRpcResponse {
     /// Build an error response from an `A2AError`
     #[must_use]
     pub fn from_a2a_error(id: Option<Value>, err: &A2AError) -> Self {
+        if matches!(err, A2AError::TaskNotFound(_)) {
+            return Self::error(id, err.error_code(), "Task not found");
+        }
         Self {
             jsonrpc: "2.0".to_string(),
             result: None,
@@ -98,21 +104,12 @@ impl JsonRpcResponse {
 
 // --- Shared helpers ---
 
-/// Parse the optional `pushNotificationConfig` block from a `message/send`
-/// payload and register it on the notification service. A missing field is a
-/// no-op (most callers don't push); a malformed value becomes
-/// [`A2AError::InvalidParams`]; a `set_config` failure surfaces unchanged so
-/// callers can map it to the right wire code.
-///
-/// Shared between the SSE `stream_message_send` route and the sync
-/// `handle_message_send` request — both must register the inline push config
-/// identically, and the parse/translate/set sequence is byte-for-byte the same
-/// in each.
-pub(super) async fn apply_inline_push_config(
-    notification: &crate::a2a::service::notification::NotificationService,
-    params: &serde_json::Value,
+/// Validate an optional inline callback before attempting task admission.
+async fn inline_push_config(
+    notification: &NotificationService,
+    params: &Value,
     task_id: &str,
-) -> Result<(), crate::a2a::domain::error::A2AError> {
+) -> A2AResult<Option<PushNotificationConfig>> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct InlinePushConfig {
@@ -124,7 +121,7 @@ pub(super) async fn apply_inline_push_config(
     }
 
     let Some(push_params) = params.get("pushNotificationConfig").cloned() else {
-        return Ok(());
+        return Ok(None);
     };
     let inline: InlinePushConfig = serde_json::from_value(push_params).map_err(|e| {
         crate::a2a::domain::error::A2AError::InvalidParams(format!(
@@ -137,7 +134,43 @@ pub(super) async fn apply_inline_push_config(
         token: inline.token,
         events: inline.events,
     };
-    notification.set_config(push_config).await.map(|_| ())
+    notification.validate_config(&push_config).await?;
+    Ok(Some(push_config))
+}
+
+impl A2AServerState {
+    pub(super) async fn claim_legacy_message(
+        &self,
+        principal: &A2AAuthPrincipal,
+        params: &Value,
+    ) -> A2AResult<(TaskClaim, A2AMessage)> {
+        let message: A2AMessage = serde_json::from_value(
+            params.get("message").cloned().unwrap_or(Value::Null),
+        )
+        .map_err(|e| A2AError::InvalidParams(format!("missing or invalid 'message': {e}")))?;
+        for part in &message.parts {
+            if let Part::File { file, .. } = part {
+                file.validate()
+                    .map_err(|e| A2AError::InvalidParams(e.into()))?;
+            }
+        }
+        if message.text_content().trim().is_empty() {
+            return Err(A2AError::InvalidParams(
+                "Message contains no text content".to_string(),
+            ));
+        }
+        let task_id = params
+            .get("taskId")
+            .and_then(Value::as_str)
+            .map_or_else(|| uuid::Uuid::new_v4().to_string(), String::from);
+        let session_id = params.get("sessionId").and_then(Value::as_str);
+        let push = inline_push_config(&self.notification, params, &task_id).await?;
+        let claim = self
+            .task_manager
+            .claim_legacy(principal.owner, &task_id, session_id, push)
+            .await?;
+        Ok((claim, message))
+    }
 }
 
 // --- Request Processor ---
@@ -202,62 +235,18 @@ impl A2ARequestProcessor {
             return resp;
         }
 
-        // Extract params
-        let message: A2AMessage = match serde_json::from_value(
-            request
-                .params
-                .get("message")
-                .cloned()
-                .unwrap_or(Value::Null),
-        ) {
-            Ok(m) => m,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    -32602,
-                    &format!("Invalid params: missing or invalid 'message': {e}"),
-                );
-            }
-        };
-
-        // Enforce the A2A spec invariant that a File part carries exactly one
-        // of `bytes`/`uri` at the deserialization boundary — a peer can
-        // otherwise send a part with both or neither and have it flow through
-        // unchecked (the `validate()` method was previously never called).
-        for part in &message.parts {
-            if let Part::File { file, .. } = part {
-                if let Err(e) = file.validate() {
-                    return JsonRpcResponse::error(
-                        request.id,
-                        -32602,
-                        &format!("Invalid params: {e}"),
-                    );
-                }
-            }
-        }
-
-        let task_id = request
-            .params
-            .get("taskId")
-            .and_then(|v| v.as_str())
-            .map_or_else(|| uuid::Uuid::new_v4().to_string(), String::from);
-
-        if let Err(e) =
-            apply_inline_push_config(&self.state.notification, &request.params, &task_id).await
+        let (claim, message) = match self
+            .state
+            .claim_legacy_message(&auth, &request.params)
+            .await
         {
-            return JsonRpcResponse::from_a2a_error(request.id, &e);
-        }
-
-        let session_id = request
-            .params
-            .get("sessionId")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
+            Ok(send) => send,
+            Err(e) => return JsonRpcResponse::from_a2a_error(request.id, &e),
+        };
         match self
             .state
             .message_handler
-            .handle_message(&task_id, message, session_id.as_deref())
+            .handle_message(claim, message)
             .await
         {
             Ok(task) => JsonRpcResponse::serialize_ok(request.id, &task),
@@ -287,7 +276,12 @@ impl A2ARequestProcessor {
             .and_then(|v| v.as_u64())
             .map(|v| usize::try_from(v).unwrap_or(usize::MAX));
 
-        match self.state.task_manager.get_task(id, history_length).await {
+        match self
+            .state
+            .task_manager
+            .get_owned(TaskScope::Legacy(auth.owner), id, history_length)
+            .await
+        {
             Ok(task) => JsonRpcResponse::serialize_ok(request.id, &task),
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
         }
@@ -312,41 +306,17 @@ impl A2ARequestProcessor {
             }
         };
 
-        match self.state.task_manager.cancel_task(id).await {
-            Ok(task) => {
-                // Broadcast a Canceled status update so any SSE subscriber
-                // attached via `tasks/resubscribe` (or the original
-                // `message/stream`) sees the cancellation. Without this the
-                // subscriber sees the stream end silently when the bridge's
-                // spawned task eventually completes. A2A-R4-07.
-                let cancel_event = crate::a2a::domain::events::TaskStatusUpdateEvent {
-                    task_id: task.id.clone(),
-                    context_id: task.context_id.clone(),
-                    status: crate::a2a::domain::task::TaskStatus {
-                        state: crate::a2a::domain::task::TaskState::Canceled,
-                        message: None,
-                        timestamp: chrono::Utc::now(),
-                    },
-                    is_final: true,
-                    metadata: None,
-                };
-                if let Err(e) = self
-                    .state
-                    .streaming
-                    .broadcast_status(&task.id, cancel_event)
-                    .await
-                {
-                    // Symmetric with the bridge.rs streaming path: a dropped
-                    // cancel event leaves SSE subscribers attached to a stream
-                    // that never emits a terminal state.
-                    tracing::error!(
-                        task_id = %task.id,
-                        error = %e,
-                        "A2A request processor: failed to broadcast cancel event"
-                    );
-                }
-                JsonRpcResponse::serialize_ok(request.id, &task)
-            }
+        match self
+            .state
+            .task_manager
+            .cancel_owned(
+                TaskScope::Legacy(auth.owner),
+                id,
+                self.state.streaming.as_ref(),
+            )
+            .await
+        {
+            Ok(task) => JsonRpcResponse::serialize_ok(request.id, &task),
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
         }
     }
@@ -375,10 +345,12 @@ impl A2ARequestProcessor {
             ListTasksParams::default()
         };
 
-        match self.state.task_manager.list_tasks(params).await {
-            Ok(result) => JsonRpcResponse::serialize_ok(request.id, &result),
-            Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
-        }
+        let result = self
+            .state
+            .task_manager
+            .list_owned(TaskScope::Legacy(auth.owner), params)
+            .await;
+        JsonRpcResponse::serialize_ok(request.id, &result)
     }
 
     /// Dispatch push notification config operations — all require `ManagePushConfig` permission
@@ -407,7 +379,24 @@ impl A2ARequestProcessor {
                             );
                         }
                     };
-                match self.state.notification.set_config(config).await {
+                let instance = match self
+                    .state
+                    .task_manager
+                    .resolve_legacy(auth.owner, &config.task_id)
+                    .await
+                {
+                    Ok(instance) => instance,
+                    Err(e) => return JsonRpcResponse::from_a2a_error(request.id, &e),
+                };
+                if let Err(e) = self.state.notification.validate_config(&config).await {
+                    return JsonRpcResponse::from_a2a_error(request.id, &e);
+                }
+                match self
+                    .state
+                    .task_manager
+                    .set_push_config(&instance, config)
+                    .await
+                {
                     Ok(c) => JsonRpcResponse::serialize_ok(request.id, &c),
                     Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
                 }
@@ -423,16 +412,19 @@ impl A2ARequestProcessor {
                         );
                     }
                 };
-                match self.state.notification.get_config(task_id).await {
+                match self
+                    .state
+                    .task_manager
+                    .get_owned_push_config(auth.owner, task_id)
+                    .await
+                {
                     Ok(config) => JsonRpcResponse::serialize_ok(request.id, &config),
                     Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
                 }
             }
             "tasks/pushNotificationConfig/list" => {
-                match self.state.notification.list_configs().await {
-                    Ok(configs) => JsonRpcResponse::serialize_ok(request.id, &configs),
-                    Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
-                }
+                let configs = self.state.task_manager.list_push_configs(auth.owner).await;
+                JsonRpcResponse::serialize_ok(request.id, &configs)
             }
             "tasks/pushNotificationConfig/delete" => {
                 let task_id = match request.params.get("taskId").and_then(|v| v.as_str()) {
@@ -445,7 +437,12 @@ impl A2ARequestProcessor {
                         );
                     }
                 };
-                match self.state.notification.delete_config(task_id).await {
+                match self
+                    .state
+                    .task_manager
+                    .delete_push_config(auth.owner, task_id)
+                    .await
+                {
                     Ok(()) => JsonRpcResponse::success(request.id, Value::Null),
                     Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
                 }
@@ -499,10 +496,7 @@ impl A2ARequestProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::a2a::domain::{
-        A2ATask, Artifact, ListTasksResult, SecurityScheme, TaskState, TaskStatusUpdateEvent,
-        UpdateEvent,
-    };
+    use crate::a2a::domain::{A2ATask, SecurityScheme, TaskStatusUpdateEvent, UpdateEvent};
 
     #[test]
     fn jsonrpc_response_success() {
@@ -534,7 +528,7 @@ mod tests {
         assert!(resp.result.is_none());
         let err = resp.error.unwrap();
         assert_eq!(err["code"], -32001);
-        assert!(err["message"].as_str().unwrap().contains("task-42"));
+        assert_eq!(err["message"], "Task not found");
     }
 
     #[test]
@@ -604,8 +598,8 @@ mod tests {
 
         use futures::Stream;
 
-        use crate::a2a::domain::security::TrustLevel;
-        use crate::a2a::port::authenticator::A2AAuthContext;
+        use crate::a2a::domain::{TaskState, TrustLevel};
+        use crate::a2a::port::authenticator::{A2AAuthContext, TaskOwner};
         use crate::a2a::port::task_manager::A2AResult;
 
         // Minimal mock authenticator that always allows
@@ -615,7 +609,7 @@ mod tests {
         impl A2AAuthenticator for AllowAllAuth {
             async fn authenticate(&self, _context: &A2AAuthContext) -> A2AResult<A2AAuthPrincipal> {
                 Ok(A2AAuthPrincipal {
-                    agent_id: None,
+                    owner: crate::a2a::port::TaskOwner::Loopback,
                     trust_level: TrustLevel::Local,
                     permissions: vec![],
                 })
@@ -634,48 +628,6 @@ mod tests {
             }
         }
 
-        // Minimal mock task manager
-        struct MockTaskManager;
-
-        #[async_trait::async_trait]
-        impl A2ATaskManager for MockTaskManager {
-            async fn create_task(&self, task_id: &str, context_id: &str) -> A2AResult<A2ATask> {
-                Ok(A2ATask::new(task_id, context_id))
-            }
-
-            async fn get_task(
-                &self,
-                task_id: &str,
-                _history_length: Option<usize>,
-            ) -> A2AResult<A2ATask> {
-                Ok(A2ATask::new(task_id, "ctx-default"))
-            }
-
-            async fn update_status(
-                &self,
-                task_id: &str,
-                _state: TaskState,
-                _message: Option<A2AMessage>,
-            ) -> A2AResult<A2ATask> {
-                Ok(A2ATask::new(task_id, "ctx-default"))
-            }
-
-            async fn cancel_task(&self, task_id: &str) -> A2AResult<A2ATask> {
-                Ok(A2ATask::new(task_id, "ctx-default"))
-            }
-
-            async fn list_tasks(&self, _params: ListTasksParams) -> A2AResult<ListTasksResult> {
-                Ok(ListTasksResult {
-                    tasks: vec![],
-                    next_cursor: None,
-                })
-            }
-
-            async fn add_artifact(&self, _task_id: &str, _artifact: Artifact) -> A2AResult<()> {
-                Ok(())
-            }
-        }
-
         // Minimal mock message handler
         struct MockMessageHandler;
 
@@ -683,18 +635,16 @@ mod tests {
         impl A2AMessageHandler for MockMessageHandler {
             async fn handle_message(
                 &self,
-                task_id: &str,
+                claim: TaskClaim,
                 _message: A2AMessage,
-                _session_id: Option<&str>,
             ) -> A2AResult<A2ATask> {
-                Ok(A2ATask::new(task_id, "ctx-msg"))
+                Ok(claim.task)
             }
 
             async fn handle_message_stream(
                 &self,
-                _task_id: &str,
+                _claim: TaskClaim,
                 _message: A2AMessage,
-                _session_id: Option<&str>,
             ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>> {
                 Ok(Box::pin(futures::stream::empty()))
             }
@@ -723,7 +673,7 @@ mod tests {
 
         fn make_state() -> Arc<A2AServerState> {
             Arc::new(A2AServerState {
-                task_manager: Arc::new(MockTaskManager),
+                task_manager: Arc::new(TaskStore::new()),
                 message_handler: Arc::new(MockMessageHandler),
                 streaming: Arc::new(MockStreamingHandler),
                 authenticator: Arc::new(AllowAllAuth),
@@ -747,7 +697,7 @@ mod tests {
 
         fn make_auth() -> A2AAuthPrincipal {
             A2AAuthPrincipal {
-                agent_id: None,
+                owner: crate::a2a::port::TaskOwner::Loopback,
                 trust_level: TrustLevel::Local,
                 permissions: vec![],
             }
@@ -774,7 +724,13 @@ mod tests {
 
         #[tokio::test]
         async fn tasks_get_dispatches_correctly() {
-            let processor = A2ARequestProcessor::new(make_state());
+            let state = make_state();
+            state
+                .task_manager
+                .create_task("task-1", "ctx-default")
+                .await
+                .unwrap();
+            let processor = A2ARequestProcessor::new(state);
             let request = JsonRpcRequest {
                 jsonrpc: "2.0".to_string(),
                 method: "tasks/get".to_string(),
@@ -819,7 +775,22 @@ mod tests {
 
         #[tokio::test]
         async fn tasks_cancel_dispatches_correctly() {
-            let processor = A2ARequestProcessor::new(make_state());
+            let state = make_state();
+            let claim = state
+                .task_manager
+                .claim_legacy(TaskOwner::Loopback, "task-cancel-1", None, None)
+                .await
+                .unwrap();
+            let store = state.task_manager.clone();
+            let settle = tokio::spawn(async move {
+                claim.cancellation.token().cancelled().await;
+                store
+                    .finish_run(&claim, TaskState::Canceled, None, None)
+                    .await
+                    .unwrap();
+                store.release_run(&claim).await;
+            });
+            let processor = A2ARequestProcessor::new(state);
             let request = JsonRpcRequest {
                 jsonrpc: "2.0".to_string(),
                 method: "tasks/cancel".to_string(),
@@ -827,8 +798,9 @@ mod tests {
                 id: Some(Value::Number(4.into())),
             };
             let resp = processor.process(request, make_auth()).await;
+            settle.await.unwrap();
             assert!(resp.error.is_none());
-            assert_eq!(resp.result.unwrap()["id"], "task-cancel-1");
+            assert_eq!(resp.result.unwrap()["status"]["state"], "canceled");
         }
 
         #[tokio::test]
@@ -916,7 +888,7 @@ mod tests {
                     _context: &A2AAuthContext,
                 ) -> A2AResult<A2AAuthPrincipal> {
                     Ok(A2AAuthPrincipal {
-                        agent_id: None,
+                        owner: crate::a2a::port::TaskOwner::Loopback,
                         trust_level: TrustLevel::Public,
                         permissions: vec![],
                     })
@@ -936,7 +908,7 @@ mod tests {
             }
 
             let state = Arc::new(A2AServerState {
-                task_manager: Arc::new(MockTaskManager),
+                task_manager: Arc::new(TaskStore::new()),
                 message_handler: Arc::new(MockMessageHandler),
                 streaming: Arc::new(MockStreamingHandler),
                 authenticator: Arc::new(DenyAllAuth),
@@ -1031,8 +1003,8 @@ mod tests {
             assert!(resp.error.is_none(), "message/send should succeed");
 
             let stored = state
-                .notification
-                .get_config("task-push-1")
+                .task_manager
+                .get_owned_push_config(crate::a2a::port::TaskOwner::Loopback, "task-push-1")
                 .await
                 .expect("get_config should not error")
                 .expect("push config should be registered under task-push-1");
@@ -1066,8 +1038,8 @@ mod tests {
             assert!(uuid::Uuid::parse_str(&task_id).is_ok());
 
             let stored = state
-                .notification
-                .get_config(&task_id)
+                .task_manager
+                .get_owned_push_config(crate::a2a::port::TaskOwner::Loopback, &task_id)
                 .await
                 .expect("get_config should not error")
                 .expect("push config should be registered under generated task id");
@@ -1096,8 +1068,8 @@ mod tests {
             assert!(resp.error.is_none());
 
             let stored = state
-                .notification
-                .get_config("task-nopush")
+                .task_manager
+                .get_owned_push_config(crate::a2a::port::TaskOwner::Loopback, "task-nopush")
                 .await
                 .expect("get_config should not error");
             assert!(stored.is_none(), "no push config must be stored");

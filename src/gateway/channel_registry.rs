@@ -2680,6 +2680,7 @@ mod tests {
             ChannelLifecycleDeclarationV1::schema(),
             ProjectionMetadata {
                 surface: surface.map(str::to_owned),
+                ..ProjectionMetadata::default()
             },
         )
         .unwrap()
@@ -2837,6 +2838,7 @@ mod tests {
             after.descriptor.metadata,
             ProjectionMetadata {
                 surface: Some("replacement".into()),
+                ..ProjectionMetadata::default()
             }
         );
         assert_eq!(after.provider.snapshot().0, ProviderState::Cold);

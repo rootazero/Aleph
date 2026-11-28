@@ -408,6 +408,11 @@ impl ZahirFacade {
         facade
     }
 
+    /// The special source used by this facade's resolution and observation.
+    pub(crate) fn special_registry(&self) -> CapabilityHandlerRegistry {
+        self.specials.clone()
+    }
+
     fn install_source_events(&self) {
         let emitter = crate::capability::events::CapabilityEventEmitter::new(self.events.clone());
         self.policy.install_event_observer(emitter.clone());
@@ -1231,14 +1236,10 @@ impl ZahirFacade {
                 .describe(scope)
                 .into_iter()
                 .filter_map(|capture| {
-                    let descriptor = capture.descriptor();
-                    self.tree
-                        .generation(&descriptor.id, &scope.visibility)
-                        .map(|_| {
-                            let mut descriptor = descriptor.clone();
-                            descriptor.visibility = scope.visibility.clone();
-                            descriptor
-                        })
+                    let mut descriptor = capture.projected_descriptor()?;
+                    self.tree.generation(&descriptor.id, &scope.visibility)?;
+                    descriptor.visibility = scope.visibility.clone();
+                    Some(descriptor)
                 })
                 .collect()
         };
@@ -2082,10 +2083,10 @@ impl Zahir for ZahirFacade {
             .specials
             .describe(&scope)
             .into_iter()
-            .map(|capture| {
-                let mut descriptor = capture.descriptor().clone();
+            .filter_map(|capture| {
+                let mut descriptor = capture.projected_descriptor()?;
                 descriptor.visibility = scope.visibility.clone();
-                descriptor
+                Some(descriptor)
             })
             .filter(|descriptor| ToolBackendAdapter::descriptor_in_scope(descriptor, &scope))
             .filter(|descriptor| {

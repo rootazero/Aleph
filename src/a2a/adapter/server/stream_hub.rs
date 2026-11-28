@@ -1,15 +1,13 @@
 use std::collections::HashMap;
-use std::pin::Pin;
 
-use futures::Stream;
 use tokio::sync::broadcast;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::StreamExt;
 
 use crate::a2a::domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent, UpdateEvent};
-use crate::a2a::port::{A2AResult, A2AStreamingHandler};
+use crate::a2a::port::{A2AResult, A2AStreamingHandler, TaskUpdateStream};
 use crate::a2a::service::notification::NotificationService;
 use crate::sync_primitives::{Arc, AsyncRwLock};
+
+use super::TaskStore;
 
 const DEFAULT_CHANNEL_CAPACITY: usize = 256;
 
@@ -29,7 +27,7 @@ pub struct StreamHub {
     capacity: usize,
     /// Optional push-notification sink. When `Some`, broadcasts are also
     /// delivered to webhooks registered for the task.
-    notification: Option<Arc<NotificationService>>,
+    notification: Option<(Arc<TaskStore>, Arc<NotificationService>)>,
 }
 
 impl StreamHub {
@@ -56,11 +54,14 @@ impl StreamHub {
     /// Build a hub that also delivers every broadcast to push-notification
     /// webhooks via the shared [`NotificationService`].
     #[must_use]
-    pub fn with_notification(notification: Arc<NotificationService>) -> Self {
+    pub fn with_notification(
+        tasks: Arc<TaskStore>,
+        notification: Arc<NotificationService>,
+    ) -> Self {
         Self {
             channels: AsyncRwLock::new(HashMap::new()),
             capacity: DEFAULT_CHANNEL_CAPACITY,
-            notification: Some(notification),
+            notification: Some((tasks, notification)),
         }
     }
 
@@ -87,6 +88,24 @@ impl StreamHub {
             .clone()
     }
 
+    async fn notify(&self, instance: &str, event: &UpdateEvent) {
+        if let Some((tasks, notification)) = &self.notification {
+            if let Some(config) = tasks.push_config(instance).await {
+                let notification = notification.clone();
+                let event = event.clone();
+                tokio::spawn(async move { notification.notify(config, event).await });
+            }
+        }
+    }
+
+    async fn publish(&self, task_id: &str, event: UpdateEvent) {
+        self.notify(task_id, &event).await;
+        if let Some(sender) = self.channels.read().await.get(task_id) {
+            // A send error here only means the last observer disconnected.
+            let _ = sender.send(event);
+        }
+    }
+
     /// Remove a task's broadcast channel (call after task completion).
     pub async fn remove_channel(&self, task_id: &str) {
         let mut channels = self.channels.write().await;
@@ -102,22 +121,21 @@ impl Default for StreamHub {
 
 #[async_trait::async_trait]
 impl A2AStreamingHandler for StreamHub {
-    async fn subscribe_all(
-        &self,
-        task_id: &str,
-    ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>> {
-        let sender = self.get_or_create_sender(task_id).await;
-        let receiver = sender.subscribe();
-        let task_id_owned = task_id.to_string();
-
-        let stream = BroadcastStream::new(receiver).filter_map(move |result| match result {
-            Ok(event) => Some(Ok(event)),
-            Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
-                tracing::warn!(task_id = %task_id_owned, skipped = n, "Subscriber lagged");
-                None
+    async fn subscribe_all(&self, task_id: &str) -> A2AResult<TaskUpdateStream> {
+        let receiver = self.get_or_create_sender(task_id).await.subscribe();
+        let stream = futures::stream::unfold(Some(receiver), |receiver| async move {
+            let mut receiver = receiver?;
+            match receiver.recv().await {
+                Ok(event) => Some((Ok(event), Some(receiver))),
+                Err(broadcast::error::RecvError::Closed) => None,
+                Err(broadcast::error::RecvError::Lagged(skipped)) => Some((
+                    Err(A2AError::InternalError(format!(
+                        "A2A subscriber missed {skipped} events. Fetch the task snapshot and reconnect."
+                    ))),
+                    None,
+                )),
             }
         });
-
         Ok(Box::pin(stream))
     }
 
@@ -126,55 +144,8 @@ impl A2AStreamingHandler for StreamHub {
         task_id: &str,
         update: TaskStatusUpdateEvent,
     ) -> A2AResult<()> {
-        // Fan out to push-notification webhooks before moving `update` into the
-        // SSE channel. Spawned fire-and-forget so a slow or unreachable webhook
-        // never stalls SSE delivery or the calling bridge.
-        if let Some(notification) = self.notification.clone() {
-            let task_id_owned = task_id.to_string();
-            let event = update.clone();
-            tokio::spawn(async move {
-                notification
-                    .notify_status_update(&task_id_owned, &event)
-                    .await;
-            });
-        }
-        let sender = self.get_or_create_sender(task_id).await;
-        let is_terminal = update.is_final;
-        if sender.receiver_count() == 0 {
-            // No consumer is attached, so there is no `fold_stream` that could
-            // mis-evaluate the outcome and no subscriber to miss the event.
-            // The push-notification fan-out above already happened. This is
-            // the normal shape of a synchronous `message/send`: the caller
-            // gets the finished task in the response instead of a stream.
-            tracing::debug!(task_id, "broadcast_status: no live subscribers");
-            return Ok(());
-        }
-        match sender.send(UpdateEvent::StatusUpdate(update)) {
-            Ok(_n) => {}
-            Err(tokio::sync::broadcast::error::SendError(_event)) => {
-                if is_terminal {
-                    // A terminal event that every subscriber lagged past
-                    // silently turns `fold_stream`'s `success=true` predicate
-                    // into `success=false` — the caller sees a "successful"
-                    // task marked failed. Log loudly so this is at least
-                    // diagnosable, and return Err so the bridge can choose to
-                    // persist the terminal state for late subscribers.
-                    tracing::error!(
-                        task_id = %task_id,
-                        "broadcast_status: terminal event dropped (all subscribers lagged); \
-                         downstream SSE consumers will see the task as not-finished"
-                    );
-                    return Err(A2AError::InternalError(format!(
-                        "terminal event for task {task_id} dropped: all subscribers lagged"
-                    )));
-                } else {
-                    tracing::debug!(
-                        task_id = %task_id,
-                        "broadcast_status: non-terminal event dropped (all subscribers lagged)"
-                    );
-                }
-            }
-        }
+        self.publish(task_id, UpdateEvent::StatusUpdate(update))
+            .await;
         Ok(())
     }
 
@@ -188,31 +159,8 @@ impl A2AStreamingHandler for StreamHub {
         task_id: &str,
         event: TaskArtifactUpdateEvent,
     ) -> A2AResult<()> {
-        // Same shape as `broadcast_status`: the webhook fan-out happens first
-        // (fire-and-forget) and the SSE channel carries the event to whoever
-        // is attached to the task's stream.
-        if let Some(notification) = self.notification.clone() {
-            let task_id_owned = task_id.to_string();
-            let event = event.clone();
-            tokio::spawn(async move {
-                notification
-                    .notify_artifact_update(&task_id_owned, &event)
-                    .await;
-            });
-        }
-        let sender = self.get_or_create_sender(task_id).await;
-        if sender.receiver_count() == 0 {
-            tracing::debug!(task_id, "broadcast_artifact: no live subscribers");
-            return Ok(());
-        }
-        if let Err(tokio::sync::broadcast::error::SendError(_event)) =
-            sender.send(UpdateEvent::ArtifactUpdate(event))
-        {
-            tracing::debug!(
-                task_id,
-                "broadcast_artifact: artifact event dropped (all subscribers lagged)"
-            );
-        }
+        self.publish(task_id, UpdateEvent::ArtifactUpdate(event))
+            .await;
         Ok(())
     }
 }
@@ -223,6 +171,23 @@ mod tests {
     use crate::a2a::domain::task::{TaskState, TaskStatus};
     use chrono::Utc;
     use tokio_stream::StreamExt;
+
+    #[tokio::test]
+    async fn lagging_observer_gets_an_error_and_closes() {
+        let hub = StreamHub::with_capacity(1);
+        let mut stream = hub.subscribe_all("slow").await.unwrap();
+        for state in [TaskState::Working, TaskState::Completed] {
+            hub.broadcast_status(
+                "slow",
+                make_status_event("slow", state, state.is_terminal()),
+            )
+            .await
+            .unwrap();
+        }
+        let error = stream.next().await.unwrap().unwrap_err();
+        assert!(error.to_string().contains("Fetch the task snapshot"));
+        assert!(stream.next().await.is_none());
+    }
 
     fn make_status_event(task_id: &str, state: TaskState, is_final: bool) -> TaskStatusUpdateEvent {
         TaskStatusUpdateEvent {
@@ -334,7 +299,10 @@ mod tests {
         use crate::sync_primitives::Arc;
         // No push config registered → notify_* is a cheap no-op (no webhook
         // POST), so this exercises the fan-out path without network access.
-        let hub = StreamHub::with_notification(Arc::new(NotificationService::new()));
+        let hub = StreamHub::with_notification(
+            Arc::new(TaskStore::new()),
+            Arc::new(NotificationService::new()),
+        );
         let mut stream = hub.subscribe_all("task-1").await.unwrap();
 
         let event = make_status_event("task-1", TaskState::Completed, true);

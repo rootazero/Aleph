@@ -12,27 +12,30 @@ use axum::routing::{get, post};
 use axum::Router;
 use futures::StreamExt;
 
+use crate::a2a::adapter::wire;
 use crate::a2a::domain::security::Credentials;
 use crate::a2a::domain::{AgentCard, UpdateEvent};
 use crate::a2a::port::authenticator::{A2AAuthContext, A2AAuthPrincipal};
 
 use super::request_processor::{
-    apply_inline_push_config, A2ARequestProcessor, A2AServerState, JsonRpcRequest, JsonRpcResponse,
+    A2ARequestProcessor, A2AServerState, JsonRpcRequest, JsonRpcResponse,
 };
 
-/// Build the axum router for A2A endpoints.
+/// Mount the standard discovery document and JSON-RPC/SSE binding, as well as
+/// the compatibility card and request routes.
 ///
-/// Provides three routes:
-/// - `GET /.well-known/agent-card.json` — agent card discovery
-/// - `POST /a2a` — synchronous JSON-RPC dispatch
-/// - `POST /a2a/stream` — streaming JSON-RPC via SSE
-///
-/// Note: The server must be started with `.into_make_service_with_connect_info::<SocketAddr>()`
-/// to support `ConnectInfo<SocketAddr>`. If `ConnectInfo` is not available, a fallback
-/// address (127.0.0.1:0) is used.
+/// Production listeners supply `ConnectInfo<SocketAddr>`. The extractor uses a
+/// non-loopback fallback when the caller has no verified socket address.
 pub fn a2a_routes(state: Arc<A2AServerState>) -> Router {
     Router::new()
         .route("/.well-known/agent-card.json", get(agent_card_handler))
+        .route("/a2a/rpc", post(super::standard::handler))
+        .route(
+            "/a2a/legacy/.well-known/agent-card.json",
+            get(legacy_card_handler),
+        )
+        .route("/a2a/legacy/a2a", post(a2a_handler))
+        .route("/a2a/legacy/a2a/stream", post(a2a_stream_handler))
         .route("/a2a", post(a2a_handler))
         .route("/a2a/stream", post(a2a_stream_handler))
         .with_state(state)
@@ -41,7 +44,15 @@ pub fn a2a_routes(state: Arc<A2AServerState>) -> Router {
 // --- Handlers ---
 
 /// GET /.well-known/agent-card.json — return the agent card
-async fn agent_card_handler(State(state): State<Arc<A2AServerState>>) -> Json<AgentCard> {
+async fn agent_card_handler(State(state): State<Arc<A2AServerState>>) -> Json<serde_json::Value> {
+    let endpoint = state.card.interfaces.first().map_or_else(
+        || "/a2a/rpc".to_owned(),
+        |interface| format!("{}/rpc", interface.url),
+    );
+    Json(wire::agent_card(&state.card, &endpoint))
+}
+
+async fn legacy_card_handler(State(state): State<Arc<A2AServerState>>) -> Json<AgentCard> {
     Json(state.card.clone())
 }
 
@@ -129,59 +140,16 @@ async fn stream_message_send(
         return resp;
     }
 
-    // Extract message params
-    let message: crate::a2a::domain::A2AMessage = match serde_json::from_value(
-        request
-            .params
-            .get("message")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null),
-    ) {
-        Ok(m) => m,
-        Err(e) => {
-            return sse_error(JsonRpcResponse::error(
-                request.id.clone(),
-                -32602,
-                &format!("Invalid params: missing or invalid 'message': {e}"),
-            ));
-        }
+    let (claim, message) = match state
+        .claim_legacy_message(&principal, &request.params)
+        .await
+    {
+        Ok(send) => send,
+        Err(e) => return sse_error(JsonRpcResponse::from_a2a_error(request.id, &e)),
     };
-
-    // Enforce the same File-part invariant the sync path checks: a peer must
-    // not send a File part carrying both `bytes`/`uri` or neither. Without this
-    // the streaming endpoint accepted malformed parts the sync path rejects.
-    for part in &message.parts {
-        if let crate::a2a::domain::Part::File { file, .. } = part {
-            if let Err(e) = file.validate() {
-                return sse_error(JsonRpcResponse::error(
-                    request.id.clone(),
-                    -32602,
-                    &format!("Invalid params: {e}"),
-                ));
-            }
-        }
-    }
-
-    let task_id = request
-        .params
-        .get("taskId")
-        .and_then(|v| v.as_str())
-        .map_or_else(|| uuid::Uuid::new_v4().to_string(), String::from);
-
-    if let Err(e) = apply_inline_push_config(&state.notification, &request.params, &task_id).await {
-        return sse_error(JsonRpcResponse::from_a2a_error(request.id.clone(), &e));
-    }
-
-    let session_id = request
-        .params
-        .get("sessionId")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-
-    // Get the update stream from the message handler
     let update_stream = match state
         .message_handler
-        .handle_message_stream(&task_id, message, session_id.as_deref())
+        .handle_message_stream(claim, message)
         .await
     {
         Ok(stream) => stream,
@@ -193,13 +161,7 @@ async fn stream_message_send(
     sse_from_update_stream(request.id, update_stream)
 }
 
-/// `tasks/resubscribe` over SSE — re-attach to a running task's event stream.
-///
-/// Connects the caller to the shared broadcast hub for the task so it can
-/// resume receiving status/artifact updates after a dropped connection. The
-/// hub channel exists only while the task is in flight; resubscribing to an
-/// already-finished (and cleaned-up) task yields an idle stream that the client
-/// closes itself. Mirrors the A2A `tasks/resubscribe` method (params `{ id }`).
+/// `tasks/resubscribe` observes the retained task or attaches during execution.
 async fn stream_resubscribe(
     state: Arc<A2AServerState>,
     principal: A2AAuthPrincipal,
@@ -221,26 +183,30 @@ async fn stream_resubscribe(
         }
     };
 
-    // `subscribe_all` creates a hub channel for ANY id, so an unchecked id
-    // allocates a channel that is never cleaned up and holds an SSE response
-    // open for a task that does not exist. Only re-attach to a task the
-    // server actually knows about.
-    if state.task_manager.get_task(&task_id, None).await.is_err() {
-        return sse_error(JsonRpcResponse::error(
-            request.id.clone(),
-            -32001,
-            "Task not found",
-        ));
-    }
-
-    let update_stream = match state.streaming.subscribe_all(&task_id).await {
-        Ok(stream) => stream,
-        Err(e) => {
-            return sse_error(JsonRpcResponse::from_a2a_error(request.id.clone(), &e));
-        }
+    let (snapshot, live) = match state
+        .task_manager
+        .observe_owned(
+            super::task_store::TaskScope::Legacy(principal.owner),
+            &task_id,
+            state.streaming.as_ref(),
+        )
+        .await
+    {
+        Ok(observation) => observation,
+        Err(e) => return sse_error(JsonRpcResponse::from_a2a_error(request.id, &e)),
     };
-
-    sse_from_update_stream(request.id, update_stream)
+    let updates = live.unwrap_or_else(|| {
+        let settled = crate::a2a::domain::TaskStatusUpdateEvent::new(
+            snapshot.id,
+            snapshot.context_id,
+            snapshot.status,
+            None,
+        );
+        Box::pin(futures::stream::once(async move {
+            Ok(UpdateEvent::StatusUpdate(settled))
+        }))
+    });
+    sse_from_update_stream(request.id, updates)
 }
 
 /// Authorize a streaming request, returning an SSE error response on denial.
@@ -329,7 +295,7 @@ fn update_event_frame(
 ///
 /// A serialization failure must not degrade into an empty payload: the
 /// client would silently see a frame with no content instead of an error.
-fn serialize_rpc_frame(response: &JsonRpcResponse) -> String {
+pub(super) fn serialize_rpc_frame(response: &JsonRpcResponse) -> String {
     match serde_json::to_string(response) {
         Ok(json) => json,
         Err(e) => {
@@ -374,7 +340,7 @@ fn sse_error(resp: JsonRpcResponse) -> axum::response::Response {
 /// successful parse is never a grant of permission; auth verification
 /// happens elsewhere. `x-api-key` is consulted only when no scheme matched,
 /// so the existing Bearer precedence over `x-api-key` is preserved.
-fn extract_credentials(headers: &HeaderMap) -> Credentials {
+pub(super) fn extract_credentials(headers: &HeaderMap) -> Credentials {
     if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         if let Some((scheme, token)) = auth.split_once(' ') {
             if scheme.eq_ignore_ascii_case("Bearer") {
@@ -389,10 +355,30 @@ fn extract_credentials(headers: &HeaderMap) -> Credentials {
 }
 
 /// Convert axum `HeaderMap` to a plain `HashMap`
-fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {
+pub(super) fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {
     headers
         .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_string())))
+        .filter_map(|(k, v)| {
+            // Retain header presence for the loopback and proxy checks even when
+            // the value is not valid text.
+            v.to_str()
+                .ok()
+                .map(|v| (k.to_string(), v.to_string()))
+                .or_else(|| {
+                    matches!(
+                        k.as_str(),
+                        "authorization"
+                            | "x-api-key"
+                            | "forwarded"
+                            | "x-forwarded-for"
+                            | "x-forwarded-host"
+                            | "x-forwarded-proto"
+                            | "x-real-ip"
+                            | "via"
+                    )
+                    .then(|| (k.to_string(), String::new()))
+                })
+        })
         .collect()
 }
 
@@ -413,7 +399,7 @@ fn fallback_addr() -> SocketAddr {
 /// the server is wired that way) and falls back to a non-loopback address when
 /// it is absent — e.g. a `oneshot` request in tests. This keeps the handlers
 /// infallible without granting localhost trust to remote callers.
-struct PeerAddr(SocketAddr);
+pub(super) struct PeerAddr(pub(super) SocketAddr);
 
 impl<S> FromRequestParts<S> for PeerAddr
 where
@@ -700,10 +686,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&data).unwrap();
         assert!(json.get("result").is_none());
         assert_eq!(json["error"]["code"], -32001);
-        assert!(json["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("missing"));
+        assert_eq!(json["error"]["message"], "Task not found");
     }
 
     use std::pin::Pin;
@@ -712,14 +695,15 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::a2a::adapter::server::request_processor::A2AServerState;
+    use crate::a2a::adapter::server::{task_store::TaskClaim, TaskStore};
     use crate::a2a::domain::security::TrustLevel;
-    use crate::a2a::domain::{A2AMessage, ListTasksParams, ListTasksResult, SecurityScheme};
+    use crate::a2a::domain::{A2AMessage, SecurityScheme};
     use crate::a2a::port::authenticator::{
         A2AAction, A2AAuthContext, A2AAuthPrincipal, A2AAuthenticator,
     };
     use crate::a2a::port::message_handler::A2AMessageHandler;
     use crate::a2a::port::streaming::A2AStreamingHandler;
-    use crate::a2a::port::task_manager::{A2AResult, A2ATaskManager};
+    use crate::a2a::port::task_manager::A2AResult;
     use crate::a2a::service::notification::NotificationService;
 
     struct AllowAllAuth;
@@ -728,7 +712,7 @@ mod tests {
     impl A2AAuthenticator for AllowAllAuth {
         async fn authenticate(&self, _context: &A2AAuthContext) -> A2AResult<A2AAuthPrincipal> {
             Ok(A2AAuthPrincipal {
-                agent_id: None,
+                owner: crate::a2a::port::authenticator::TaskOwner::Loopback,
                 trust_level: TrustLevel::Local,
                 permissions: vec!["*".to_string()],
             })
@@ -747,69 +731,22 @@ mod tests {
         }
     }
 
-    struct StubTaskManager;
-
-    #[async_trait::async_trait]
-    impl A2ATaskManager for StubTaskManager {
-        async fn create_task(
-            &self,
-            task_id: &str,
-            context_id: &str,
-        ) -> A2AResult<crate::a2a::domain::A2ATask> {
-            Ok(crate::a2a::domain::A2ATask::new(task_id, context_id))
-        }
-
-        async fn get_task(
-            &self,
-            task_id: &str,
-            _history_length: Option<usize>,
-        ) -> A2AResult<crate::a2a::domain::A2ATask> {
-            Ok(crate::a2a::domain::A2ATask::new(task_id, "ctx-default"))
-        }
-
-        async fn update_status(
-            &self,
-            task_id: &str,
-            _state: TaskState,
-            _message: Option<A2AMessage>,
-        ) -> A2AResult<crate::a2a::domain::A2ATask> {
-            Ok(crate::a2a::domain::A2ATask::new(task_id, "ctx-default"))
-        }
-
-        async fn cancel_task(&self, task_id: &str) -> A2AResult<crate::a2a::domain::A2ATask> {
-            Ok(crate::a2a::domain::A2ATask::new(task_id, "ctx-default"))
-        }
-
-        async fn list_tasks(&self, _params: ListTasksParams) -> A2AResult<ListTasksResult> {
-            Ok(ListTasksResult {
-                tasks: vec![],
-                next_cursor: None,
-            })
-        }
-
-        async fn add_artifact(&self, _task_id: &str, _artifact: Artifact) -> A2AResult<()> {
-            Ok(())
-        }
-    }
-
     struct StubMessageHandler;
 
     #[async_trait::async_trait]
     impl A2AMessageHandler for StubMessageHandler {
         async fn handle_message(
             &self,
-            task_id: &str,
+            claim: TaskClaim,
             _message: A2AMessage,
-            _session_id: Option<&str>,
         ) -> A2AResult<crate::a2a::domain::A2ATask> {
-            Ok(crate::a2a::domain::A2ATask::new(task_id, "ctx-msg"))
+            Ok(claim.task)
         }
 
         async fn handle_message_stream(
             &self,
-            _task_id: &str,
+            _claim: TaskClaim,
             _message: A2AMessage,
-            _session_id: Option<&str>,
         ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<crate::a2a::domain::UpdateEvent>> + Send>>>
         {
             Ok(Box::pin(futures::stream::empty()))
@@ -839,7 +776,7 @@ mod tests {
 
     fn build_test_state() -> std::sync::Arc<A2AServerState> {
         std::sync::Arc::new(A2AServerState {
-            task_manager: std::sync::Arc::new(StubTaskManager),
+            task_manager: std::sync::Arc::new(TaskStore::new()),
             message_handler: std::sync::Arc::new(StubMessageHandler),
             streaming: std::sync::Arc::new(StubStreamingHandler),
             authenticator: std::sync::Arc::new(AllowAllAuth),
@@ -918,8 +855,8 @@ mod tests {
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
         let stored = state
-            .notification
-            .get_config("task-stream-push-1")
+            .task_manager
+            .get_owned_push_config(crate::a2a::port::TaskOwner::Loopback, "task-stream-push-1")
             .await
             .expect("get_config should not error")
             .expect("push config should be registered for streamed task");
@@ -948,8 +885,8 @@ mod tests {
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
         let stored = state
-            .notification
-            .get_config("task-stream-nopush")
+            .task_manager
+            .get_owned_push_config(crate::a2a::port::TaskOwner::Loopback, "task-stream-nopush")
             .await
             .expect("get_config should not error");
         assert!(stored.is_none(), "no push config must be stored");

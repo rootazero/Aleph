@@ -18,6 +18,7 @@ pub struct ChatRunCancellation {
     token: tokio_util::sync::CancellationToken,
     state: Arc<std::sync::Mutex<ChatRunCancellationState>>,
     inline_settled: Arc<tokio::sync::Notify>,
+    remote_clarification: bool,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -25,6 +26,7 @@ enum ChatRunCancellationState {
     #[default]
     Open,
     Requested,
+    ClarificationRequested(String),
     Inline {
         stop_requested: bool,
     },
@@ -42,6 +44,39 @@ pub(crate) struct ChatRunStopUndecided;
 const INLINE_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl ChatRunCancellation {
+    pub(crate) fn for_remote_task() -> Self {
+        Self {
+            remote_clarification: true,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn allows_remote_clarification(&self) -> bool {
+        self.remote_clarification
+    }
+
+    /// Claim the stop boundary for clarification. A caller cancellation and a
+    /// clarification can never both win this boundary.
+    pub(crate) fn request_clarification(&self, question: String) -> Result<(), ExecutionError> {
+        let mut state = self.state.lock().unwrap();
+        if !self.remote_clarification
+            || *state != ChatRunCancellationState::Open
+            || self.token.is_cancelled()
+        {
+            return Err(ExecutionError::Cancelled);
+        }
+        *state = ChatRunCancellationState::ClarificationRequested(question);
+        self.token.cancel();
+        Ok(())
+    }
+
+    pub(crate) fn clarification(&self) -> Option<String> {
+        match &*self.state.lock().unwrap() {
+            ChatRunCancellationState::ClarificationRequested(question) => Some(question.clone()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn token(&self) -> tokio_util::sync::CancellationToken {
         self.token.clone()
     }
@@ -122,6 +157,9 @@ impl ChatRunCancellation {
                 return result
             }
             ChatRunCancellationState::Requested => true,
+            ChatRunCancellationState::ClarificationRequested(_) => {
+                return Err(ExecutionError::Cancelled);
+            }
             ChatRunCancellationState::Finished { requested } => requested,
         };
         *state = ChatRunCancellationState::Finished { requested };

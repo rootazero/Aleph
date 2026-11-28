@@ -1,21 +1,8 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
-use crate::a2a::domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
+use crate::a2a::domain::{A2AError, UpdateEvent};
 use crate::a2a::port::A2AResult;
 use crate::security::ssrf::{validate_url_with_pinned, SsrfPolicy};
-use crate::sync_primitives::AsyncRwLock;
-
-/// Maximum number of push-notification configs held at once.
-///
-/// A config is keyed by a caller-supplied task id and holds a webhook URL
-/// that the server will later call, so an authorized peer could otherwise
-/// grow the map without bound by registering a fresh task id per call. The
-/// cap keeps the resident set bounded; registering a *new* task id is
-/// refused once the cap is reached (overwriting an existing task's config
-/// does not grow the map and stays allowed).
-const MAX_PUSH_CONFIGS: usize = 1_024;
 
 /// Configuration for push notifications on a task
 #[derive(Clone, Serialize, Deserialize)]
@@ -40,13 +27,8 @@ impl std::fmt::Debug for PushNotificationConfig {
     }
 }
 
-/// Push notification service — manages webhook configs and fires notifications
-///
-/// The outbound-host policy applied to webhook URLs is configurable through
-/// [`NotificationService::with_ssrf_policy`]. See that constructor for why
-/// the default constructor is not equivalent to it.
+/// Validates and delivers callbacks owned by the task store.
 pub struct NotificationService {
-    configs: AsyncRwLock<HashMap<String, PushNotificationConfig>>,
     ssrf_policy: SsrfPolicy,
 }
 
@@ -67,30 +49,17 @@ impl NotificationService {
             "A2A push notifications are using the default SSRF policy — the operator webhook SSRF policy is NOT applied on this path. Wire NotificationService::with_ssrf_policy(...) to honour it."
         );
         Self {
-            configs: AsyncRwLock::new(HashMap::new()),
             ssrf_policy: SsrfPolicy::default(),
         }
     }
 
-    /// Construct with an explicit outbound-host policy (the operator's
-    /// `webhook_ssrf_policy`).
-    ///
-    /// The policy is applied both when a webhook URL is accepted
-    /// ([`NotificationService::set_config`]) and when the webhook is
-    /// delivered, so an operator allow-list is enforced end to end.
+    /// Apply the operator's outbound policy at registration and delivery.
     #[must_use]
     pub fn with_ssrf_policy(ssrf_policy: SsrfPolicy) -> Self {
-        Self {
-            configs: AsyncRwLock::new(HashMap::new()),
-            ssrf_policy,
-        }
+        Self { ssrf_policy }
     }
 
-    /// Store or overwrite a push notification config for a task
-    pub async fn set_config(
-        &self,
-        config: PushNotificationConfig,
-    ) -> A2AResult<PushNotificationConfig> {
+    pub(crate) async fn validate_config(&self, config: &PushNotificationConfig) -> A2AResult<()> {
         // A webhook target is delivered over HTTP, so anything else is a mistake
         // at best and an SSRF-via-alternate-scheme vector at worst
         // (`ftp://internal/…`, `gopher://internal:6379/…`). Screened here rather
@@ -125,90 +94,20 @@ impl NotificationService {
                 A2AError::InvalidParams(format!(
                     "pushNotificationConfig.url rejected by SSRF policy: {e}"
                 ))
-            })?;
-
-        let mut configs = self.configs.write().await;
-        // Refuse a *new* task id once the store is full: overwriting an
-        // existing task's config does not grow the map and stays allowed.
-        // Without this guard an authorized peer grows the map without bound
-        // by registering a fresh task id per call.
-        if !configs.contains_key(&config.task_id) && configs.len() >= MAX_PUSH_CONFIGS {
-            tracing::warn!(
-                task_id = %config.task_id,
-                limit = MAX_PUSH_CONFIGS,
-                "Refusing push notification config — push notification config store is at capacity"
-            );
-            return Err(A2AError::InvalidRequest(
-                "push notification config store is at capacity; delete an existing config to free a slot or retry later".to_string(),
-            ));
-        }
-        configs.insert(config.task_id.clone(), config.clone());
-        Ok(config)
+            })
     }
 
-    /// Retrieve the push notification config for a task, if any
-    pub async fn get_config(&self, task_id: &str) -> A2AResult<Option<PushNotificationConfig>> {
-        let configs = self.configs.read().await;
-        Ok(configs.get(task_id).cloned())
-    }
-
-    /// Remove the push notification config for a task
-    pub async fn delete_config(&self, task_id: &str) -> A2AResult<()> {
-        let mut configs = self.configs.write().await;
-        configs.remove(task_id);
-        Ok(())
-    }
-
-    /// List all registered push notification configs
-    pub async fn list_configs(&self) -> A2AResult<Vec<PushNotificationConfig>> {
-        let configs = self.configs.read().await;
-        let mut result: Vec<_> = configs.values().cloned().collect();
-        result.sort_by(|a, b| a.task_id.cmp(&b.task_id));
-        Ok(result)
-    }
-
-    /// Send push notification for a status update
-    pub async fn notify_status_update(&self, task_id: &str, event: &TaskStatusUpdateEvent) {
-        let config = {
-            let configs = self.configs.read().await;
-            configs.get(task_id).cloned()
+    pub(crate) async fn notify(&self, config: PushNotificationConfig, event: UpdateEvent) {
+        let (event_type, data) = match event {
+            UpdateEvent::StatusUpdate(update) => ("status-update", serde_json::json!(update)),
+            UpdateEvent::ArtifactUpdate(update) => ("artifact-update", serde_json::json!(update)),
         };
-
-        if let Some(config) = config {
-            if config.events.is_empty() || config.events.iter().any(|e| e == "status-update") {
-                self.send_webhook(
-                    &config,
-                    &serde_json::json!({
-                        "type": "status-update",
-                        "data": event,
-                    }),
-                )
-                .await;
-            }
-        }
-    }
-
-    /// Send push notification for an artifact update.
-    ///
-    /// Only tasks whose push config asked for `artifact-update` (or did not
-    /// narrow the list at all) are notified.
-    pub async fn notify_artifact_update(&self, task_id: &str, event: &TaskArtifactUpdateEvent) {
-        let config = {
-            let configs = self.configs.read().await;
-            configs.get(task_id).cloned()
-        };
-
-        if let Some(config) = config {
-            if config.events.is_empty() || config.events.iter().any(|e| e == "artifact-update") {
-                self.send_webhook(
-                    &config,
-                    &serde_json::json!({
-                        "type": "artifact-update",
-                        "data": event,
-                    }),
-                )
-                .await;
-            }
+        if config.events.is_empty() || config.events.iter().any(|e| e == event_type) {
+            self.send_webhook(
+                &config,
+                &serde_json::json!({"type": event_type, "data": data}),
+            )
+            .await;
         }
     }
 
@@ -289,81 +188,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn set_and_get_config() {
-        let svc = NotificationService::new();
-        let config = make_config("task-1", vec!["status-update"]);
-
-        let result = svc.set_config(config.clone()).await.unwrap();
-        assert_eq!(result.task_id, "task-1");
-        assert_eq!(result.url, "https://8.8.8.8/webhook");
-
-        let fetched = svc.get_config("task-1").await.unwrap().unwrap();
-        assert_eq!(fetched.task_id, "task-1");
-        assert_eq!(fetched.events, vec!["status-update"]);
-        assert_eq!(fetched.token, Some("test-token".to_string()));
-    }
-
-    #[tokio::test]
-    async fn get_nonexistent_returns_none() {
-        let svc = NotificationService::new();
-        let result = svc.get_config("no-such-task").await.unwrap();
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn delete_config_removes_entry() {
-        let svc = NotificationService::new();
-        svc.set_config(make_config("task-1", vec![])).await.unwrap();
-
-        svc.delete_config("task-1").await.unwrap();
-        assert!(svc.get_config("task-1").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn delete_nonexistent_is_ok() {
-        let svc = NotificationService::new();
-        // Should not error
-        svc.delete_config("ghost").await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn list_configs_returns_all() {
-        let svc = NotificationService::new();
-        svc.set_config(make_config("task-1", vec!["status-update"]))
-            .await
-            .unwrap();
-        svc.set_config(make_config("task-2", vec!["artifact-update"]))
-            .await
-            .unwrap();
-
-        let configs = svc.list_configs().await.unwrap();
-        assert_eq!(configs.len(), 2);
-        assert_eq!(configs[0].task_id, "task-1");
-        assert_eq!(configs[1].task_id, "task-2");
-    }
-
-    #[tokio::test]
-    async fn set_config_overwrites_previous() {
-        let svc = NotificationService::new();
-        svc.set_config(make_config("task-1", vec!["status-update"]))
-            .await
-            .unwrap();
-
-        let updated = PushNotificationConfig {
-            task_id: "task-1".to_string(),
-            url: "https://1.1.1.1/hook".to_string(),
-            token: None,
-            events: vec!["artifact-update".to_string()],
-        };
-        svc.set_config(updated).await.unwrap();
-
-        let fetched = svc.get_config("task-1").await.unwrap().unwrap();
-        assert_eq!(fetched.url, "https://1.1.1.1/hook");
-        assert!(fetched.token.is_none());
-        assert_eq!(fetched.events, vec!["artifact-update"]);
-    }
-
     #[test]
     fn push_notification_config_serde_roundtrip() {
         let config = make_config("task-1", vec!["status-update", "artifact-update"]);
@@ -399,10 +223,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_config_rejects_non_http_scheme() {
+    async fn validate_config_rejects_non_http_scheme() {
         let svc = NotificationService::new();
         let err = svc
-            .set_config(config_with_url("t1", "ftp://example.com/webhook"))
+            .validate_config(&config_with_url("t1", "ftp://example.com/webhook"))
             .await
             .expect_err("non-http scheme must be rejected");
         match err {
@@ -412,10 +236,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_config_rejects_file_scheme() {
+    async fn validate_config_rejects_file_scheme() {
         let svc = NotificationService::new();
         let err = svc
-            .set_config(config_with_url("t1", "file:///etc/passwd"))
+            .validate_config(&config_with_url("t1", "file:///etc/passwd"))
             .await
             .expect_err("file scheme must be rejected");
         assert!(matches!(
@@ -430,10 +254,10 @@ mod tests {
     // the decision needs no DNS and the tests stay hermetic.
 
     #[tokio::test]
-    async fn set_config_rejects_loopback_ip() {
+    async fn validate_config_rejects_loopback_ip() {
         let svc = NotificationService::new();
         let err = svc
-            .set_config(config_with_url("t1", "http://127.0.0.1/hook"))
+            .validate_config(&config_with_url("t1", "http://127.0.0.1/hook"))
             .await
             .expect_err("loopback IP must be rejected");
         assert!(matches!(
@@ -443,10 +267,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_config_rejects_localhost_hostname() {
+    async fn validate_config_rejects_localhost_hostname() {
         let svc = NotificationService::new();
         let err = svc
-            .set_config(config_with_url("t1", "http://localhost/hook"))
+            .validate_config(&config_with_url("t1", "http://localhost/hook"))
             .await
             .expect_err("localhost hostname must be rejected");
         assert!(matches!(
@@ -456,10 +280,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_config_rejects_metadata_endpoint() {
+    async fn validate_config_rejects_metadata_endpoint() {
         let svc = NotificationService::new();
         let err = svc
-            .set_config(config_with_url(
+            .validate_config(&config_with_url(
                 "t1",
                 "http://169.254.169.254/latest/meta-data/",
             ))
@@ -472,10 +296,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_config_rejects_private_ip() {
+    async fn validate_config_rejects_private_ip() {
         let svc = NotificationService::new();
         let err = svc
-            .set_config(config_with_url("t1", "http://10.0.0.1/hook"))
+            .validate_config(&config_with_url("t1", "http://10.0.0.1/hook"))
             .await
             .expect_err("private 10.0.0.0/8 IP must be rejected");
         assert!(matches!(
@@ -484,7 +308,7 @@ mod tests {
         ));
 
         let err = svc
-            .set_config(config_with_url("t2", "http://192.168.1.1/hook"))
+            .validate_config(&config_with_url("t2", "http://192.168.1.1/hook"))
             .await
             .expect_err("private 192.168.0.0/16 IP must be rejected");
         assert!(matches!(
@@ -494,10 +318,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_config_rejects_link_local_ip() {
+    async fn validate_config_rejects_link_local_ip() {
         let svc = NotificationService::new();
         let err = svc
-            .set_config(config_with_url("t1", "http://169.254.1.1/hook"))
+            .validate_config(&config_with_url("t1", "http://169.254.1.1/hook"))
             .await
             .expect_err("link-local IP must be rejected");
         assert!(matches!(
@@ -507,10 +331,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_config_rejects_url_with_credentials() {
+    async fn validate_config_rejects_url_with_credentials() {
         let svc = NotificationService::new();
         let err = svc
-            .set_config(config_with_url("t1", "https://user:pass@example.com/hook"))
+            .validate_config(&config_with_url("t1", "https://user:pass@example.com/hook"))
             .await
             .expect_err("URL with embedded credentials must be rejected");
         assert!(matches!(
@@ -520,23 +344,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_config_accepts_public_https() {
+    async fn validate_config_accepts_public_https() {
         let svc = NotificationService::new();
         let result = svc
-            .set_config(config_with_url("t1", "https://8.8.8.8/hook"))
+            .validate_config(&config_with_url("t1", "https://8.8.8.8/hook"))
             .await;
         assert!(
             result.is_ok(),
             "public HTTPS URL must be accepted, got: {:?}",
             result
         );
-        let stored = svc.get_config("t1").await.unwrap().unwrap();
-        assert_eq!(stored.url, "https://8.8.8.8/hook");
     }
 
     #[tokio::test]
     async fn send_webhook_blocks_private_ip_destination() {
-        use crate::a2a::domain::TaskState;
+        use crate::a2a::domain::{TaskState, TaskStatusUpdateEvent};
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -554,11 +376,6 @@ mod tests {
             token: None,
             events: vec![],
         };
-        {
-            let mut configs = svc.configs.write().await;
-            configs.insert("task-sendblock".to_string(), config);
-        }
-
         let event = TaskStatusUpdateEvent {
             task_id: "task-sendblock".to_string(),
             context_id: "ctx".to_string(),
@@ -570,9 +387,7 @@ mod tests {
             is_final: false,
             metadata: None,
         };
-        svc.notify_status_update("task-sendblock", &event).await;
-
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        svc.notify(config, UpdateEvent::StatusUpdate(event)).await;
 
         let received = server
             .received_requests()
@@ -585,57 +400,14 @@ mod tests {
         );
     }
 
-    // Capacity guard: a caller-supplied task id must not be able to grow the
-    // config map without bound. The store is seeded directly here — the guard
-    // is what is under test, not the SSRF validation, and 1k+ URL validations
-    // would make the test slow.
-
     #[tokio::test]
-    async fn set_config_refuses_new_task_when_store_is_at_capacity() {
-        let svc = NotificationService::new();
-        {
-            let mut configs = svc.configs.write().await;
-            for i in 0..MAX_PUSH_CONFIGS {
-                configs.insert(
-                    format!("seed-{i}"),
-                    PushNotificationConfig {
-                        task_id: format!("seed-{i}"),
-                        url: "https://8.8.8.8/hook".to_string(),
-                        token: None,
-                        events: vec![],
-                    },
-                );
-            }
-        }
-
-        let err = svc
-            .set_config(config_with_url("overflow", "https://8.8.8.8/hook"))
-            .await
-            .expect_err("a new task id must be refused once the store is full");
-        assert!(matches!(
-            err,
-            crate::a2a::domain::A2AError::InvalidRequest(_)
-        ));
-
-        // Overwriting an existing task's config does not grow the map and
-        // must stay allowed.
-        let ok = svc
-            .set_config(config_with_url("seed-0", "https://8.8.8.8/hook"))
-            .await;
-        assert!(
-            ok.is_ok(),
-            "overwrite at capacity must stay allowed, got: {ok:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn set_config_applies_operator_ssrf_policy() {
+    async fn validate_config_applies_operator_ssrf_policy() {
         let svc = NotificationService::with_ssrf_policy(SsrfPolicy {
             blocked_hosts: vec!["blocked.example.com".to_string()],
             ..SsrfPolicy::default()
         });
         let err = svc
-            .set_config(config_with_url("t1", "https://blocked.example.com/hook"))
+            .validate_config(&config_with_url("t1", "https://blocked.example.com/hook"))
             .await
             .expect_err("operator-blocked host must be rejected");
         assert!(matches!(

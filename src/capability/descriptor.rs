@@ -124,6 +124,15 @@ pub struct ProjectionMetadata {
     /// `None`. Consumers must not read this field as a live projection
     /// marker.
     pub surface: Option<String>,
+    /// Reachability supplied by a live source, when that source measures it.
+    pub health: Option<CapabilityHealth>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityHealth {
+    Healthy,
+    Degraded,
+    Unreachable,
 }
 
 /// The unified, kind-agnostic capability descriptor.

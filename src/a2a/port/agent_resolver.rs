@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use url::Url;
+use uuid::Uuid;
 
-use crate::a2a::domain::{AgentCard, TrustLevel};
+use crate::a2a::domain::{A2AError, AgentCard, TrustLevel};
 
 use super::task_manager::A2AResult;
 
@@ -12,6 +14,74 @@ pub enum AgentHealth {
     Healthy,
     Degraded,
     Unreachable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RpcProtocol {
+    Legacy,
+    V03,
+    V1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedEndpoint {
+    url: Url,
+    protocol: RpcProtocol,
+    streaming: bool,
+}
+
+impl ResolvedEndpoint {
+    pub fn url(&self) -> &Url {
+        &self.url
+    }
+
+    pub fn protocol(&self) -> RpcProtocol {
+        self.protocol
+    }
+
+    pub fn streaming(&self) -> bool {
+        self.streaming
+    }
+
+    pub(crate) fn new(url: Url, protocol: RpcProtocol, streaming: bool) -> Self {
+        Self {
+            url,
+            protocol,
+            streaming,
+        }
+    }
+}
+
+pub(crate) fn legacy_endpoint(base: &str, streaming: bool) -> A2AResult<ResolvedEndpoint> {
+    let base = http_url(base)?;
+    let suffix = if streaming { "a2a/stream" } else { "a2a" };
+    Ok(ResolvedEndpoint::new(
+        append_path(&base, suffix),
+        RpcProtocol::Legacy,
+        streaming,
+    ))
+}
+
+pub(crate) fn http_url(raw: &str) -> A2AResult<Url> {
+    let url = Url::parse(raw).map_err(|e| A2AError::InvalidParams(e.to_string()))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(A2AError::InvalidParams(
+            "A2A URLs require HTTP(S) and a host, with no credentials or fragment".into(),
+        ));
+    }
+    Ok(url)
+}
+
+pub(crate) fn append_path(base: &Url, suffix: &str) -> Url {
+    let mut url = base.clone();
+    url.set_path(&format!("{}/{}", base.path().trim_end_matches('/'), suffix));
+    url.set_query(None);
+    url
 }
 
 /// A registered remote agent with metadata
@@ -29,8 +99,16 @@ pub struct RegisteredAgent {
     /// trusted callers). Public-field access is intentionally avoided to
     /// prevent accidental leakage via `{:?}` or `serde_json::to_string`.
     /// See A2A-R3-21.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing)]
     auth_token: Option<String>,
+    #[serde(skip)]
+    endpoint: Option<ResolvedEndpoint>,
+    #[serde(skip)]
+    pinned_rpc_url: Option<String>,
+    #[serde(skip, default = "Uuid::new_v4")]
+    snapshot_generation: Uuid,
+    #[serde(skip, default = "Uuid::new_v4")]
+    invocation_generation: Uuid,
 }
 
 impl std::fmt::Debug for RegisteredAgent {
@@ -41,6 +119,7 @@ impl std::fmt::Debug for RegisteredAgent {
             .field("base_url", &self.base_url)
             .field("last_seen", &self.last_seen)
             .field("health", &self.health)
+            .field("endpoint", &self.endpoint)
             .field(
                 "auth_token",
                 &self.auth_token.as_ref().map(|_| "<redacted>"),
@@ -59,6 +138,7 @@ impl RegisteredAgent {
         health: AgentHealth,
         auth_token: Option<String>,
     ) -> Self {
+        let endpoint = legacy_endpoint(&base_url, false).ok();
         Self {
             card,
             trust_level,
@@ -66,6 +146,48 @@ impl RegisteredAgent {
             last_seen,
             health,
             auth_token,
+            endpoint,
+            pinned_rpc_url: None,
+            snapshot_generation: Uuid::new_v4(),
+            invocation_generation: Uuid::new_v4(),
+        }
+    }
+
+    pub fn endpoint(&self) -> Option<&ResolvedEndpoint> {
+        self.endpoint.as_ref()
+    }
+
+    pub fn invocation_generation(&self) -> Uuid {
+        self.invocation_generation
+    }
+
+    pub(crate) fn snapshot_generation(&self) -> Uuid {
+        self.snapshot_generation
+    }
+
+    pub(crate) fn pinned_rpc_url(&self) -> Option<&str> {
+        self.pinned_rpc_url.as_deref()
+    }
+
+    pub(crate) fn with_discovery(mut self, pinned_rpc_url: Option<String>) -> Self {
+        self.endpoint = None;
+        self.pinned_rpc_url = pinned_rpc_url;
+        self
+    }
+
+    pub(crate) fn with_resolution(mut self, card: AgentCard, endpoint: ResolvedEndpoint) -> Self {
+        if self.card.id != card.id || self.endpoint.as_ref() != Some(&endpoint) {
+            self.invocation_generation = Uuid::new_v4();
+        }
+        self.card = card;
+        self.endpoint = Some(endpoint);
+        self
+    }
+
+    pub(crate) fn advance_snapshot(&mut self, invocation_changed: bool) {
+        self.snapshot_generation = Uuid::new_v4();
+        if invocation_changed {
+            self.invocation_generation = Uuid::new_v4();
         }
     }
 
