@@ -31,8 +31,9 @@ The probe reads the first task from SSE, closes the stream, waits for the mock
 provider to see the Core request, cancels via the SDK, and confirms the retained
 state with GetTask. A separate request makes the model call `ask_user` and
 checks that the task pauses with the question, rejects a different credential,
-and completes after a follow-up from the original credential. `KEEP=1` retains
-the config and logs under `$QA_ROOT`.
+and completes after a follow-up from the original credential. It also cancels
+another paused task using the original credential. `KEEP=1` retains the config
+and logs under `$QA_ROOT`.
 
 See [Agent-to-Agent](../../docs/reference/A2A.md) for the supported protocol and
 configuration.
