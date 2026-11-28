@@ -1364,6 +1364,14 @@ The dictionary below preserves round-specific implementation evidence and earlie
 - **代码锚点**：`src/extension/`——`loader.rs`、`plugin_ops.rs`、`src/discovery/`、`manifest/`、`hooks/`、`marketplace/`、`capability.rs`、`src/extension/types/plugins.rs`
 - **职责**：管理 Wasm/Mcp/Static 三类插件的发现/加载/注册，多源优先级（Config > Workspace > Global > Bundled）、热重载、风险扫描、marketplace 安装。
 - **状态**：✅ 已实现。**关键事实**：'plugins' 在代码里属于 **`src/extension/`**（plugin 是 extension 的一种 kind），不是独立的 plugins 源码目录。**硬化（2026-06-17）**：① WASM hook 执行已连线——`loader.rs::execute_hook` 不再返回 "not yet implemented"，而是复用 WASM runtime 的 `call_tool`（hook = 导出函数），`execute_plugin_hook` 补齐 auto-load 与 `call_plugin_tool` 对称；② marketplace 完整性校验 `installer.rs::verify_plugin_integrity` 修复静默跳过——walk 错误 / `strip_prefix` 失败现在硬失败（此前 `filter_map(ok)` 会把不可读文件排除出哈希 → 篡改归档可绕过校验）。
+#### 当前实现 / Current implementation
+
+`AdapterRegistry` 为发现、暂存安装、设置校验和重载提供同一份声明。Claude Code 支持的贡献、Pi 所选 Markdown 技能和提示词、DSH 字面量 MCP 和技能均走既有注册和启用链路。导入问题通过 `import_diagnostics` 返回。`PluginInstanceKey` 按 canonical scope 与逻辑 ID 标识包，Gateway 的 `selector` 串起安装回执、管理与精确调用。在已授权项目中，裸 ID 先选整个项目包。WASM Tool 和 MCP Tool 分别用现有 Capability lease 与 MCP 客户端生命周期验证所属注册仍有效。
+
+Discovery, staged installation, settings validation and reload consume the same `AdapterRegistry` declarations. Claude Code contributions, selected Pi Markdown resources, and literal DSH MCP and skills use the existing activation and registration paths. `PluginInstanceKey` identifies a package in its canonical scope. Gateway receipts, management and exact calls share its `selector`. Unqualified requests in an authorized workspace select the whole project package. Existing Capability leases fence WASM registrations and the MCP client lifecycle fences retired MCP registrations.
+
+[格式、策略与 selector / Formats, policy and selectors](PLUGIN_SYSTEM.md) · [生产入口验收 / Production-entry QA](../../qa/plugins/run.sh)
+
 #### Historical / 历史记录：插件接线与兼容性实施记录（2026-06 至 2026-08）
 
 - **缺口已闭合（2026-06-19）**：此前插件注册的 hook 经 `sync_hooks_from_registry` 进 `HookExecutor` 时 `actions` 为空、`handler` 只写不读——**事件驱动的插件 hook 不会从真实 hook 事件触发**（旧描述误判为"需 executor 持有 loader 回调、跨模块循环依赖"）。**修复（连线优先 + 依赖倒置 P4）**：新增 `HookAction::Plugin{plugin_id,handler}` 变体；`sync_hooks_from_registry` 改发该 live action（替代空列表，`handler` 字段保留供 `validation.rs` 显示）；`executor.rs::execute_plugin` 经**既有全局访问器** `try_extension_manager()`（gateway/channel fire-site 已在用）调 `execute_plugin_hook` 派发 WASM 导出函数——**复用现成基础设施，零回调注入、零 Arc 所有权环**。派发集中在 `execute_action` 一处，自动覆盖 observer/interceptor/resolver 三态；observer 忽略输出，interceptor/resolver 可经行前缀协议读结构化返回。manager 未注册（单测）时优雅跳过。

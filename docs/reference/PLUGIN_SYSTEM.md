@@ -1,17 +1,23 @@
-# Plugin System — Claude Code 兼容架构
+# 插件系统 / Plugin System
 
-> Aleph 插件系统完全兼容 Claude Code 插件格式，支持 Marketplace 安装、命名空间、Scope 管理。
+Aleph 将原生插件、Claude Code 插件及 Pi 和 DeepSeek Harness 的可移植声明交给同一个 `ExtensionManager`。发现、安装、设置校验和重载复用 `AdapterRegistry` 的规范化结果。Core 负责授权、生命周期和运行时注册。
 
----
+One `ExtensionManager` owns native Aleph plugins, Claude Code plugins, and portable Pi and DeepSeek Harness declarations. Discovery, staged installation, settings validation, and reload share the normalized `AdapterRegistry` output. Core owns authorization, lifecycle, and runtime registration.
 
-## 概述
+## 支持的格式 / Supported formats
 
-Aleph 插件系统实现了 **单向兼容 + 超集** 策略：
-- **任何 Claude Code 插件**（skills、agents、commands、hooks、MCP servers）**无需修改即可在 Aleph 中安装和运行**
-- Aleph 独有能力（WASM runtime、channels、providers、services）通过 `[aleph]` 扩展字段承载
-- 格式原则：**写 TOML，读 TOML+JSON**
+| 来源 / Source | 导入范围 / Imported contributions |
+| --- | --- |
+| Aleph | 原生 TOML，以及现有 WASM、MCP 和静态贡献。 / Native TOML with existing WASM, MCP and static contributions. |
+| Claude Code | `.claude-plugin/plugin.json` 或 `.claude-plugin/plugin.toml` 中支持的 skills、commands、agents、hooks 和 MCP；Claude Code 缓存来源保留操作者启用门禁。 / Supported skills, commands, agents, hooks and MCP from both manifest variants. Claude Code cache installs retain the operator activation gate. |
+| Pi | `package.json` 的 `pi.skills`、`pi.prompts` 和约定目录。按所选文件发布，支持路径、glob 和排除项；显式空数组可关闭一类静态资源。Prompt 使用 Pi 的位置、默认值与参数切片语法。 / Publish only the selected Markdown files, honoring resource paths, globs, exclusions, and explicit empty lists. Prompts use Pi argument substitution. |
+| DeepSeek Harness | `package.json` 的 `dsh.bundle.patch` 指向包内 YAML。支持字面量 `insert` 中 `@deepseek-ai/dsh-mcp-client` 的 `stdio` 与 `streamable-http` 配置，以及约定的 `skills/**/SKILL.md`。 / A package-local patch can contribute supported literal stdio and Streamable HTTP MCP servers and conventional skills. |
 
-**核心文件位置：** `src/extension/`
+Pi 扩展代码及主题、Cordis 运行时节点及动态 YAML 标签由对应宿主处理。Aleph 跳过这些声明并在所属插件行的 `import_diagnostics` 返回位置和原因。导入读取包内文件；连接和子进程由启用后的 MCP 生命周期管理，沿用现有信任、网络和就绪策略。
+
+Pi extension code and themes, Cordis runtime nodes, and dynamic YAML tags require their ecosystem hosts. Aleph skips these contributions and reports their locations and reasons on the owning row in `import_diagnostics`. Import reads package files. MCP activation uses the existing trust, network, and readiness policies when starting processes or connecting.
+
+格式适配器和正常入口验收见 [`src/extension/manifest/adapters/`](../../src/extension/manifest/adapters/) 和 [`qa/plugins/run.sh`](../../qa/plugins/run.sh)。
 
 ## Provider lifecycle foundation / Provider 生命周期基础（2026-10-21）
 
@@ -78,14 +84,11 @@ Fold ownership is recorded atomically with the existing compaction events. Legac
 
 ## Manifest 格式
 
-### 优先发现顺序
+### 适配器选择 / Adapter selection
 
-1. `.claude-plugin/plugin.toml` — **首选**（Aleph 原生 + CC 兼容超集）
-2. `.claude-plugin/plugin.json` — CC 兼容（只读）
-3. `aleph.plugin.toml` — **已废弃**（加载时打印 deprecation warning）
-4. `aleph.plugin.json` — **已废弃**
-5. `package.json` with `aleph` field — **已废弃**
-6. 无 manifest — **自动发现模式**（扫描 `skills/`、`src/agents/`、`commands/`、`hooks/`、`.mcp.json`）
+`AdapterRegistry::with_defaults` 按适配器优先级选择有效的格式入口。Claude Code TOML/JSON 和 Aleph TOML 优先于包导入。Codex、Cursor、DSH、Pi 保留各自的格式判据，最后才按约定目录发现静态贡献。普通 `package.json` 可成为扫描候选，只有匹配适配器条件后才产生插件行。
+
+`AdapterRegistry::with_defaults` orders format markers by priority. Claude Code and native Aleph manifests take precedence over package import. Codex, Cursor, DSH, and Pi keep their own format markers. Conventional discovery runs last. An ordinary npm manifest can be a scan candidate and produces a plugin row only when an adapter matches it.
 
 ### plugin.toml 超集 Schema
 
@@ -415,16 +418,15 @@ version = "0.1.0"
 | `claude-cache` | `~/.claude/plugins/cache/…`（只读） | `Global` |
 | `bundled` | 编译期嵌入 | `Global` |
 
-**可见性**（谁在哪个请求里看得见，2026-09-20 起）：每条 registry 行在发现时带一个 `ScopeKey`；
-每张脸在**请求构建时**调同一个谓词 `visible_to(key, ctx)`（`src/extension/visibility.rs`，前身是只服务
-hooks 的 `scope.rs::project_scope_allows`）：`Global` 永远可见；`Project(p)` 只对
-`ctx.project_root == Some(p)` 的会话可见。五张脸共用：tool index · skills 索引 · agents 解析 · slash 列表 ·
-MCP tool bridge（按拥有 server 的插件的 key 过滤；server 进程本身仍是全局的）。hooks 的
-`project_scope_allows` 改为调它。**`VisibilityCtx.project_root` 只有一份推导**——hooks 今天那一份
-（`executor.rs:918` 上游）抽出来共用，不新造第二个「当前项目」。
+**实例与可见性 / Instances and visibility**
 
-⚠️ **行为变更**：**无 project 的会话只见 `Global`**（fail-closed；此前是全部可见）。一个在 `~` 里起的
-会话再也看不到某个项目的 `.claude/` 插件——这是有意的。
+- 逻辑插件 ID 在每个 canonical scope 内选一份安装。项目的 `plugins.local` 和 `plugins` 共享项目身份，同 ID 在其他项目和 Global 中可独立存在。 / One winning installation per logical ID and canonical scope. Project and local installs share their workspace identity. Other projects and Global can independently own the same ID.
+- `plugins.list` 返回精确 `selector` 和 `scope_kind`。`g:<id>` 标识全局实例，`p:<digest>` 标识项目实例。Gateway 从已验证的项目上下文或已有的本机操作者权限解析管理目标。无项目的普通调用只见全局实例。 / `plugins.list` returns an exact `selector` and `scope_kind`. Gateway resolves management targets using verified project context or existing local operator authority. Ordinary calls without an authorized workspace see global instances only.
+- 裸 ID 在项目请求中选整个项目包。包处于 Disabled、Blocked、Error，或缺少同名贡献时，也继续遮挡全局同 ID 包。要管理或调用全局包，可用其精确身份并通过相应授权。 / An unqualified request selects the whole project package, including when it is disabled, blocked, in error, or missing the requested contribution. An exact global selection remains available to authorized callers.
+- 旧 `[entries.<id>]` 继续管理全局实例。项目偏好保存在 `[instances."p:<digest>"]`。旧 allow、trust 和 settings 留在全局，旧 disable 保留为项目默认拒绝，直到操作者对精确实例作出启用选择。 / Legacy entries continue to control global instances. Project preferences use the exact selector. Legacy allows, trust and settings remain global. An older disable carries forward as a project denial until an exact enable is recorded.
+- WASM 和 MCP 运行时注册、设置和撤销使用精确 owner。重载先校验候选，再按实例撤回和发布。WASM 的旧 lease 与替换后的 generation 不匹配；MCP 停止时退役客户端，旧 catalog 和 handler 无法重新成为可调用入口。 / Runtime registration, settings and withdrawal use the exact owner. Reload validates the candidate before replacing that instance. WASM generation checks invalidate stale leases; MCP retirement fences the previous client's catalog and handlers.
+
+实际路径参见 [`visibility.rs`](../../src/extension/visibility.rs)、[`plugin_target.rs`](../../src/extension/plugin_target.rs)、[`plugin_state.rs`](../../src/extension/plugin_state.rs) 与 [`lifecycle.rs`](../../src/extension/lifecycle.rs)。
 
 ```bash
 aleph plugin install <name> --scope user      # 默认
@@ -548,8 +550,11 @@ id + 插件的可见性键；其它 skill——**用户自己写的也算**—�
 |------|------|
 | `src/extension/manifest/cc_plugin_toml.rs` | 解析 `.claude-plugin/plugin.toml` |
 | `src/extension/manifest/cc_plugin_json.rs` | 解析 `.claude-plugin/plugin.json` |
-| `src/extension/manifest/adapters/auto_discover.rs` | 无 manifest 时自动发现组件 |
-| `src/extension/manifest/mod.rs` | 统一入口，优先级调度 |
+| `src/extension/manifest/adapters/auto_discover.rs` | 按约定目录发现组件 / Discover conventional components |
+| `src/extension/manifest/adapters/pi.rs` | 选取 Pi 技能和提示词文件 / Select Pi skill and prompt files |
+| `src/extension/manifest/adapters/dsh.rs` | 导入 DSH 字面量补丁并定位诊断 / Import literal DSH patch entries and locate diagnostics |
+| `src/extension/manifest/adapter.rs` | 格式优先级及共享声明入口 / Format priority and shared declaration entry |
+| `src/extension/manifest/inputs.rs` | 复核包读取依赖 / Recheck the inputs a package parse observed |
 | `src/extension/manifest/types.rs` | `PluginManifest`、`AlephExtensions`、`AlephRuntime` |
 | `src/extension/manifest/declared_sections.rs` | **三个方言共用的**「声明的 section → capability」翻译（`[[tools]]`/`[[hooks]]`/`[[commands]]`/`[[services]]`/`[prompt]`） |
 | `src/extension/manifest/component_source.rs` | 组件字段的 path / 数组 / 内联三形态，以及内联分支的真消费者 |
@@ -570,8 +575,8 @@ id + 插件的可见性键；其它 skill——**用户自己写的也算**—�
 |------|------|
 | `projection.rs` | **唯一**的进程级投影咽喉（skill dirs / subagents / 工具索引），源码级 census 守 |
 | `plugin_state.rs` | `<data_dir>/plugins.toml` — 耐久启用态（`.disabled` 标记的替代者）|
-| `scope.rs` | Scope 路径解析 |
-| `mcp_config.rs` | 读取 `.mcp.json`，环境变量替换 |
+| `src/extension/visibility.rs`、`src/extension/plugin_target.rs` | 规范作用域、精确实例与授权目标解析 / Canonical scope, exact instance and authorized target resolution |
+| `src/extension/mcp_config/mod.rs` | 规范化 MCP 声明，在挂载时绑定实例数据路径 / Normalize MCP declarations and bind instance data paths at mount |
 | `loader.rs` | 运行时加载（MCP/WASM/Static）|
 | `src/extension/types/plugins.rs` | `PluginKind`、`PluginScope`、`PluginRecord` |
 
@@ -596,12 +601,13 @@ id + 插件的可见性键；其它 skill——**用户自己写的也算**—�
 
 | 方法 | 说明 |
 |------|------|
-| `plugins.list` | 列出已安装插件 |
-| `plugin.install` / `plugins.install` | 安装插件（URL） |
-| `plugin.uninstall` / `plugins.uninstall` | 卸载插件 |
-| `plugin.update` | 升级已装插件（原子换装 + 版本比对，`force` 强制）|
-| `plugins.enable` | 启用插件 |
-| `plugins.disable` | 禁用插件 |
+| `plugins.list` | 列出调用者可见的实例，包含 `selector`、`scope_kind` 和导入诊断。 / List visible instances with selectors, scope kinds and diagnostics. |
+| `plugin.install` / `plugins.install` | 暂存、校验并安装，回执返回精确实例。 / Stage, validate and install. The receipt includes the exact instance. |
+| `plugin.uninstall` / `plugins.uninstall` | 卸载所选实例。 / Remove the selected instance. |
+| `plugin.update` | 按实例升级，包含版本比对和 `force`。 / Update the selected instance with version comparison and `force`. |
+| `plugins.enable` / `plugins.disable` | 修改所选实例的启用偏好。 / Change the selected instance's activation preference. |
+| `plugin.reload` | 预检后重载所选实例。 / Preflight and reload the selected instance. |
+| `plugins.callTool` | 调用已挂载的授权实例。 / Call an authorized, mounted instance. |
 | `plugin.marketplace.list` | 列出 marketplace **注册项**（name/source/type）——不是内容 |
 | `plugin.marketplace.browse` | 列出 marketplace **内容**（可选 `marketplace` / `query` 子串，匹配名称与描述）|
 | `plugin.marketplace.add` | 添加 marketplace |
@@ -823,19 +829,17 @@ manifest 原样喂给它 —— 真 resolver 一装，`[capabilities.http.creden
 
 ---
 
-## Manifest 解析缓存
+## Manifest 解析缓存 / Manifest cache
 
-`manifest_cache::ManifestCache`（`src/extension/manifest/manifest_cache.rs`）—
-LRU（512 条），key = `(canonical path, size, mtime, ctime, dev, ino)`。Boot 时
-`parse_manifest_from_dir_cached_global(dir)` 自动咨询/填充；热重载期间任何
-in-place 编辑都会改变 key tuple，cache 自然 miss。key 里带 `dev`/`ino` 是为了对抗硬链接替换（`canonicalize` 关不掉硬链接——附录 E.3）。
+`ManifestCache` 的包条目保存 `AdapterOutput` 与它实际读取的输入观察值。同一个快照携带声明、运行描述和诊断。命中时复核内容元数据、路径解析、缺失的候选文件及目录成员。安装和重载重新解析候选，在发布前拒绝读取期间漂移的输入。
+
+The package cache stores normalized declarations, runtime metadata and diagnostics together with the inputs the adapter observed. Cache hits recheck file metadata, resolved paths, absent candidate inputs and directory membership. Installation and reload read a fresh candidate and refuse inputs that change during parsing. [`manifest_cache.rs`](../../src/extension/manifest/manifest_cache.rs) · [`inputs.rs`](../../src/extension/manifest/inputs.rs)
 
 ---
 
-## Lazy Activation Planner —— ❌ 已删除（2026-08-07）
+## Historical / 历史记录：旧 Activation Planner（2026-08-07）
 
-**不存在懒激活。所有 enabled 插件在 boot 时一次性加载。** `[plugin.activation]`
-块**不被任何 adapter 读取**，写了等于没写。
+旧 `[plugin.activation]` planner 已删除。当前首次调用时激活的生产路径仅覆盖受控的 tool-only WASM，见上文 Stage H。 / The historical `[plugin.activation]` planner was removed. The current first-call activation path covers controlled tool-only WASM as described in Stage H.
 
 曾经有过一个从参考实现的 activation planner 移植来的 Rust 版
 （`src/extension/lifecycle.rs` 的 `ActivationPlanner` / `ActivationHints` /
