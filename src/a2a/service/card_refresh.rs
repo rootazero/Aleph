@@ -79,11 +79,11 @@ pub async fn refresh_all_cards(registry: &CardRegistry) -> usize {
 /// Spawn a background task that runs one card-refresh pass at startup.
 ///
 /// Non-blocking — never delays startup.
-pub fn spawn_card_refresh(registry: Arc<CardRegistry>) {
+pub fn spawn_card_refresh(registry: Arc<CardRegistry>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let n = refresh_all_cards(&registry).await;
         tracing::info!(refreshed = n, "A2A startup card refresh complete");
-    });
+    })
 }
 
 /// Probe every registered agent once and update its `health` + `last_seen`.
@@ -121,12 +121,12 @@ pub async fn health_check_pass(registry: &CardRegistry, pool: &A2AClientPool) ->
 ///
 /// Probes all registered agents every `interval` and updates their health.
 /// The caller is responsible for only invoking this when the configured
-/// interval is non-zero. Runs until the process exits.
+/// interval is non-zero and owns the returned worker.
 pub fn spawn_health_monitor(
     registry: Arc<CardRegistry>,
     pool: Arc<A2AClientPool>,
     interval: Duration,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         // Skip the immediate first tick — startup card refresh already probed.
@@ -136,7 +136,7 @@ pub fn spawn_health_monitor(
             let n = health_check_pass(&registry, &pool).await;
             tracing::debug!(probed = n, "A2A agent health monitor pass complete");
         }
-    });
+    })
 }
 
 #[cfg(test)]

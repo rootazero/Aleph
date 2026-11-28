@@ -18,6 +18,7 @@ pub(in crate::commands::start) struct StartupResources {
     events: Option<Arc<alephcore::capability::events::InMemoryEventStream>>,
     bridge: Option<alephcore::gateway::capability_events::CapabilityEventBridge>,
     pty: Option<&'static alephcore::gateway::pty::PtyManager>,
+    a2a_workers: Vec<tokio::task::JoinHandle<()>>,
     cleanup_called: AtomicBool,
 }
 
@@ -35,6 +36,7 @@ impl StartupResources {
             events: None,
             bridge: None,
             pty: None,
+            a2a_workers: Vec::new(),
             cleanup_called: AtomicBool::new(false),
         }
     }
@@ -84,6 +86,13 @@ impl StartupResources {
         self.pty = Some(manager);
     }
 
+    pub(in crate::commands::start) fn install_a2a_worker(
+        &mut self,
+        worker: tokio::task::JoinHandle<()>,
+    ) {
+        self.a2a_workers.push(worker);
+    }
+
     pub(in crate::commands::start) async fn cleanup(&mut self) -> Result<(), AlephError> {
         if self.cleanup_called.load(Ordering::SeqCst) {
             return Ok(()); // Already cleaned up
@@ -99,6 +108,18 @@ impl StartupResources {
             policy.stop_admission();
         }
         let mut observation_failure = None;
+        for worker in &self.a2a_workers {
+            worker.abort();
+        }
+        while let Some(worker) = self.a2a_workers.last_mut() {
+            if let Err(error) = worker.await {
+                if !error.is_cancelled() {
+                    tracing::error!(%error, "A2A background worker failed");
+                    observation_failure = Some(AlephError::other("A2A worker join failed"));
+                }
+            }
+            self.a2a_workers.pop();
+        }
         if let Some(manager) = &self.acp_manager {
             manager.shutdown_all().await;
         }

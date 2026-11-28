@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
-use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::a2a::domain::{Credentials, SecurityScheme, TrustLevel};
 
@@ -39,10 +39,17 @@ impl std::fmt::Debug for A2AAuthContext {
     }
 }
 
-/// Authenticated principal with trust level and permissions
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Process-local task ownership derived from an authenticated A2A credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TaskOwner {
+    Loopback,
+    Credential(Uuid),
+}
+
+/// Authenticated principal with trust level and permissions.
+#[derive(Debug, Clone)]
 pub struct A2AAuthPrincipal {
-    pub agent_id: Option<String>,
+    pub owner: TaskOwner,
     pub trust_level: TrustLevel,
     pub permissions: Vec<String>,
 }

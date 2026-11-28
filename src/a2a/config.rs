@@ -43,6 +43,10 @@ pub struct A2AServerConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card_version: Option<String>,
 
+    /// Public Gateway base URL, including any reverse-proxy path prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advertised_base_url: Option<String>,
+
     /// Security configuration
     #[serde(default)]
     pub security: A2ASecurityConfig,

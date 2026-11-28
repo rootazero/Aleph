@@ -1,19 +1,16 @@
-use crate::a2a::domain::security::{Credentials, SecurityScheme, TrustLevel};
 use crate::a2a::domain::A2AError;
-use crate::a2a::port::authenticator::{
-    A2AAction, A2AAuthContext, A2AAuthPrincipal, A2AAuthenticator,
-};
+use crate::a2a::domain::security::{Credentials, SecurityScheme, TrustLevel};
 use crate::a2a::port::A2AResult;
+use crate::a2a::port::authenticator::{
+    A2AAction, A2AAuthContext, A2AAuthPrincipal, A2AAuthenticator, TaskOwner,
+};
 
 use super::token_store::TokenStore;
 
-/// Tiered trust authenticator implementing localhost -> token -> `OAuth2` -> reject.
+/// Authenticates explicit credentials and optionally allows direct loopback requests.
 ///
-/// Security tiers:
-/// - **Local**: Loopback connections bypass auth entirely (configurable)
-/// - **Trusted**: Valid bearer token or API key grants full access
-/// - **Public**: `OAuth2` tokens get restricted access
-/// - **Reject**: No valid credentials results in Unauthorized error
+/// A valid bearer token or API key grants Trusted permissions. A direct
+/// loopback request without credentials can qualify for Local permissions.
 pub struct TieredAuthenticator {
     local_bypass: bool,
     token_store: TokenStore,
@@ -61,42 +58,35 @@ fn is_forwarded(context: &A2AAuthContext) -> bool {
 #[async_trait::async_trait]
 impl A2AAuthenticator for TieredAuthenticator {
     async fn authenticate(&self, context: &A2AAuthContext) -> A2AResult<A2AAuthPrincipal> {
-        // Tier 1: localhost bypass.
-        //
-        // Only unproxied requests qualify: behind a reverse proxy every caller
-        // reaches the listener from the proxy's loopback address, so trusting
-        // the peer address would hand the Local tier (which carries admin
-        // permissions) to remote callers.
-        if self.local_bypass && context.remote_addr.ip().is_loopback() && !is_forwarded(context) {
-            return Ok(A2AAuthPrincipal {
-                agent_id: None,
-                trust_level: TrustLevel::Local,
-                permissions: self.permissions_for(&TrustLevel::Local),
-            });
-        }
-
-        // Tier 2-3: credential-based authentication
         match &context.credentials {
             Credentials::BearerToken(token) | Credentials::ApiKey(token) => {
-                if self.token_store.is_valid(token) {
-                    return Ok(A2AAuthPrincipal {
-                        agent_id: None,
-                        trust_level: TrustLevel::Trusted,
-                        permissions: self.permissions_for(&TrustLevel::Trusted),
-                    });
-                }
-                // Invalid token — fall through to reject
+                let id = self
+                    .token_store
+                    .credential_id(token)
+                    .ok_or(A2AError::Unauthorized)?;
+                Ok(A2AAuthPrincipal {
+                    owner: TaskOwner::Credential(id),
+                    trust_level: TrustLevel::Trusted,
+                    permissions: self.permissions_for(&TrustLevel::Trusted),
+                })
             }
-            Credentials::OAuth2Token(_token) => {
-                // OAuth2 validation requires JWKS verification — reject until implemented.
-                // Accepting unvalidated tokens is a security bypass.
-                return Err(A2AError::Unauthorized);
+            Credentials::None
+                if self.local_bypass
+                    && context.remote_addr.ip().is_loopback()
+                    && !is_forwarded(context)
+                    && !context.headers.keys().any(|name| {
+                        name.eq_ignore_ascii_case("authorization")
+                            || name.eq_ignore_ascii_case("x-api-key")
+                    }) =>
+            {
+                Ok(A2AAuthPrincipal {
+                    owner: TaskOwner::Loopback,
+                    trust_level: TrustLevel::Local,
+                    permissions: self.permissions_for(&TrustLevel::Local),
+                })
             }
-            Credentials::None => {}
+            _ => Err(A2AError::Unauthorized),
         }
-
-        // Tier 4: reject
-        Err(A2AError::Unauthorized)
     }
 
     async fn authorize(&self, principal: &A2AAuthPrincipal, action: &A2AAction) -> A2AResult<bool> {
@@ -241,97 +231,112 @@ mod tests {
     #[tokio::test]
     async fn authorize_wildcard_allows_all() {
         let principal = A2AAuthPrincipal {
-            agent_id: None,
+            owner: TaskOwner::Loopback,
             trust_level: TrustLevel::Local,
             permissions: vec!["*".to_string()],
         };
         let auth = TieredAuthenticator::new(true, vec![]);
-        assert!(auth
-            .authorize(&principal, &A2AAction::SendMessage)
-            .await
-            .unwrap());
-        assert!(auth
-            .authorize(&principal, &A2AAction::CancelTask)
-            .await
-            .unwrap());
+        assert!(
+            auth.authorize(&principal, &A2AAction::SendMessage)
+                .await
+                .unwrap()
+        );
+        assert!(
+            auth.authorize(&principal, &A2AAction::CancelTask)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
     async fn authorize_empty_permissions_denies() {
         let principal = A2AAuthPrincipal {
-            agent_id: None,
+            owner: TaskOwner::Loopback,
             trust_level: TrustLevel::Public,
             permissions: vec![],
         };
         let auth = TieredAuthenticator::new(true, vec![]);
-        assert!(!auth
-            .authorize(&principal, &A2AAction::SendMessage)
-            .await
-            .unwrap());
+        assert!(
+            !auth
+                .authorize(&principal, &A2AAction::SendMessage)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
     async fn authorize_read_permission_allows_get_task() {
         let principal = A2AAuthPrincipal {
-            agent_id: None,
+            owner: TaskOwner::Loopback,
             trust_level: TrustLevel::Public,
             permissions: vec!["read".to_string()],
         };
         let auth = TieredAuthenticator::new(true, vec![]);
-        assert!(auth
-            .authorize(&principal, &A2AAction::GetTask)
-            .await
-            .unwrap());
-        assert!(auth
-            .authorize(&principal, &A2AAction::ListTasks)
-            .await
-            .unwrap());
+        assert!(
+            auth.authorize(&principal, &A2AAction::GetTask)
+                .await
+                .unwrap()
+        );
+        assert!(
+            auth.authorize(&principal, &A2AAction::ListTasks)
+                .await
+                .unwrap()
+        );
         // read permission should NOT allow write actions
-        assert!(!auth
-            .authorize(&principal, &A2AAction::SendMessage)
-            .await
-            .unwrap());
-        assert!(!auth
-            .authorize(&principal, &A2AAction::CancelTask)
-            .await
-            .unwrap());
+        assert!(
+            !auth
+                .authorize(&principal, &A2AAction::SendMessage)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !auth
+                .authorize(&principal, &A2AAction::CancelTask)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
     async fn authorize_write_permission_allows_send_and_cancel() {
         let principal = A2AAuthPrincipal {
-            agent_id: None,
+            owner: TaskOwner::Loopback,
             trust_level: TrustLevel::Trusted,
             permissions: vec!["write".to_string()],
         };
         let auth = TieredAuthenticator::new(true, vec![]);
-        assert!(auth
-            .authorize(&principal, &A2AAction::SendMessage)
-            .await
-            .unwrap());
-        assert!(auth
-            .authorize(&principal, &A2AAction::CancelTask)
-            .await
-            .unwrap());
+        assert!(
+            auth.authorize(&principal, &A2AAction::SendMessage)
+                .await
+                .unwrap()
+        );
+        assert!(
+            auth.authorize(&principal, &A2AAction::CancelTask)
+                .await
+                .unwrap()
+        );
         // write should NOT allow read
-        assert!(!auth
-            .authorize(&principal, &A2AAction::GetTask)
-            .await
-            .unwrap());
+        assert!(
+            !auth
+                .authorize(&principal, &A2AAction::GetTask)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
     async fn authorize_admin_permission_allows_push_config() {
         let principal = A2AAuthPrincipal {
-            agent_id: None,
+            owner: TaskOwner::Loopback,
             trust_level: TrustLevel::Local,
             permissions: vec!["admin".to_string()],
         };
         let auth = TieredAuthenticator::new(true, vec![]);
-        assert!(auth
-            .authorize(&principal, &A2AAction::ManagePushConfig)
-            .await
-            .unwrap());
+        assert!(
+            auth.authorize(&principal, &A2AAction::ManagePushConfig)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

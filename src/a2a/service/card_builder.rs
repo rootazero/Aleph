@@ -45,6 +45,11 @@ impl CardBuilder {
             });
         }
 
+        let base = config
+            .advertised_base_url
+            .as_deref()
+            .map(|base| base.trim_end_matches('/').to_owned())
+            .unwrap_or_else(|| format!("http://{bind_addr}"));
         AgentCard {
             id: format!("aleph-{}", simple_hostname()),
             name,
@@ -56,7 +61,7 @@ impl CardBuilder {
             }),
             documentation_url: None,
             interfaces: vec![AgentInterface {
-                url: format!("http://{bind_addr}/a2a"),
+                url: format!("{base}/a2a"),
                 protocol: TransportProtocol::JsonRpc,
             }],
             skills,

@@ -1,47 +1,47 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
+
+use subtle::ConditionallySelectable;
+use uuid::Uuid;
 
 use crate::security::secret_equal::secret_equal_bytes;
 
-/// In-memory store for API tokens.
-///
-/// Provides token validation for the tiered authentication system. Tokens are
-/// deduplicated in a `HashSet`, but validation deliberately avoids the
-/// hash-based `contains` fast path: presented tokens are attacker-controlled
-/// secrets, so each is compared in constant time to avoid leaking a matching
-/// prefix via timing.
+/// Stores verified API tokens and their process-local A2A identities.
 pub struct TokenStore {
-    tokens: HashSet<String>,
+    tokens: HashMap<String, Uuid>,
 }
 
 impl TokenStore {
     #[must_use]
     pub fn new(tokens: Vec<String>) -> Self {
         Self {
-            tokens: tokens.into_iter().collect(),
+            tokens: tokens
+                .into_iter()
+                .map(|token| (token, Uuid::new_v4()))
+                .collect(),
         }
     }
 
     #[must_use]
-    pub fn is_valid(&self, token: &str) -> bool {
-        // An empty presented token is never a valid secret. Without this guard a
-        // misconfigured store holding an empty-string token (e.g. a blank entry
-        // in `[a2a.server.security] tokens`) would authenticate an empty bearer
-        // token, since `secret_equal_bytes("", "")` is `true` — an auth bypass.
+    pub(crate) fn credential_id(&self, token: &str) -> Option<Uuid> {
         if token.is_empty() {
-            return false;
+            return None;
         }
-        // Compare against every stored token without short-circuiting: a plain
-        // `HashSet::contains` (or an early `return true`) would make match
-        // timing observable. `secret_equal_bytes` is itself length-leak-safe.
-        let mut matched = false;
-        for stored in &self.tokens {
-            matched |= secret_equal_bytes(token.as_bytes(), stored.as_bytes());
+        // Compare every token and select its identity without a match-dependent branch.
+        let mut identity = 0u128;
+        for (stored, id) in &self.tokens {
+            let matches = secret_equal_bytes(token.as_bytes(), stored.as_bytes());
+            identity = u128::conditional_select(&identity, &id.as_u128(), (matches as u8).into());
         }
-        matched
+        (identity != 0).then(|| Uuid::from_u128(identity))
+    }
+
+    #[cfg(test)]
+    fn is_valid(&self, token: &str) -> bool {
+        self.credential_id(token).is_some()
     }
 
     pub fn add(&mut self, token: String) {
-        self.tokens.insert(token);
+        self.tokens.entry(token).or_insert_with(Uuid::new_v4);
     }
 }
 

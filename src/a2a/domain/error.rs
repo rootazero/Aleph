@@ -18,6 +18,10 @@ pub enum A2AError {
     InternalError(String),
 
     // A2A business errors
+    #[error("Task cancellation is pending")]
+    CancellationPending,
+    #[error("Another task is active in this context")]
+    ContextBusy,
     #[error("Task not found: {0}")]
     TaskNotFound(String),
     #[error("Task not cancelable in state: {0:?}")]
@@ -26,6 +30,8 @@ pub enum A2AError {
     PushNotSupported,
     #[error("Unsupported content type")]
     UnsupportedContentType,
+    #[error("{0}")]
+    UnsupportedOperation(&'static str),
 
     // Security errors
     #[error("Unauthorized")]
@@ -51,11 +57,11 @@ impl A2AError {
             Self::InvalidRequest(_) => -32600,
             Self::MethodNotFound(_) => -32601,
             Self::InvalidParams(_) => -32602,
-            Self::InternalError(_) => -32603,
+            Self::InternalError(_) | Self::CancellationPending | Self::ContextBusy => -32603,
             Self::TaskNotFound(_) => -32001,
             Self::TaskNotCancelable(_) => -32002,
             Self::PushNotSupported => -32003,
-            Self::UnsupportedContentType => -32004,
+            Self::UnsupportedContentType | Self::UnsupportedOperation(_) => -32004,
             Self::Unauthorized => -32000,
             Self::Forbidden => -32005,
             Self::AgentUnreachable(_) => -32010,
@@ -67,10 +73,19 @@ impl A2AError {
     /// Convert to a JSON-RPC error object
     #[must_use]
     pub fn to_jsonrpc_error(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut error = serde_json::json!({
             "code": self.error_code(),
             "message": self.to_string(),
-        })
+        });
+        let reason = match self {
+            Self::CancellationPending => Some("cancellation_pending"),
+            Self::ContextBusy => Some("context_busy"),
+            _ => None,
+        };
+        if let Some(reason) = reason {
+            error["data"] = serde_json::json!({"reason": reason});
+        }
+        error
     }
 }
 
@@ -147,9 +162,11 @@ mod tests {
             A2AError::TaskNotCancelable(TaskState::Failed).to_string(),
             "Task not cancelable in state: Failed"
         );
-        assert!(A2AError::Timeout(Duration::from_secs(30))
-            .to_string()
-            .contains("30"));
+        assert!(
+            A2AError::Timeout(Duration::from_secs(30))
+                .to_string()
+                .contains("30")
+        );
     }
 
     #[test]

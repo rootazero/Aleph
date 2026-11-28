@@ -2695,9 +2695,11 @@ async fn start_server_body(
             let notification = Arc::new(NotificationService::with_ssrf_policy(
                 webhook_ssrf_policy.clone(),
             ));
-            let task_store: Arc<dyn A2ATaskManager> = Arc::new(TaskStore::new());
-            let stream_hub: Arc<dyn A2AStreamingHandler> =
-                Arc::new(StreamHub::with_notification(notification.clone()));
+            let task_store = Arc::new(TaskStore::new());
+            let stream_hub: Arc<dyn A2AStreamingHandler> = Arc::new(StreamHub::with_notification(
+                task_store.clone(),
+                notification.clone(),
+            ));
 
             // 2. Create bridge (needs execution adapter + agent registry)
             if let (Some(exec_adapter), Some(registry)) = (
@@ -2770,7 +2772,9 @@ async fn start_server_body(
                 // 11. One-shot startup card refresh: upgrade config agents'
                 // placeholder cards to their real Agent Cards in the
                 // background. Non-blocking — never delays startup.
-                alephcore::a2a::service::spawn_card_refresh(card_registry.clone());
+                startup_resources.install_a2a_worker(alephcore::a2a::service::spawn_card_refresh(
+                    card_registry.clone(),
+                ));
 
                 // 12. Optional periodic agent health monitor (opt-in via
                 // `a2a.health_check_interval_secs`). Probes registered agents
@@ -2778,10 +2782,12 @@ async fn start_server_body(
                 // explicit agent resolution can avoid unreachable agents.
                 let health_interval = a2a_config.health_check_interval_secs;
                 if health_interval > 0 {
-                    alephcore::a2a::service::spawn_health_monitor(
-                        card_registry.clone(),
-                        client_pool.clone(),
-                        std::time::Duration::from_secs(health_interval),
+                    startup_resources.install_a2a_worker(
+                        alephcore::a2a::service::spawn_health_monitor(
+                            card_registry.clone(),
+                            client_pool.clone(),
+                            std::time::Duration::from_secs(health_interval),
+                        ),
                     );
                     tracing::info!(
                         interval_secs = health_interval,
