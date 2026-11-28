@@ -1,8 +1,8 @@
 # 语音对话重构验收回执 / Voice conversation refactor receipt
 
-日期：2026-11-28  
-分支：`voice-conversation-refactor`  
-设计：`docs/superpowers/specs/2026-11-28-voice-conversation-refactor-design.md`  
+日期：2026-11-28\
+分支：`voice-conversation-refactor`\
+设计：`docs/superpowers/specs/2026-11-28-voice-conversation-refactor-design.md`\
 计划：`docs/superpowers/plans/2026-11-28-voice-conversation-refactor.md`
 
 ## 1. 交付范围
