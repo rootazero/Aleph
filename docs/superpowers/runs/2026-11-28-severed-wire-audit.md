@@ -208,11 +208,15 @@ Two earlier rounds each exposed a real defect and were fixed before the final ro
 ## 复现 / Reproducing
 
 ```bash
-# 审计脚本与八份报告 / audit scripts and the eight reports
-.superpowers/sdd/2026-11-28-severed-wire-audit/
+# 审计脚本与八份报告（已入库）/ audit scripts and the eight reports (committed)
+docs/superpowers/runs/2026-11-28-severed-wire-audit-evidence/
 
 # 守卫 / guards
 cargo test -p alephcore --lib group_chat::wiring_census
 cargo test -p alephcore --lib goal_origin_race
 cargo test -p alephcore --lib error_taxonomy_census
 ```
+
+审计期间的工作副本在 `.superpowers/sdd/2026-11-28-severed-wire-audit/`（该目录被 gitignore，只在工作机上存在；入库的是上面的 evidence 目录）。
+
+The working copy of the audit lived in `.superpowers/sdd/2026-11-28-severed-wire-audit/` (gitignored, machine-local); what is committed is the evidence directory above.
