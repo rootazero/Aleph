@@ -644,6 +644,7 @@ mod imp {
         hwnd: HWND,
         pid: i32,
         thread: u32,
+        launch_stamp: u64,
     }
 
     impl WindowScope {
@@ -654,10 +655,13 @@ mod imp {
             if thread == 0 || pid == 0 || unsafe { GetAncestor(hwnd, GA_ROOT) } != hwnd {
                 return None;
             }
+            let pid = i32::try_from(pid).ok()?;
+            let identity = aleph_desktop::win_window::desktop_process_identity(pid)?;
             Some(Self {
                 hwnd,
-                pid: i32::try_from(pid).ok()?,
+                pid,
                 thread,
+                launch_stamp: identity.launch_stamp,
             })
         }
 

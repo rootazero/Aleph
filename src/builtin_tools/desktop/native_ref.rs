@@ -146,6 +146,7 @@ impl DesktopTool {
             mutation,
         };
         let worker_platform = platform.clone();
+        let (caller, caller_lifetime) = tokio::sync::oneshot::channel::<()>();
         let result = tokio::spawn(async move {
             let (_pending, _session_guard) = (pending, session_guard);
             if let Some(invocation) = invocation {
@@ -164,12 +165,16 @@ impl DesktopTool {
                     "The accessibility capability is unavailable.",
                 );
             };
+            if caller.is_closed() {
+                return DesktopOutput::failed("Desktop call ended before native dispatch.");
+            }
             match ax.act_on_reference(request).await {
                 Ok(result) => native::ax_action_output(result),
                 Err(error) => element_ref::driver_error_output(error),
             }
         })
         .await;
+        drop(caller_lifetime);
         let mut output = match result {
             Ok(output) => output,
             Err(_) => return refusal(
