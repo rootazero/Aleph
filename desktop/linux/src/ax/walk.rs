@@ -14,9 +14,9 @@
 use std::pin::Pin;
 
 use atspi::proxy::accessible::AccessibleProxy;
-use atspi::{CoordType, Interface, Role, State, StateSet};
+use atspi::{CoordType, Interface, InterfaceSet, Role, State, StateSet};
 
-use aleph_protocol::desktop_bridge::methods::ax::AxElement;
+use aleph_protocol::desktop_bridge::methods::ax::{AxElement, MAX_AX_REFERENCE_ROWS};
 use aleph_protocol::desktop_bridge::methods::screen::Region;
 
 use super::budget::Budget;
@@ -56,6 +56,7 @@ pub struct Walk<'a> {
     /// The application's tree, fetched once. `None` when it serves no cache, in
     /// which case every attribute is read live — slower, never wrong.
     cache: Option<AppCache>,
+    snapshot: Option<SnapshotRows>,
 }
 
 impl<'a> Walk<'a> {
@@ -79,7 +80,49 @@ impl<'a> Walk<'a> {
             remaining: max_nodes,
             budget,
             cache: None,
+            snapshot: None,
         }
+    }
+
+    /// Collect flat rows and their native addresses during the same traversal.
+    pub async fn snapshot(
+        &mut self,
+        root: &AccessibleProxy<'static>,
+        depth: u32,
+        limit: usize,
+    ) -> (bool, SnapshotRows) {
+        self.snapshot = Some(SnapshotRows {
+            limit: limit.min(MAX_AX_REFERENCE_ROWS),
+            ..SnapshotRows::default()
+        });
+        let available = self.tree(root, depth).await.is_some();
+        let mut rows = self
+            .snapshot
+            .take()
+            .expect("snapshot projection is installed");
+
+        // AccessibleId is optional on older providers. Read it on the exact
+        // published objects, with the same bounded concurrency as enrichment.
+        use futures::StreamExt as _;
+        let mut pending = Vec::new();
+        for (_, target) in &mut rows.rows {
+            if let Some(target) = target {
+                pending.push(async move {
+                    if let Ok(id) = target.proxy.accessible_id().await {
+                        target.accessible_id = Some(id);
+                    }
+                });
+            }
+        }
+        let budget = self.budget;
+        let _ = tokio::time::timeout(budget.remaining(), async {
+            futures::stream::iter(pending)
+                .buffer_unordered(ENRICH_CONCURRENCY)
+                .for_each(|()| async {})
+                .await;
+        })
+        .await;
+        (available, rows)
     }
 
     /// Prefetch `root`'s application tree in one call.
@@ -177,15 +220,46 @@ impl<'a> Walk<'a> {
         // out yet, and building them here rather than in a closure keeps the
         // borrow of `skeleton` a plain one instead of a higher-ranked bound the
         // compiler cannot prove for `buffered`.
+        let snapshot = self.snapshot.is_some();
         let pending: Vec<_> = skeleton
             .iter()
-            .map(|node| enrich(self.bus, root, node, self.pid, self.budget))
+            .map(|node| enrich(self.bus, root, node, self.pid, self.budget, snapshot))
             .collect();
         let enriched: Vec<AxElement> = futures::stream::iter(pending)
             .buffered(ENRICH_CONCURRENCY)
             .collect()
             .await;
 
+        if let Some(rows) = &mut self.snapshot {
+            let cache = self.cache.as_ref().expect("cached walk has an app cache");
+            let owner = root.inner().destination().as_str();
+            let mut stack = vec![(0, None::<&str>, true)];
+            while let Some((index, window, same_provider)) = stack.pop() {
+                let node = &skeleton[index];
+                let window = if is_window(node.role) {
+                    Some(node.path.as_str())
+                } else {
+                    window
+                };
+                let same_provider = same_provider
+                    && cache
+                        .get(&node.path)
+                        .is_some_and(|item| item.object.name_as_str() == Some(owner));
+                let element = &enriched[index];
+                let proxy = if same_provider && rows.can_retain(element, node.states, node.ifaces) {
+                    self.bus.sibling_proxy(root, &node.path).await.ok()
+                } else {
+                    None
+                };
+                rows.record(element, node.role, node.states, proxy, window);
+                stack.extend(
+                    node.children
+                        .iter()
+                        .rev()
+                        .map(|&child| (child, window, same_provider)),
+                );
+            }
+        }
         Some(assemble(enriched, &skeleton))
     }
 
@@ -274,6 +348,16 @@ impl<'a> Walk<'a> {
         proxy: &'s AccessibleProxy<'static>,
         depth: u32,
     ) -> BoxFut<'s, Option<AxElement>> {
+        self.element_in_scope(proxy, depth, None, proxy.inner().destination().as_str())
+    }
+
+    fn element_in_scope<'s>(
+        &'s mut self,
+        proxy: &'s AccessibleProxy<'static>,
+        depth: u32,
+        window: Option<&'s str>,
+        owner: &'s str,
+    ) -> BoxFut<'s, Option<AxElement>> {
         Box::pin(async move {
             if self.remaining == 0 || self.budget.spent() {
                 return None;
@@ -313,14 +397,16 @@ impl<'a> Walk<'a> {
             // is exactly what the Action interface is for). A hidden container
             // buys nothing, and without a cache asking for it costs a call.
             let wants_value = !secure && (has_readable_value(role) || has_numeric_value(role));
-            let ifaces = if showing || is_interactable(role) || wants_value {
+            let snapshot = self.snapshot.is_some();
+            let interface_set = if showing || is_interactable(role) || wants_value || snapshot {
                 match cached_ifaces {
-                    Some(set) => Some(Interfaces::from_set(set, proxy)),
-                    None => Interfaces::query(proxy).await,
+                    Some(set) => Some(set),
+                    None => proxy.get_interfaces().await.ok(),
                 }
             } else {
                 None
             };
+            let ifaces = interface_set.map(|set| Interfaces::from_set(set, proxy));
             let bounds = match &ifaces {
                 Some(p) => extents_of(p, showing).await,
                 None => None,
@@ -330,24 +416,12 @@ impl<'a> Walk<'a> {
                 (Some(p), true) => text_of(p).await,
                 _ => None,
             };
-            let actions = match (&ifaces, is_interactable(role)) {
+            let actions = match (&ifaces, is_interactable(role) || snapshot) {
                 (Some(p), true) => actions_of(p).await,
                 _ => None,
             };
 
-            let mut children = Vec::new();
-            if depth > 0 && self.remaining > 0 {
-                for child in self.children_of(proxy, &path).await {
-                    if self.remaining == 0 || self.budget.spent() {
-                        break;
-                    }
-                    if let Some(node) = self.element(&child, depth - 1).await {
-                        children.push(node);
-                    }
-                }
-            }
-
-            Some(AxElement {
+            let mut element = AxElement {
                 role: atspi_role_to_ax_role(role).to_string(),
                 title,
                 value,
@@ -355,11 +429,47 @@ impl<'a> Walk<'a> {
                 pid: self.pid,
                 secure: Some(secure),
                 enabled: Some(enabled_of(states)),
-                settable: settable_of(role, states),
+                settable: if snapshot {
+                    interface_set.map(|set| value_writable(states, set))
+                } else {
+                    settable_of(role, states)
+                },
                 actions,
                 url: None,
-                children,
-            })
+                children: Vec::new(),
+            };
+            let window = if is_window(role) {
+                Some(path.as_str())
+            } else {
+                window
+            };
+            // A foreign subtree stays observable, but cannot supply handles for
+            // a reference issued to this application and process.
+            let owner = if proxy.inner().destination().as_str() == owner {
+                owner
+            } else {
+                ""
+            };
+            if let Some(rows) = &mut self.snapshot {
+                let target = interface_set
+                    .filter(|&set| !owner.is_empty() && rows.can_retain(&element, states, set))
+                    .map(|_| proxy.clone());
+                rows.record(&element, role, states, target, window);
+            }
+            if depth > 0 && self.remaining > 0 {
+                for child in self.children_of(proxy, &path).await {
+                    if self.remaining == 0 || self.budget.spent() {
+                        break;
+                    }
+                    if let Some(node) = self
+                        .element_in_scope(&child, depth - 1, window, owner)
+                        .await
+                    {
+                        element.children.push(node);
+                    }
+                }
+            }
+            Some(element)
         })
     }
 
@@ -412,6 +522,95 @@ impl<'a> Walk<'a> {
         }
         out
     }
+}
+
+pub(super) struct ReferenceTarget {
+    pub proxy: AccessibleProxy<'static>,
+    pub role: Role,
+    pub title: Option<String>,
+    pub accessible_id: Option<String>,
+    pub window: Option<String>,
+    pub secure: bool,
+    pub writable: bool,
+    pub actions: Vec<String>,
+}
+
+#[derive(Default)]
+pub(super) struct SnapshotRows {
+    limit: usize,
+    pub rows: Vec<(AxElement, Option<ReferenceTarget>)>,
+    pub focused: Option<AxElement>,
+    pub total_interactable: usize,
+}
+
+impl SnapshotRows {
+    fn can_retain(&self, element: &AxElement, states: StateSet, interfaces: InterfaceSet) -> bool {
+        self.rows.len() < self.limit
+            && live_state(states)
+            && enabled_of(states)
+            && (value_writable(states, interfaces) || has_actions(element))
+    }
+
+    fn record(
+        &mut self,
+        element: &AxElement,
+        role: Role,
+        states: StateSet,
+        proxy: Option<AccessibleProxy<'static>>,
+        window: Option<&str>,
+    ) {
+        if states.contains(State::Focused) && self.focused.is_none() {
+            self.focused = Some(element.clone());
+        }
+        if !is_interactable(role)
+            && !has_numeric_value(role)
+            && !has_actions(element)
+            && element.settable != Some(true)
+            && proxy.is_none()
+        {
+            return;
+        }
+        self.total_interactable += 1;
+        if self.rows.len() >= self.limit {
+            return;
+        }
+        self.rows.push((
+            element.clone(),
+            proxy.map(|proxy| ReferenceTarget {
+                proxy,
+                role,
+                title: element.title.clone(),
+                accessible_id: None,
+                window: window.map(str::to_owned),
+                secure: element.secure == Some(true),
+                writable: element.settable == Some(true),
+                actions: element.actions.clone().unwrap_or_default(),
+            }),
+        ));
+    }
+}
+
+fn has_actions(element: &AxElement) -> bool {
+    element
+        .actions
+        .as_ref()
+        .is_some_and(|names| !names.is_empty())
+}
+
+pub(super) fn live_state(states: StateSet) -> bool {
+    !states.contains(State::Defunct)
+        && !states.contains(State::Stale)
+        && !states.contains(State::Invalid)
+}
+
+pub(super) fn is_window(role: Role) -> bool {
+    atspi_role_to_ax_role(role) == "AXWindow"
+}
+
+pub(super) fn value_writable(states: StateSet, interfaces: InterfaceSet) -> bool {
+    !states.contains(State::ReadOnly)
+        && ((states.contains(State::Editable) && interfaces.contains(Interface::EditableText))
+            || interfaces.contains(Interface::Value))
 }
 
 /// How many live reads may be in flight at once during the enrichment pass.
@@ -506,6 +705,7 @@ async fn enrich(
     node: &SkeletonNode,
     pid: i32,
     budget: Budget,
+    snapshot: bool,
 ) -> AxElement {
     let bare = |secure: bool, value, bounds, actions| AxElement {
         role: atspi_role_to_ax_role(node.role).to_string(),
@@ -515,7 +715,11 @@ async fn enrich(
         pid,
         secure: Some(secure),
         enabled: Some(enabled_of(node.states)),
-        settable: settable_of(node.role, node.states),
+        settable: if snapshot {
+            Some(value_writable(node.states, node.ifaces))
+        } else {
+            settable_of(node.role, node.states)
+        },
         actions,
         url: None,
         children: Vec::new(),
@@ -542,7 +746,8 @@ async fn enrich(
     .await;
     let showing = node.states.contains(State::Showing);
     let wants_value = !secure && (has_readable_value(node.role) || has_numeric_value(node.role));
-    let interactable = is_interactable(node.role);
+    let interactable =
+        is_interactable(node.role) || (snapshot && node.ifaces.contains(Interface::Action));
 
     if !showing && !interactable && !wants_value {
         return bare(secure, None, None, None);
@@ -597,7 +802,7 @@ fn assemble(mut nodes: Vec<AxElement>, skeleton: &[SkeletonNode]) -> AxElement {
 /// Free rather than a method because the concurrent enrichment pass needs it
 /// without holding the walk, and there must be exactly one answer to "is this a
 /// password box" whichever pass asked.
-async fn secure_of(
+pub(super) async fn secure_of(
     proxy: &AccessibleProxy<'static>,
     role: Role,
     title: Option<&str>,
@@ -628,7 +833,7 @@ async fn secure_of(
 /// AT-SPI splits this in two: `Enabled` is the widget's own flag, `Sensitive`
 /// is whether it can receive input given its ancestors. A user sees "greyed
 /// out" when either is false.
-fn enabled_of(states: StateSet) -> bool {
+pub(super) fn enabled_of(states: StateSet) -> bool {
     states.contains(State::Enabled) && states.contains(State::Sensitive)
 }
 

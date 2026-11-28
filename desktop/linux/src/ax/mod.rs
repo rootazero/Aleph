@@ -15,10 +15,9 @@
 //!    maps every AT-SPI role onto the closest `"AX*"` string, so the shared
 //!    consumers light up with zero changes — the same `INTERACTABLE_ROLES`
 //!    allowlist simply starts matching. See that module for the table.
-//! 2. **No handles cross a call boundary.** A locator re-walks the tree every
-//!    time, ranked by [`aleph_desktop::rank_candidates`] — the same ranking the
-//!    Windows limb and the macOS Swift helper use, so a locator means the same
-//!    thing everywhere.
+//! 2. **Locators and snapshot references have distinct lifetimes.** Locators
+//!    still use [`aleph_desktop::rank_candidates`]. A reference leases one
+//!    bounded AT-SPI address on the issuing connection.
 //! 3. **`ax()` may still be `None`.** `LinuxPlatform` only installs this
 //!    capability when an accessibility bus is actually reachable
 //!    ([`bus::bus_looks_reachable`]). A capability that is present and always
@@ -41,17 +40,24 @@ mod roles;
 mod walk;
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 
 use async_trait::async_trait;
-use atspi::proxy::accessible::AccessibleProxy;
 use atspi::State;
+use atspi::proxy::accessible::AccessibleProxy;
+use tokio::task::AbortHandle;
+use tokio::time::Instant;
 
 use aleph_desktop::traits::AccessibilityCapability;
-use aleph_desktop::{rank_candidates, DesktopError, RankCandidate, Result};
+use aleph_desktop::{DesktopError, RankCandidate, Result, rank_candidates};
 use aleph_protocol::desktop_bridge::methods::ax::{
-    clamp_max_nodes, AxActionResult, AxElement, AxLocator, AxVerification, PerformActionParams,
-    QueryByRoleParams, QueryFocusedParams, QueryListResult, QueryResult, QueryTreeParams,
-    SetValueParams,
+    AX_REFERENCE_TTL_SECS, AxActionResult, AxElement, AxLocator, AxMutation, AxReferenceAction,
+    AxReferenceError, AxReferenceSnapshot, AxSnapshotRequest, AxSnapshotRow, AxVerification,
+    MAX_AX_REFERENCE_SNAPSHOTS, NativeAxReference, PerformActionParams, QueryByRoleParams,
+    QueryFocusedParams, QueryListResult, QueryResult, QueryTreeParams, SetValueParams,
+    clamp_max_nodes,
 };
 
 pub use bus::{bus_looks_reachable, frontmost_pid};
@@ -59,7 +65,7 @@ pub use bus::{bus_looks_reachable, frontmost_pid};
 use budget::Budget;
 use bus::{App, Bus};
 use cache::AppCache;
-use walk::Walk;
+use walk::{ReferenceTarget, Walk};
 
 /// Depth bound for the walks that carry no explicit `max_depth`
 /// (`query_by_role`, locator resolution). Deep enough to reach a control inside
@@ -71,11 +77,8 @@ const SCAN_DEPTH: u32 = 12;
 const FOCUS_DEPTH: u32 = 24;
 
 /// `AccessibilityCapability` backed by AT-SPI2 over D-Bus.
-///
-/// Stateless: every call opens its own bus connection and drops it. See the
-/// module docs for why no proxy is cached.
 pub struct LinuxAccessibility {
-    _private: (),
+    references: Arc<Mutex<ReferenceLeases>>,
 }
 
 impl LinuxAccessibility {
@@ -86,8 +89,104 @@ impl LinuxAccessibility {
     /// capability that fails on every call.
     #[must_use]
     pub fn probe() -> Option<Self> {
-        bus_looks_reachable().then_some(Self { _private: () })
+        bus_looks_reachable().then(|| Self {
+            references: Arc::default(),
+        })
     }
+}
+
+const REFERENCE_TTL: Duration = Duration::from_secs(AX_REFERENCE_TTL_SECS);
+static NEXT_LEASE: AtomicU64 = AtomicU64::new(0);
+
+struct ReferenceLease {
+    id: String,
+    deadline: Arc<Instant>,
+    pid: i32,
+    root_path: String,
+    targets: Vec<Arc<ReferenceTarget>>,
+}
+
+#[derive(Default)]
+struct ReferenceLeases {
+    snapshots: VecDeque<ReferenceLease>,
+    expiry: Option<AbortHandle>,
+}
+
+impl ReferenceLeases {
+    fn purge(&mut self) {
+        let now = Instant::now();
+        while self
+            .snapshots
+            .front()
+            .is_some_and(|lease| *lease.deadline <= now)
+        {
+            self.snapshots.pop_front();
+        }
+    }
+
+    fn insert(
+        store: &Arc<Mutex<Self>>,
+        id: String,
+        pid: i32,
+        root_path: String,
+        targets: Vec<Arc<ReferenceTarget>>,
+    ) {
+        let mut leases = store.lock().expect("reference leases lock");
+        leases.purge();
+        if leases.snapshots.len() == MAX_AX_REFERENCE_SNAPSHOTS {
+            leases.snapshots.pop_front();
+        }
+        leases.snapshots.push_back(ReferenceLease {
+            id,
+            deadline: Arc::new(Instant::now() + REFERENCE_TTL),
+            pid,
+            root_path,
+            targets,
+        });
+        if leases.expiry.is_none() {
+            let store = Arc::downgrade(store);
+            leases.expiry = Some(
+                tokio::spawn(async move {
+                    loop {
+                        let deadline = {
+                            let Some(store) = store.upgrade() else { return };
+                            let mut leases = store.lock().expect("reference leases lock");
+                            leases.purge();
+                            let Some(oldest) = leases.snapshots.front() else {
+                                leases.expiry = None;
+                                return;
+                            };
+                            *oldest.deadline
+                        };
+                        tokio::time::sleep_until(deadline).await;
+                    }
+                })
+                .abort_handle(),
+            );
+        }
+    }
+}
+
+impl Drop for ReferenceLeases {
+    fn drop(&mut self) {
+        if let Some(expiry) = &self.expiry {
+            expiry.abort();
+        }
+    }
+}
+
+fn reference_error(code: AxReferenceError, message: &str) -> DesktopError {
+    DesktopError::AxReference {
+        code,
+        message: message.into(),
+    }
+}
+
+fn stale_reference() -> DesktopError {
+    reference_error(
+        AxReferenceError::StaleReference,
+        "The AT-SPI reference is no longer live in its issuing scope. Take a fresh snapshot.",
+    )
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
@@ -428,118 +527,481 @@ impl AccessibilityCapability for LinuxAccessibility {
     async fn set_value(&self, params: SetValueParams) -> Result<AxActionResult> {
         let bus = Bus::open().await?;
         let (proxy, matched) = resolve(&bus, &params.locator, Budget::start()).await?;
-        let secure = matched.secure == Some(true);
-
         let ifaces = cache::Interfaces::query(&proxy).await.ok_or_else(|| {
             DesktopError::PlatformError(
                 "The matched element stopped answering before it could be written".into(),
             )
         })?;
-
-        // Text first, then the numeric `Value` interface. A slider, dial or spin
-        // button carries no text at all — it used to be advertised as
-        // interactable and then refused here, which is the advertised-but-
-        // disabled shape this limb exists to avoid.
-        let (performed, verification) = match ifaces.editable_text().await {
-            Some(editable) => {
-                let performed = editable
-                    .set_text_contents(&params.value)
-                    .await
-                    .map_err(|e| {
-                        DesktopError::PlatformError(format!("AT-SPI set_text_contents: {e}"))
-                    })?;
-                // Read back rather than trust the return value: a toolkit can
-                // accept the call and clamp, reformat or reject the content.
-                let actual = match ifaces.text().await {
-                    Some(text) => text.get_text(0, -1).await.ok(),
-                    None => None,
-                };
-                (
-                    performed,
-                    verify_text(&params.value, actual.as_deref(), secure),
-                )
-            }
-            None => {
-                let value = ifaces.value().await.ok_or_else(|| {
-                    DesktopError::NotImplemented(format!(
-                        "The matched {} implements neither the AT-SPI EditableText interface (for \
-                         typed text) nor the Value interface (for a number), so its value cannot \
-                         be written. Click it and use type_text instead.",
-                        matched.role
-                    ))
-                })?;
-                let wanted: f64 = params.value.trim().parse().map_err(|_| {
-                    DesktopError::InputFailed(format!(
-                        "The matched {} takes a number (it exposes the AT-SPI Value interface), \
-                         but {:?} is not one. Pass a bare number such as \"0.5\".",
-                        matched.role, params.value
-                    ))
-                })?;
-                value.set_current_value(wanted).await.map_err(|e| {
-                    DesktopError::PlatformError(format!("AT-SPI set_current_value: {e}"))
-                })?;
-                let actual = value.current_value().await.ok();
-                (true, verify_number(wanted, actual))
-            }
-        };
-
-        Ok(AxActionResult {
-            performed,
-            path: "accessibility".into(),
-            matched: Some(matched),
-            verification: Some(verification),
-        })
+        write_value(&ifaces, matched, &params.value, None).await
     }
 
     async fn perform_action(&self, params: PerformActionParams) -> Result<AxActionResult> {
         let bus = Bus::open().await?;
         let (proxy, matched) = resolve(&bus, &params.locator, Budget::start()).await?;
-
         let ifaces = cache::Interfaces::query(&proxy).await.ok_or_else(|| {
             DesktopError::PlatformError(
                 "The matched element stopped answering before it could be acted on".into(),
             )
         })?;
-        let action = ifaces.action().await.ok_or_else(|| {
-            DesktopError::NotImplemented(format!(
-                "The matched {} implements no AT-SPI Action interface, so it has no native action \
-                 to trigger. Click its center instead.",
-                matched.role
-            ))
-        })?;
+        invoke_action(&ifaces, matched, &params.action, None).await
+    }
 
-        // Canonical (untranslated) names — exactly the strings a snapshot
-        // reported, see `walk::canonical_action_names`. Matching against
-        // `GetActions` here would compare an English request against a localized
-        // label ("点击") and fail on every non-English desktop, while the
-        // snapshot the model read from said "click".
-        let available = walk::canonical_action_names(&action).await;
-
-        let index = pick_action(&available, &params.action).ok_or_else(|| {
-            DesktopError::NotImplemented(format!(
-                "The matched {} does not support '{}'. It offers: {}. Pass one of those verbatim.",
-                matched.role,
-                params.action,
-                if available.is_empty() {
-                    "nothing".to_string()
-                } else {
-                    available.join(", ")
-                }
-            ))
-        })?;
-
-        let performed = action
-            .do_action(i32::try_from(index).unwrap_or(0))
-            .await
-            .map_err(|e| DesktopError::PlatformError(format!("AT-SPI do_action: {e}")))?;
-
-        Ok(AxActionResult {
-            performed,
-            path: "accessibility".into(),
-            matched: Some(matched),
-            verification: None,
+    async fn snapshot_references(&self, request: AxSnapshotRequest) -> Result<AxReferenceSnapshot> {
+        if request.window_id.is_some() {
+            return Err(reference_error(
+                AxReferenceError::WindowScopeUnsupported,
+                "Linux has no verified mapping from the public window ID to an AT-SPI root. Use a PID.",
+            ));
+        }
+        let budget = Budget::start();
+        let bus = Bus::open().await?;
+        let app = match bus.app_for(request.pid).await? {
+            Some(app) => app,
+            None => return match request.pid {
+                Some(pid) => Ok(AxReferenceSnapshot {
+                    app_pid: pid,
+                    window_id: None,
+                    tree_available: false,
+                    elements: Vec::new(),
+                    focused: None,
+                    tree_truncated: false,
+                    truncated: false,
+                    nodes_walked: 0,
+                    total_interactable: 0,
+                }),
+                None => Err(DesktopError::NotAvailable(
+                    "No frontmost application is reachable on the AT-SPI bus. Pass an explicit PID.".into(),
+                )),
+            },
+        };
+        let mut walk = Walk::new(
+            &bus,
+            app.pid,
+            budget,
+            clamp_max_nodes(request.max_nodes) as usize,
+        )
+        .prefetch(&app.root)
+        .await;
+        let (tree_available, rows) = walk
+            .snapshot(&app.root, request.max_depth, request.max_elements)
+            .await;
+        let tree_truncated = walk.exhausted();
+        let nodes_walked = walk.spent();
+        let lease = NEXT_LEASE.fetch_add(1, Ordering::Relaxed).to_string();
+        let mut targets = Vec::new();
+        let elements: Vec<_> = rows
+            .rows
+            .into_iter()
+            .map(|(element, target)| {
+                let reference = target.map(|target| {
+                    let index = targets.len() as u32;
+                    targets.push(Arc::new(target));
+                    NativeAxReference {
+                        lease: lease.clone(),
+                        index,
+                    }
+                });
+                AxSnapshotRow { element, reference }
+            })
+            .collect();
+        let truncated = rows.total_interactable > elements.len();
+        if !targets.is_empty() {
+            ReferenceLeases::insert(
+                &self.references,
+                lease,
+                app.pid,
+                app.root.inner().path().as_str().to_owned(),
+                targets,
+            );
+        }
+        Ok(AxReferenceSnapshot {
+            app_pid: app.pid,
+            window_id: None,
+            tree_available,
+            elements,
+            focused: rows.focused,
+            tree_truncated,
+            truncated,
+            nodes_walked,
+            total_interactable: rows.total_interactable,
         })
     }
+
+    async fn act_on_reference(&self, request: AxReferenceAction) -> Result<AxActionResult> {
+        let (pid, root_path, lease, target) = {
+            let mut leases = self.references.lock().expect("reference leases lock");
+            leases.purge();
+            let lease = leases
+                .snapshots
+                .iter()
+                .find(|lease| lease.id == request.reference.lease)
+                .ok_or_else(stale_reference)?;
+            let target = lease
+                .targets
+                .get(request.reference.index as usize)
+                .ok_or_else(stale_reference)?;
+            (
+                lease.pid,
+                lease.root_path.clone(),
+                Arc::downgrade(&lease.deadline),
+                target.clone(),
+            )
+        };
+        // The task stays alive through dispatch and readback if its caller is
+        // cancelled. The normal await still spans the native request boundary.
+        tokio::spawn(act_on_target(
+            pid,
+            root_path,
+            lease,
+            target,
+            request.mutation,
+        ))
+        .await
+        .map_err(|_| {
+            reference_error(
+                AxReferenceError::ActionOutcomeUnknown,
+                "The AT-SPI action worker did not return a receipt.",
+            )
+        })?
+    }
+}
+
+async fn act_on_target(
+    pid: i32,
+    root_path: String,
+    lease: Weak<Instant>,
+    target: Arc<ReferenceTarget>,
+    mutation: AxMutation,
+) -> Result<AxActionResult> {
+    let deadline = *lease.upgrade().ok_or_else(stale_reference)?;
+    let validation_deadline = deadline.min(Instant::now() + budget::AX_BUDGET);
+    let (matched, set) =
+        tokio::time::timeout_at(validation_deadline, verify_target(pid, &root_path, &target))
+            .await
+            .map_err(|_| stale_reference())??;
+    let ifaces = cache::Interfaces::from_set(set, &target.proxy);
+    let dispatch = ReferenceDispatch {
+        owner: target.proxy.inner().destination().as_str(),
+        pid,
+        validation_deadline,
+        lease,
+    };
+    match mutation {
+        AxMutation::SetValue { value } => {
+            if !target.writable || matched.settable != Some(true) {
+                return Err(reference_error(
+                    AxReferenceError::ActionUnsupported,
+                    "The AT-SPI element does not offer a writable value.",
+                ));
+            }
+            write_value(&ifaces, matched, &value, Some(&dispatch)).await
+        }
+        AxMutation::Perform { action } => {
+            if !set.contains(atspi::Interface::Action)
+                || pick_action(&target.actions, &action).is_none()
+            {
+                return Err(reference_error(
+                    AxReferenceError::ActionUnsupported,
+                    "The AT-SPI element does not offer the requested native action.",
+                ));
+            }
+            invoke_action(&ifaces, matched, &action, Some(&dispatch)).await
+        }
+    }
+}
+
+async fn verify_target(
+    pid: i32,
+    root_path: &str,
+    target: &ReferenceTarget,
+) -> Result<(AxElement, atspi::InterfaceSet)> {
+    let bus = Bus::open().await.map_err(|_| stale_reference())?;
+    let proxy = &target.proxy;
+    if !bus.owns(proxy) || !bus.provider_has_pid(proxy, pid).await {
+        return Err(stale_reference());
+    }
+    let (role, name, states, interfaces) = tokio::try_join!(
+        proxy.get_role(),
+        proxy.name(),
+        proxy.get_state(),
+        proxy.get_interfaces(),
+    )
+    .map_err(|_| stale_reference())?;
+    let title = Some(name).filter(|name| !name.is_empty());
+    if role != target.role || title != target.title || !walk::live_state(states) {
+        return Err(stale_reference());
+    }
+    if let Some(expected) = &target.accessible_id {
+        if proxy.accessible_id().await.as_ref().ok() != Some(expected) {
+            return Err(stale_reference());
+        }
+    }
+    if !bus
+        .in_scope(proxy, role, root_path, target.window.as_deref())
+        .await
+    {
+        return Err(stale_reference());
+    }
+    if !walk::enabled_of(states) {
+        return Err(reference_error(
+            AxReferenceError::ElementDisabled,
+            "The AT-SPI element is disabled.",
+        ));
+    }
+    let secure = target.secure
+        || walk::secure_of(proxy, role, title.as_deref(), None, Budget::start()).await;
+    Ok((
+        AxElement {
+            role: roles::atspi_role_to_ax_role(role).into(),
+            title,
+            pid,
+            secure: Some(secure),
+            enabled: Some(true),
+            settable: Some(walk::value_writable(states, interfaces)),
+            ..AxElement::default()
+        },
+        interfaces,
+    ))
+}
+
+async fn write_value(
+    ifaces: &cache::Interfaces<'_>,
+    matched: AxElement,
+    wanted: &str,
+    dispatch: Option<&ReferenceDispatch<'_>>,
+) -> Result<AxActionResult> {
+    let secure = matched.secure == Some(true);
+    // Text first, then the numeric `Value` interface. A slider, dial or spin
+    // button carries no text at all — it used to be advertised as
+    // interactable and then refused here, which is the advertised-but-
+    // disabled shape this limb exists to avoid.
+    let (performed, verification) = match ifaces.editable_text().await {
+        Some(editable) => {
+            check_dispatch_lease(dispatch)?;
+            let performed = mutation_reply(
+                editable.set_text_contents(wanted).await,
+                "set_text_contents",
+                dispatch,
+            )
+            .await?;
+            // Read back rather than trust the return value: a toolkit can
+            // accept the call and clamp, reformat or reject the content.
+            let actual = optional_readback(dispatch, async {
+                ifaces.text().await?.get_text(0, -1).await.ok()
+            })
+            .await;
+            (performed, verify_text(wanted, actual.as_deref(), secure))
+        }
+        None => {
+            let value = ifaces.value().await.ok_or_else(|| {
+                if dispatch.is_some() {
+                    return reference_error(
+                        AxReferenceError::ActionUnsupported,
+                        "The AT-SPI element no longer offers a writable value.",
+                    );
+                }
+                DesktopError::NotImplemented(format!(
+                    "The matched {} implements neither the AT-SPI EditableText interface (for \
+                         typed text) nor the Value interface (for a number), so its value cannot \
+                         be written. Click it and use type_text instead.",
+                    matched.role
+                ))
+            })?;
+            let wanted: f64 = wanted.trim().parse().map_err(|_| {
+                if dispatch.is_some() {
+                    return DesktopError::InputFailed(
+                        "The AT-SPI Value interface requires a number.".into(),
+                    );
+                }
+                DesktopError::InputFailed(format!(
+                    "The matched {} takes a number (it exposes the AT-SPI Value interface), \
+                         but {:?} is not one. Pass a bare number such as \"0.5\".",
+                    matched.role, wanted
+                ))
+            })?;
+            check_dispatch_lease(dispatch)?;
+            let written = if dispatch.is_some() {
+                // The typed property setter discards the error reply's sender.
+                // Keep the same native Set call and its receipt for reference actions.
+                let proxy = value.inner();
+                proxy
+                    .connection()
+                    .call_method(
+                        Some(proxy.destination()),
+                        proxy.path(),
+                        Some("org.freedesktop.DBus.Properties"),
+                        "Set",
+                        &(
+                            proxy.interface().as_str(),
+                            "CurrentValue",
+                            zbus::zvariant::Value::F64(wanted),
+                        ),
+                    )
+                    .await
+                    .map(|_| ())
+            } else {
+                value.set_current_value(wanted).await
+            };
+            mutation_reply(written, "set_current_value", dispatch).await?;
+            let actual =
+                optional_readback(dispatch, async { value.current_value().await.ok() }).await;
+            (true, verify_number(wanted, actual))
+        }
+    };
+
+    let mut verification = verification;
+    if dispatch.is_some() && secure {
+        verification.actual_preview = None;
+    }
+    Ok(AxActionResult {
+        performed,
+        path: "accessibility".into(),
+        matched: Some(matched),
+        verification: Some(verification),
+    })
+}
+
+async fn invoke_action(
+    ifaces: &cache::Interfaces<'_>,
+    matched: AxElement,
+    wanted: &str,
+    dispatch: Option<&ReferenceDispatch<'_>>,
+) -> Result<AxActionResult> {
+    let action = ifaces.action().await.ok_or_else(|| {
+        if dispatch.is_some() {
+            return reference_error(
+                AxReferenceError::ActionUnsupported,
+                "The AT-SPI element no longer offers a native action.",
+            );
+        }
+        DesktopError::NotImplemented(format!(
+            "The matched {} implements no AT-SPI Action interface, so it has no native action \
+                 to trigger. Click its center instead.",
+            matched.role
+        ))
+    })?;
+
+    // Canonical (untranslated) names — exactly the strings a snapshot
+    // reported, see `walk::canonical_action_names`. Matching against
+    // `GetActions` here would compare an English request against a localized
+    // label ("点击") and fail on every non-English desktop, while the
+    // snapshot the model read from said "click".
+    let available = if let Some(dispatch) = dispatch {
+        tokio::time::timeout_at(
+            dispatch.validation_deadline,
+            walk::canonical_action_names(&action),
+        )
+        .await
+        .map_err(|_| stale_reference())?
+    } else {
+        walk::canonical_action_names(&action).await
+    };
+
+    let index = pick_action(&available, wanted).ok_or_else(|| {
+        if dispatch.is_some() {
+            return reference_error(
+                AxReferenceError::ActionUnsupported,
+                "The AT-SPI element no longer advertises the requested action.",
+            );
+        }
+        DesktopError::NotImplemented(format!(
+            "The matched {} does not support '{}'. It offers: {}. Pass one of those verbatim.",
+            matched.role,
+            wanted,
+            if available.is_empty() {
+                "nothing".to_string()
+            } else {
+                available.join(", ")
+            }
+        ))
+    })?;
+
+    check_dispatch_lease(dispatch)?;
+    let performed = mutation_reply(
+        action.do_action(i32::try_from(index).unwrap_or(0)).await,
+        "do_action",
+        dispatch,
+    )
+    .await?;
+
+    Ok(AxActionResult {
+        performed,
+        path: "accessibility".into(),
+        matched: Some(matched),
+        verification: None,
+    })
+}
+
+async fn optional_readback<T>(
+    dispatch: Option<&ReferenceDispatch<'_>>,
+    readback: impl std::future::Future<Output = Option<T>>,
+) -> Option<T> {
+    if dispatch.is_some() {
+        tokio::time::timeout(budget::AX_BUDGET, readback)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        readback.await
+    }
+}
+
+struct ReferenceDispatch<'a> {
+    owner: &'a str,
+    pid: i32,
+    validation_deadline: Instant,
+    lease: Weak<Instant>,
+}
+
+fn check_dispatch_lease(dispatch: Option<&ReferenceDispatch<'_>>) -> Result<()> {
+    if dispatch.is_some_and(|dispatch| {
+        Instant::now() >= dispatch.validation_deadline || dispatch.lease.strong_count() == 0
+    }) {
+        return Err(stale_reference());
+    }
+    Ok(())
+}
+
+async fn mutation_reply<T>(
+    result: zbus::Result<T>,
+    method: &str,
+    dispatch: Option<&ReferenceDispatch<'_>>,
+) -> Result<T> {
+    let error = match result {
+        Ok(value) => return Ok(value),
+        Err(error) => error,
+    };
+    let Some(dispatch) = dispatch else {
+        return Err(DesktopError::PlatformError(format!(
+            "AT-SPI {method}: {error}"
+        )));
+    };
+    // A matching provider error is still a reply. A bus-side transport error
+    // may leave a delivered invocation running. Even closing our connection
+    // cannot cancel it, so keep Core's pending scope until the process exits.
+    let settled = match &error {
+        zbus::Error::MethodError(name, _, reply) => {
+            reply
+                .header()
+                .sender()
+                .is_some_and(|sender| sender.as_str() == dispatch.owner)
+                || matches!(
+                    name.as_str(),
+                    "org.freedesktop.DBus.Error.NameHasNoOwner"
+                        | "org.freedesktop.DBus.Error.ServiceUnknown"
+                )
+        }
+        // Typed decoding happens after the reply and encoding before sending.
+        zbus::Error::Variant(_) => true,
+        _ => false,
+    };
+    if !settled {
+        bus::wait_for_process_exit(dispatch.pid).await;
+    }
+    Err(reference_error(
+        AxReferenceError::ActionOutcomeUnknown,
+        "AT-SPI did not confirm the action outcome. Take a fresh snapshot before deciding whether to act again.",
+    ))
 }
 
 /// Build the verification for a **text** write from what the element read back.
