@@ -1,13 +1,10 @@
 import ApplicationServices
 import Foundation
 
-/// Register the three AX JSON-RPC handlers.
+/// Register the AX JSON-RPC handlers.
 ///
-/// Every handler first checks `AXIsProcessTrusted()`.  If accessibility
-/// permission has not been granted, all three handlers return a structured
-/// `RpcError` with code -32001 and a `PermissionGuide` stub payload that
-/// describes how the user can grant the permission.  Stage 4 will replace
-/// the stub with a real `PermissionGuide` driven by `PermissionHandlers.swift`.
+/// Every handler first checks `AXIsProcessTrusted()` and returns a structured
+/// `PermissionGuide` when accessibility permission has not been granted.
 ///
 /// When permission is granted, calls are forwarded to the shared `AxQuerier`
 /// actor; results are serialised via `encodeCodable(_:)` from JsonBridge.swift.
@@ -28,8 +25,7 @@ func registerAxHandlers(_ router: Router) async {
         try requireAxTrusted()
         let args = try decodeCodable(params, as: QueryTreeParams.self)
         // Cap depth to prevent unbounded AX tree traversal (information disclosure / OOM).
-        let MAX_QUERY_DEPTH = 20
-        let depth = min(args.max_depth ?? 6, MAX_QUERY_DEPTH)
+        let depth = min(args.max_depth ?? 6, maxAxQueryDepth)
         let (el, budget) = await querier.queryTree(
             pid: args.pid.map { pid_t($0) },
             maxDepth: depth,
@@ -49,6 +45,26 @@ func registerAxHandlers(_ router: Router) async {
         return try encodeCodable(QueryListResult(elements: list, budget: budget))
     }
 
+    await router.register("ax.snapshot_references") { params in
+        try requireAxTrusted()
+        // Presence alone determines refusal. Keep the untyped JSON number out
+        // of UInt64 decoding, since the router stores numbers as Double.
+        if case .object(let fields) = params {
+            switch fields["window_id"] {
+            case .none, .some(.null): break
+            default: throw AxReferenceRefusal.windowScopeUnsupported.rpcError
+            }
+        }
+        let args = try decodeCodable(params, as: AxSnapshotParams.self)
+        return try encodeCodable(await querier.snapshotReferences(args))
+    }
+
+    await router.register("ax.act_on_reference") { params in
+        try requireAxTrusted()
+        let args = try decodeCodable(params, as: AxReferenceActionParams.self)
+        return try encodeCodable(await querier.actOnReference(args))
+    }
+
     await router.register("ax.set_value") { params in
         try requireAxTrusted()
         let args = try decodeCodable(params, as: SetValueParams.self)
@@ -66,6 +82,9 @@ func registerAxHandlers(_ router: Router) async {
 
 // MARK: - Node budget
 
+let maxAxQueryDepth = 20
+let maxAxNodes = 10_000
+
 /// Mirror of `aleph_protocol::desktop_bridge::methods::ax::clamp_max_nodes`.
 ///
 /// The Rust side clamps before sending; this repeats it because the helper must
@@ -73,9 +92,8 @@ func registerAxHandlers(_ router: Router) async {
 /// because the field is optional on the wire for older clients.
 func clampMaxNodes(_ requested: Int?) -> Int {
     let defaultMaxNodes = 1_500
-    let maxMaxNodes = 10_000
     guard let requested, requested > 0 else { return defaultMaxNodes }
-    return min(requested, maxMaxNodes)
+    return min(requested, maxAxNodes)
 }
 
 // MARK: - Permission guard

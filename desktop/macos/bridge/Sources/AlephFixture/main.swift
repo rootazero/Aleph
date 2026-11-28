@@ -60,6 +60,9 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
 
     private var textField: NSTextField!
     private var scrollView: NSScrollView!
+    private var referenceButtons: [NSButton] = []
+    private var referenceCounts = [0, 0]
+    private var referenceCommandPath: URL { statePath.deletingPathExtension().appendingPathExtension("command") }
 
     init(mode: String, statePath: URL, ttl: TimeInterval) {
         self.mode = mode
@@ -81,6 +84,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
         // The poll is what catches a mutation AppKit never told us about — an
         // `ax.set_value` write fires no delegate callback. See `Snapshot`.
         let poll = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            self?.applyReferenceCommand()
             self?.truth.poll()
         }
         // A panicking test must not leave a window sitting on the user's screen
@@ -114,6 +118,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
         button.setAccessibilityIdentifier("aleph.button")
         window.contentView?.addSubview(button)
 
+        // The dedicated native-reference controls have identical AX labels.
         textField = NSTextField(frame: NSRect(x: 20, y: 300, width: 300, height: 24))
         textField.stringValue = ""
         textField.delegate = self
@@ -182,7 +187,49 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
             ),
         ]
 
+        referenceButtons = referenceCounts.indices.map { index in
+            let duplicate = NSButton(frame: NSRect(x: 20 + 155 * index, y: 385, width: 145, height: 26))
+            let identifier = "aleph.reference.\(index + 1)"
+            duplicate.title = "Aleph Duplicate Button"
+            duplicate.setAccessibilityIdentifier(identifier)
+            duplicate.tag = index
+            duplicate.target = self
+            duplicate.action = #selector(referenceButtonPressed(_:))
+            window.contentView?.addSubview(duplicate)
+            controls.append(Control(
+                identifier: identifier, role: "AXButton", title: duplicate.title,
+                view: duplicate, secure: false, actions: ["AXPress"],
+                value: { [unowned self] in String(self.referenceCounts[index]) }
+            ))
+            return duplicate
+        }
+
         place()
+    }
+
+    private func applyReferenceCommand() {
+        guard let command = try? String(contentsOf: referenceCommandPath, encoding: .utf8) else { return }
+        try? FileManager.default.removeItem(at: referenceCommandPath)
+        let first = referenceButtons[0]
+        let second = referenceButtons[1]
+        switch command {
+        case "reorder":
+            let frame = first.frame
+            first.frame = second.frame
+            second.frame = frame
+            window.contentView?.addSubview(second, positioned: .below, relativeTo: first)
+        case "remove":
+            // Keep the view alive to exercise membership checks even if AppKit
+            // can continue answering attributes on the detached AX object.
+            second.removeFromSuperview()
+        default: return
+        }
+        truth.record(kind: command)
+    }
+
+    @objc private func referenceButtonPressed(_ sender: NSButton) {
+        referenceCounts[sender.tag] += 1
+        truth.record(kind: "reference_press", element: sender.accessibilityIdentifier())
     }
 
     /// Where the window goes, and whether the app is allowed to come forward.

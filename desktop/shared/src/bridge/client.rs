@@ -34,7 +34,9 @@ use aleph_protocol::desktop_bridge::errors::{
     ERR_AX_REFERENCE, ERR_BRIDGE_DISABLED, ERR_HELPER_CRASHED, ERR_NOT_IMPLEMENTED,
     ERR_PERMISSION_DENIED, ERR_PLATFORM, ERR_TIMEOUT, ERR_UNSUPPORTED_LANGUAGE,
 };
-use aleph_protocol::desktop_bridge::methods::ax::AxReferenceErrorData;
+use aleph_protocol::desktop_bridge::methods::ax::{
+    AxReferenceError, AxReferenceErrorData, METHOD_ACT_ON_REFERENCE, METHOD_SNAPSHOT_REFERENCES,
+};
 use aleph_protocol::desktop_bridge::methods::media::{
     METHOD_AUDIO_RECORD, METHOD_AUDIO_RECORD_START, METHOD_CAMERA_CLIP, METHOD_VOICE_CAPTURE_START,
 };
@@ -91,6 +93,19 @@ pub fn map_bridge_error(e: RpcError) -> DesktopError {
         ERR_HELPER_CRASHED => DesktopError::BridgeFailed(format!("helper crashed: {}", e.message)),
         _ => DesktopError::BridgeFailed(format!("bridge error {}: {}", e.code, e.message)),
     }
+}
+
+/// Map an older helper's missing reference RPC to an explicit capability refusal.
+pub fn map_bridge_method_error(method: &str, error: RpcError) -> DesktopError {
+    if error.code == -32601
+        && matches!(method, METHOD_SNAPSHOT_REFERENCES | METHOD_ACT_ON_REFERENCE)
+    {
+        return DesktopError::AxReference {
+            code: AxReferenceError::ReferenceUnsupported,
+            message: "The installed desktop helper does not support native AX references".into(),
+        };
+    }
+    map_bridge_error(error)
 }
 
 /// Fallback per-call RPC deadline, for a method the protocol has no opinion on.
@@ -1235,7 +1250,7 @@ impl SwiftBridge {
                     timeout.as_secs()
                 ))
             })??;
-        serde_json::from_value(remote.map_err(map_bridge_error)?)
+        serde_json::from_value(remote.map_err(|err| map_bridge_method_error(method, err))?)
             .map_err(|e| DesktopError::BridgeFailed(format!("decode result: {e}")))
     }
 

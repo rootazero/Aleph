@@ -113,6 +113,72 @@ struct PerformActionParams: Codable {
     var action: String
 }
 
+// Native-reference wire types mirror aleph_protocol::desktop_bridge::methods::ax.
+// The router rejects explicit window IDs before decoding these params.
+struct AxSnapshotParams: Decodable {
+    let pid: Int32?
+    let max_depth: UInt32
+    let max_nodes: UInt32
+    let max_elements: UInt64
+}
+
+struct NativeAxReference: Codable {
+    let lease: String
+    let index: UInt32
+}
+
+struct AxSnapshotRow: Encodable {
+    let element: AxElement
+    let reference: NativeAxReference?
+}
+
+struct AxReferenceSnapshot: Encodable {
+    let app_pid: Int32
+    let tree_available: Bool
+    let elements: [AxSnapshotRow]
+    let focused: AxElement?
+    let tree_truncated: Bool
+    let truncated: Bool
+    let nodes_walked: Int
+    let total_interactable: Int
+}
+
+struct AxReferenceActionParams: Decodable {
+    struct Mutation: Decodable {
+        enum Kind: String, Decodable {
+            case setValue = "set_value"
+            case perform
+        }
+
+        let kind: Kind
+        let value: String?
+        let action: String?
+    }
+
+    let reference: NativeAxReference
+    let mutation: Mutation
+}
+
+enum AxReferenceRefusal: String {
+    case windowScopeUnsupported = "window_scope_unsupported"
+    case staleReference = "stale_reference"
+    case elementDisabled = "element_disabled"
+    case actionUnsupported = "action_unsupported"
+    case actionOutcomeUnknown = "action_outcome_unknown"
+
+    var rpcError: RpcError {
+        let message: String
+        switch self {
+        case .windowScopeUnsupported: message = "macOS cannot verify an AX root for this window ID"
+        case .staleReference: message = "The AX reference is no longer live. Take a new snapshot."
+        case .elementDisabled: message = "The referenced AX element is disabled"
+        case .actionUnsupported: message = "The referenced AX element does not support this mutation"
+        case .actionOutcomeUnknown: message = "The AX mutation outcome is unknown. Observe the app again."
+        }
+        return RpcError(code: -32008, message: message, data: .object(["code": .string(rawValue)]))
+    }
+}
+
 /// Post-write verification outcome.
 /// Mirrors `aleph_protocol::desktop_bridge::methods::ax::AxVerification`.
 struct AxVerification: Codable {
@@ -195,6 +261,35 @@ private struct AxAffordances {
     let url: String?
 }
 
+private struct AxReferenceIdentity: Equatable {
+    let role: String
+    let title: String?
+    let subrole: String?
+    let identifier: String?
+    let label: String?
+}
+
+private enum AxReferenceScope {
+    case application
+    case window(AXUIElement)
+}
+
+private struct RetainedAxElement {
+    let handle: AXUIElement
+    let ancestors: [AXUIElement]
+    let scope: AxReferenceScope
+    let identity: AxReferenceIdentity
+    let observation: AxElement
+}
+
+private struct RetainedAxSnapshot {
+    let id: String
+    let expires: ContinuousClock.Instant
+    let app: NSRunningApplication
+    let root: AXUIElement
+    let elements: [RetainedAxElement]
+}
+
 /// Serializes AX API calls and builds element trees.
 ///
 /// All methods run on the actor's executor so that AX API calls
@@ -246,6 +341,18 @@ actor AxQuerier {
     /// pids already offered the unlock. The write is idempotent inside the target
     /// app, so one attempt per pid per bridge lifetime is enough.
     private var unlockedPids: Set<pid_t> = []
+
+    // Shared reference bounds from aleph_protocol::desktop_bridge::methods::ax.
+    private static let maxReferenceSnapshots = 32
+    private static let maxReferenceRows = 500
+    private static let referenceTTL: Duration = .seconds(90)
+    private let referenceClock = ContinuousClock()
+    private var referenceSnapshots: [RetainedAxSnapshot] = []
+    private var referenceExpiryTask: Task<Void, Never>?
+
+    deinit {
+        referenceExpiryTask?.cancel()
+    }
 
     // MARK: Public interface
 
@@ -304,13 +411,147 @@ actor AxQuerier {
         return (collectByRole(root, role: role), budget)
     }
 
+    func snapshotReferences(_ params: AxSnapshotParams) throws -> AxReferenceSnapshot {
+        purgeReferenceSnapshots()
+        let app: NSRunningApplication?
+        if let pid = params.pid {
+            app = NSRunningApplication(processIdentifier: pid)
+        } else {
+            app = NSWorkspace.shared.frontmostApplication
+        }
+        guard let pid = params.pid ?? app?.processIdentifier, pid > 0 else {
+            throw RpcError(code: -32602, message: "No application PID was resolved for the AX snapshot", data: nil)
+        }
+
+        let root = withTimeout(AXUIElementCreateApplication(pid))
+        let maxNodes = clampMaxNodes(Int(params.max_nodes))
+        let maxDepth = min(Int(params.max_depth), maxAxQueryDepth)
+        let maxRows = Int(min(params.max_elements, UInt64(Self.maxReferenceRows)))
+        let lease = UUID().uuidString
+        var budget = WalkBudget()
+        var total = 0
+        var rows: [AxSnapshotRow] = []
+        var retained: [RetainedAxElement] = []
+
+        func walk(_ handle: AXUIElement, ancestors: [AXUIElement], depth: Int) {
+            guard budget.nodeCount < maxNodes else {
+                budget.truncated = true
+                return
+            }
+            budget.nodeCount += 1
+            let element = elementMetadata(handle, redactSecureValue: true)
+            if element.pid == pid, element.role != "AXUnknown", observesReferenceRow(element) {
+                total += 1
+                if rows.count < maxRows {
+                    var reference: NativeAxReference?
+                    if app?.isTerminated == false, element.enabled != false,
+                       element.settable == true || element.actions?.isEmpty == false,
+                       let identity = try? referenceIdentity(of: handle),
+                       identity.role == element.role, identity.title == element.title,
+                       (identity.role == "AXSecureTextField" || isSecureSubrole(identity.subrole)) == element.secure,
+                       let scope = try? referenceScope(of: handle, role: identity.role) {
+                        reference = NativeAxReference(lease: lease, index: UInt32(retained.count))
+                        retained.append(RetainedAxElement(
+                            handle: handle, ancestors: ancestors, scope: scope,
+                            identity: identity, observation: element
+                        ))
+                    }
+                    rows.append(AxSnapshotRow(element: element, reference: reference))
+                }
+            }
+            if depth < maxDepth {
+                let childAncestors = ancestors + [handle]
+                for child in axElements(handle, kAXChildrenAttribute, limit: maxNodes - budget.nodeCount + 1) {
+                    if budget.nodeCount == maxNodes {
+                        budget.truncated = true
+                        break
+                    }
+                    walk(withTimeout(child), ancestors: childAncestors, depth: depth + 1)
+                }
+            }
+        }
+
+        let available = axAttr(root, kAXRoleAttribute) as? String == (kAXApplicationRole as String)
+        var focused: AxElement?
+        if available {
+            walk(root, ancestors: [], depth: 0)
+            if let raw = axAttr(root, kAXFocusedUIElementAttribute), let handle = asAXUIElement(raw) {
+                let element = elementMetadata(withTimeout(handle), redactSecureValue: true)
+                if element.pid == pid, element.role != "AXUnknown" { focused = element }
+            }
+        }
+        if let app, !retained.isEmpty {
+            if referenceSnapshots.count == Self.maxReferenceSnapshots {
+                referenceSnapshots.removeFirst()
+            }
+            referenceSnapshots.append(RetainedAxSnapshot(
+                id: lease, expires: referenceClock.now.advanced(by: Self.referenceTTL),
+                app: app, root: root, elements: retained
+            ))
+            scheduleReferenceExpiry()
+        }
+        return AxReferenceSnapshot(
+            app_pid: pid, tree_available: available, elements: rows, focused: focused,
+            tree_truncated: budget.truncated, truncated: total > rows.count,
+            nodes_walked: budget.nodeCount, total_interactable: total
+        )
+    }
+
+    func actOnReference(_ params: AxReferenceActionParams) throws -> AxActionResult {
+        purgeReferenceSnapshots()
+        let index = Int(params.reference.index)
+        guard let snapshot = referenceSnapshots.first(where: { $0.id == params.reference.lease }),
+              snapshot.elements.indices.contains(index), !snapshot.app.isTerminated
+        else { throw AxReferenceRefusal.staleReference.rpcError }
+
+        let element = snapshot.elements[index]
+        let handle = element.handle
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(handle, &pid) == .success, pid == snapshot.app.processIdentifier,
+              try referenceIdentity(of: handle) == element.identity,
+              try referenceScopeIsLive(element, root: snapshot.root)
+        else { throw AxReferenceRefusal.staleReference.rpcError }
+
+        let enabled = try referenceAttribute(handle, kAXEnabledAttribute) as? Bool
+        if enabled == false { throw AxReferenceRefusal.elementDisabled.rpcError }
+        if enabled == nil, element.observation.enabled != nil {
+            throw AxReferenceRefusal.staleReference.rpcError
+        }
+
+        switch params.mutation.kind {
+        case .setValue:
+            guard let value = params.mutation.value, params.mutation.action == nil else {
+                throw RpcError(code: -32602, message: "set_value requires a value", data: nil)
+            }
+            guard element.observation.settable == true, isValueSettable(handle) == true else {
+                throw AxReferenceRefusal.actionUnsupported.rpcError
+            }
+            try requireLiveLease(snapshot)
+            return try setValue(on: handle, meta: element.observation, value: value, reference: true)
+        case .perform:
+            guard let action = params.mutation.action, params.mutation.value == nil else {
+                throw RpcError(code: -32602, message: "perform requires an action name", data: nil)
+            }
+            guard element.observation.actions?.contains(action) == true,
+                  actionNames(handle)?.contains(action) == true
+            else { throw AxReferenceRefusal.actionUnsupported.rpcError }
+            try requireLiveLease(snapshot)
+            return try performAction(on: handle, meta: element.observation, action: action, reference: true)
+        }
+    }
+
     func setValue(_ params: SetValueParams) async throws -> AxActionResult {
         guard let (handle, meta) = await locate(params.locator) else {
             throw RpcError(code: -32_602, message: "no element matches locator", data: nil)
         }
-        let err = AXUIElementSetAttributeValue(
-            handle, kAXValueAttribute as CFString, params.value as CFTypeRef
-        )
+        return try setValue(on: handle, meta: meta, value: params.value)
+    }
+
+    private func setValue(
+        on handle: AXUIElement, meta: AxElement, value: String, reference: Bool = false
+    ) throws -> AxActionResult {
+        let err = AXUIElementSetAttributeValue(handle, kAXValueAttribute as CFString, value as CFTypeRef)
+        if reference { try checkReferenceMutation(err) }
         guard err == .success else {
             throw RpcError(
                 code: -32_603,
@@ -324,7 +565,7 @@ actor AxQuerier {
         let actual = readErr == .success ? readBack.map { "\($0)" } : nil
         let verification: AxVerification
         if let a = actual {
-            verification = a == params.value
+            verification = a == value
                 ? AxVerification(state: "verified", reason: nil, actual_preview: nil)
                 : AxVerification(
                     state: "unverified", reason: "value_mismatch",
@@ -344,15 +585,125 @@ actor AxQuerier {
         guard let (handle, meta) = await locate(params.locator) else {
             throw RpcError(code: -32_602, message: "no element matches locator", data: nil)
         }
-        let err = AXUIElementPerformAction(handle, params.action as CFString)
+        return try performAction(on: handle, meta: meta, action: params.action)
+    }
+
+    private func performAction(
+        on handle: AXUIElement, meta: AxElement, action: String, reference: Bool = false
+    ) throws -> AxActionResult {
+        let err = AXUIElementPerformAction(handle, action as CFString)
+        if reference { try checkReferenceMutation(err) }
         guard err == .success else {
             throw RpcError(
                 code: -32_603,
-                message: "AXUIElementPerformAction(\(params.action)) failed: \(err.rawValue)",
+                message: "AXUIElementPerformAction(\(action)) failed: \(err.rawValue)",
                 data: nil
             )
         }
         return AxActionResult(performed: true, path: "accessibility", matched: meta, verification: nil)
+    }
+
+    // MARK: Reference validation and expiry
+
+    private func observesReferenceRow(_ element: AxElement) -> Bool {
+        element.settable == true || element.actions?.isEmpty == false || element.enabled != nil
+            || element.title?.isEmpty == false || element.value?.isEmpty == false || element.secure == true
+    }
+
+    private func referenceAttribute(_ handle: AXUIElement, _ attribute: String) throws -> AnyObject? {
+        var value: AnyObject?
+        switch AXUIElementCopyAttributeValue(handle, attribute as CFString, &value) {
+        case .success: return value
+        case .noValue, .attributeUnsupported: return nil
+        default: throw AxReferenceRefusal.staleReference.rpcError
+        }
+    }
+
+    private func referenceStringAttribute(_ handle: AXUIElement, _ attribute: String) throws -> String? {
+        guard let raw = try referenceAttribute(handle, attribute) else { return nil }
+        guard let value = raw as? String else { throw AxReferenceRefusal.staleReference.rpcError }
+        return value
+    }
+
+    private func referenceIdentity(of handle: AXUIElement) throws -> AxReferenceIdentity {
+        guard let role = try referenceStringAttribute(handle, kAXRoleAttribute), !role.isEmpty else {
+            throw AxReferenceRefusal.staleReference.rpcError
+        }
+        return try AxReferenceIdentity(
+            role: role,
+            title: referenceStringAttribute(handle, kAXTitleAttribute),
+            subrole: referenceStringAttribute(handle, kAXSubroleAttribute),
+            identifier: referenceStringAttribute(handle, kAXIdentifierAttribute),
+            label: referenceStringAttribute(handle, kAXDescriptionAttribute)
+        )
+    }
+
+    private func referenceScope(of handle: AXUIElement, role: String) throws -> AxReferenceScope {
+        if role == (kAXWindowRole as String) { return .window(handle) }
+        guard let raw = try referenceAttribute(handle, kAXWindowAttribute) else { return .application }
+        guard let window = asAXUIElement(raw) else { throw AxReferenceRefusal.staleReference.rpcError }
+        return .window(window)
+    }
+
+    private func referenceScopeIsLive(_ element: RetainedAxElement, root: AXUIElement) throws -> Bool {
+        // Check the captured edges so a whole detached subtree also invalidates its references.
+        var child = element.handle
+        for parent in element.ancestors.reversed() {
+            guard axElements(parent, kAXChildrenAttribute, limit: maxAxNodes).contains(where: { CFEqual($0, child) })
+            else { return false }
+            child = parent
+        }
+        let current = try referenceScope(of: element.handle, role: element.identity.role)
+        switch (element.scope, current) {
+        case (.application, .application): return true
+        case (.window(let old), .window(let live)):
+            return CFEqual(old, live) && axElements(root, kAXWindowsAttribute, limit: maxAxNodes)
+                .contains(where: { CFEqual($0, old) })
+        default: return false
+        }
+    }
+
+    private func axElements(_ handle: AXUIElement, _ attribute: String, limit: Int) -> [AXUIElement] {
+        var elements: CFArray?
+        guard AXUIElementCopyAttributeValues(handle, attribute as CFString, 0, limit, &elements) == .success else {
+            return []
+        }
+        return elements as? [AXUIElement] ?? []
+    }
+
+    private func purgeReferenceSnapshots() {
+        let now = referenceClock.now
+        referenceSnapshots.removeAll { $0.expires <= now }
+    }
+
+    private func scheduleReferenceExpiry() {
+        guard referenceExpiryTask == nil, let deadline = referenceSnapshots.first?.expires else { return }
+        referenceExpiryTask = Task { [weak self, referenceClock] in
+            do { try await referenceClock.sleep(until: deadline) } catch { return }
+            await self?.expireReferenceSnapshots()
+        }
+    }
+
+    private func expireReferenceSnapshots() {
+        referenceExpiryTask = nil
+        purgeReferenceSnapshots()
+        scheduleReferenceExpiry()
+    }
+
+    private func requireLiveLease(_ snapshot: RetainedAxSnapshot) throws {
+        guard referenceClock.now < snapshot.expires, !snapshot.app.isTerminated else {
+            throw AxReferenceRefusal.staleReference.rpcError
+        }
+    }
+
+    private func checkReferenceMutation(_ error: AXError) throws {
+        switch error {
+        case .success: return
+        case .invalidUIElement: throw AxReferenceRefusal.staleReference.rpcError
+        case .actionUnsupported, .attributeUnsupported, .illegalArgument:
+            throw AxReferenceRefusal.actionUnsupported.rpcError
+        default: throw AxReferenceRefusal.actionOutcomeUnknown.rpcError
+        }
     }
 
     // MARK: Accessibility unlock
@@ -486,21 +837,7 @@ actor AxQuerier {
         }
         budget.nodeCount += 1
 
-        let role = (axAttr(ax, kAXRoleAttribute) as? String) ?? "AXUnknown"
-        let title = axAttr(ax, kAXTitleAttribute) as? String
-        let rawValue = axAttr(ax, kAXValueAttribute)
-        let value: String?
-        if let rv = rawValue {
-            let s = "\(rv)"
-            value = s.isEmpty ? nil : s
-        } else {
-            value = nil
-        }
-        let bounds = boundsOf(ax)
-        var ownerPid: pid_t = 0
-        AXUIElementGetPid(ax, &ownerPid)
-        let extra = affordances(of: ax, hasValue: rawValue != nil)
-
+        let element = elementMetadata(ax)
         var children: [AxElement] = []
         if depth < maxDepth {
             let rawChildren = axAttr(ax, kAXChildrenAttribute) as? [AXUIElement] ?? []
@@ -511,19 +848,53 @@ actor AxQuerier {
                 )
             }
         }
+        var tree = element
+        tree.children = children
+        return tree
+    }
+
+    private func elementMetadata(_ ax: AXUIElement, redactSecureValue: Bool = false) -> AxElement {
+        let role = (axAttr(ax, kAXRoleAttribute) as? String) ?? "AXUnknown"
+        let title = axAttr(ax, kAXTitleAttribute) as? String
+        let secure: Bool?
+        if redactSecureValue {
+            if role == "AXSecureTextField" {
+                secure = true
+            } else {
+                do { secure = try isSecureSubrole(referenceStringAttribute(ax, kAXSubroleAttribute)) }
+                catch { secure = nil }
+            }
+        } else {
+            secure = isSecureSubrole(axAttr(ax, kAXSubroleAttribute) as? String)
+        }
+        let rawValue = redactSecureValue && secure != false ? nil : axAttr(ax, kAXValueAttribute)
+        let value = rawValue.flatMap { raw -> String? in
+            let description = "\(raw)"
+            return description.isEmpty ? nil : description
+        }
+        let bounds = boundsOf(ax)
+        var ownerPid: pid_t = 0
+        AXUIElementGetPid(ax, &ownerPid)
         return AxElement(
-            role: role,
-            title: title,
-            value: value,
-            bounds: bounds,
-            pid: ownerPid,
-            secure: extra.secure,
-            enabled: extra.enabled,
-            settable: extra.settable,
-            actions: extra.actions,
-            url: extra.url,
-            children: children
+            role: role, title: title, value: value, bounds: bounds, pid: ownerPid,
+            secure: secure, enabled: axAttr(ax, kAXEnabledAttribute) as? Bool,
+            settable: rawValue != nil || redactSecureValue ? isValueSettable(ax) : nil,
+            actions: actionNames(ax), url: urlOf(ax), children: []
         )
+    }
+
+    private func isValueSettable(_ ax: AXUIElement) -> Bool? {
+        var flag: DarwinBoolean = false
+        guard AXUIElementIsAttributeSettable(ax, kAXValueAttribute as CFString, &flag) == .success else {
+            return nil
+        }
+        return flag.boolValue
+    }
+
+    private func actionNames(_ ax: AXUIElement) -> [String]? {
+        var names: CFArray?
+        guard AXUIElementCopyActionNames(ax, &names) == .success else { return nil }
+        return names as? [String] ?? []
     }
 
     /// Read the affordances an AX element already advertises and that the bridge
@@ -542,25 +913,11 @@ actor AxQuerier {
     /// whether a non-existent attribute is settable just costs an AX round trip
     /// to be told it is unsupported.
     private func affordances(of ax: AXUIElement, hasValue: Bool) -> AxAffordances {
-        var settable: Bool?
-        if hasValue {
-            var flag: DarwinBoolean = false
-            if AXUIElementIsAttributeSettable(ax, kAXValueAttribute as CFString, &flag) == .success {
-                settable = flag.boolValue
-            }
-        }
-
-        var actions: [String]?
-        var names: CFArray?
-        if AXUIElementCopyActionNames(ax, &names) == .success {
-            actions = (names as? [String]) ?? []
-        }
-
         return AxAffordances(
             secure: isSecureSubrole(axAttr(ax, kAXSubroleAttribute) as? String),
             enabled: axAttr(ax, kAXEnabledAttribute) as? Bool,
-            settable: settable,
-            actions: actions,
+            settable: hasValue ? isValueSettable(ax) : nil,
+            actions: actionNames(ax),
             url: urlOf(ax)
         )
     }
