@@ -42,7 +42,9 @@ vault HMAC 丢数据的双实例条件。去进程列表里找到持有者停掉
 
 `bash` 将所有托管 Shell 作业登记在 `src/builtin_tools/process_registry.rs`。先占名额再启动：每会话 8 个、全局 32 个活跃作业，`starting` 和 `stopping` 都占用名额。只有原生驱动启动并完成设置后才报 `running`；`kill` 是取消请求，`killed` 则要求确认未启动或已回收直接子进程。没有确认就不释放名额、不写已终结记录；已经结束的自然退出结果不被覆盖。
 
-The orderly shutdown hook `shutdown_background_jobs` closes shell admission, requests cancellation, and waits within a bounded window. It reports unconfirmed cleanup rather than treating a dropped task as a reaped process. The registry journal retains prior-run evidence, not a live process handle or cursor. Chromium installers still use their legacy task cancellation, and browser companions and human PTYs retain their own supervisors. Shell reaping confirms the direct child, not a universal descendant-tree guarantee.
+The orderly shutdown hook `shutdown_background_jobs` closes shell admission, requests cancellation, and waits within a bounded window. It reports unconfirmed cleanup rather than treating a dropped task as a reaped process. The registry journal retains prior-run evidence and cannot reopen a live process handle or cursor. Chromium installers still use their legacy task cancellation, and browser companions and human PTYs retain their own supervisors. Ordinary Shell reaping confirms the direct child.
+
+受控 JSONL 复用同一个会话作业和游标。Linux 驱动在自然退出、停止、超时和停机分支都要确认作业 cgroup 清空；回收的证据决定最终状态。首次显式关闭写端后，活作业或保留期内的终态条目可以向仍有授权的主体返回 `already_closed`。该回执不持有写端或输入记录。 / Controlled JSONL uses the same session-owned job and cursor. The Linux driver verifies that the job cgroup is empty on exit, stop, timeout and shutdown. Retained jobs with a witnessed explicit EOF can return `already_closed` after reauthorization. The receipt holds no writer or input record.
 
 See [Shell tool and continuation](TOOL_SYSTEM.md#code-execution) and [sandbox execution](SANDBOX.md#execution-pipeline--执行顺序).
 

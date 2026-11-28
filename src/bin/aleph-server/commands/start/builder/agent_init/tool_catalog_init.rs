@@ -195,7 +195,7 @@ pub(super) async fn init_tool_catalog(
                     .into_iter()
                     .filter(|p| p.status.is_active())
                     .flat_map(|plugin| {
-                        match alephcore::extension::manifest::parse_manifest_from_dir_sync(
+                        match alephcore::extension::manifest::parse_manifest_from_dir_cached_global(
                             &plugin.root_dir,
                         ) {
                             Ok(manifest) => manifest

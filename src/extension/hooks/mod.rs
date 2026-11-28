@@ -64,17 +64,17 @@ mod user_settings;
 
 pub(crate) use cc_tool_aliases::{cc_spellings, normalize_cc_tool_entry, scoped_tool_head};
 pub use consent::{
-    ConsentEntry, ConsentStatus, ShellHookConsent, Superseded, INLINE_COMMAND_EVENT,
-    SKILL_INLINE_EVENT, USER_SKILL_OWNER,
+    ConsentEntry, ConsentStatus, INLINE_COMMAND_EVENT, SKILL_INLINE_EVENT, ShellHookConsent,
+    Superseded, USER_SKILL_OWNER,
 };
-pub(crate) use executor::{bounded_env_value, read_capped, MAX_HOOK_OUTPUT_BYTES};
 pub use executor::{
-    command_hook_invocation, CommandHookInvocation, HookExecutor, HookMemoSink, SessionHookMemoSink,
+    CommandHookInvocation, HookExecutor, HookMemoSink, SessionHookMemoSink, command_hook_invocation,
 };
+pub(crate) use executor::{MAX_HOOK_OUTPUT_BYTES, bounded_env_value, read_capped};
 pub(crate) use matcher::{matcher_notice, warn_on_matcher};
 pub use output_budget::{budget_hook_contexts, join_messages};
 pub(crate) use registry::{HookInput, HookRegistry};
-pub use session_facts::{current_transcript_source, with_transcript_source, TranscriptSource};
+pub use session_facts::{TranscriptSource, current_transcript_source, with_transcript_source};
 pub use user_settings::load_user_hooks;
 pub(crate) use user_settings::{default_kind_for_event, load_registered_user_hooks, parse_event};
 
@@ -585,11 +585,9 @@ pub const PLUGIN_DATA_VARIABLES: [&str; 2] = ["CLAUDE_PLUGIN_DATA", "ALEPH_PLUGI
 /// variable, because a value spliced into source is parsed — a directory
 /// named `fmt$(…)` would run. See [`HookAction::Command`](crate::extension::HookAction::Command).
 ///
-/// `owner` is the hook's `plugin_name`: a plugin id for plugin-registered
-/// hooks, or a source label like `user:project` for hooks that came from
-/// settings. Only the former has a data directory, and `validate_plugin_id`
-/// separates them — a label cannot be a plugin id, so the `_DATA` pair is
-/// left unexpanded rather than pointed at an invented directory.
+/// `owner` is the hook's `plugin_name`. A registered plugin has a data
+/// directory derived from its exact owner key. Settings hooks carry a
+/// source label such as `user:project` and leave the `_DATA` pair unexpanded.
 ///
 /// The `_DATA` pair was missing here until 2026-08-19 while
 /// `PLUGIN_SYSTEM.md` claimed all four variables worked on all four surfaces.
@@ -606,8 +604,7 @@ pub(crate) fn substitute_path_variables(template: &str, plugin_root: &Path, owne
     }
 
     // Plugin data directory — plugin-owned hooks only.
-    if crate::extension::manifest::validate_plugin_id(owner).is_ok() {
-        let vars = crate::extension::plugin_vars::PluginVars::new(owner, plugin_root);
+    if let Some(vars) = crate::extension::plugin_vars::PluginVars::for_owner(owner, plugin_root) {
         vars.ensure_data_dir_if_referenced(&result);
         let data = vars.data_dir().to_string_lossy();
         for name in PLUGIN_DATA_VARIABLES {
@@ -645,9 +642,8 @@ pub(crate) fn plugin_shell_line(command: &str, plugin_root: Option<&Path>, owner
     if cfg!(windows) {
         return substitute_path_variables(command, root, owner);
     }
-    if crate::extension::manifest::validate_plugin_id(owner).is_ok() {
-        crate::extension::plugin_vars::PluginVars::new(owner, root)
-            .ensure_data_dir_if_referenced(command);
+    if let Some(vars) = crate::extension::plugin_vars::PluginVars::for_owner(owner, root) {
+        vars.ensure_data_dir_if_referenced(command);
     }
     command.to_string()
 }
@@ -770,9 +766,9 @@ pub async fn fire_global_observer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extension::HookPriority;
     use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
     use crate::extension::visibility::ScopeKey;
-    use crate::extension::HookPriority;
 
     #[test]
     fn test_substitute_variables() {
@@ -1222,11 +1218,13 @@ mod tests {
         assert_eq!(result.hooks_executed, 1);
         assert_eq!(result.action_results.len(), 1);
         assert!(result.action_results[0].success);
-        assert!(result.action_results[0]
-            .output
-            .as_ref()
-            .unwrap()
-            .contains("test output"));
+        assert!(
+            result.action_results[0]
+                .output
+                .as_ref()
+                .unwrap()
+                .contains("test output")
+        );
     }
 
     #[test]
@@ -1403,11 +1401,13 @@ mod tests {
 
         assert_eq!(result.hooks_executed, 1);
         assert!(result.action_results[0].success);
-        assert!(result.action_results[0]
-            .output
-            .as_deref()
-            .unwrap_or_default()
-            .contains("approved_output"));
+        assert!(
+            result.action_results[0]
+                .output
+                .as_deref()
+                .unwrap_or_default()
+                .contains("approved_output")
+        );
     }
 
     #[tokio::test]
@@ -1421,11 +1421,13 @@ mod tests {
             .await
             .unwrap();
         assert!(result.action_results[0].success);
-        assert!(result.action_results[0]
-            .output
-            .as_deref()
-            .unwrap_or_default()
-            .contains("ungated"));
+        assert!(
+            result.action_results[0]
+                .output
+                .as_deref()
+                .unwrap_or_default()
+                .contains("ungated")
+        );
     }
 
     #[cfg(unix)]

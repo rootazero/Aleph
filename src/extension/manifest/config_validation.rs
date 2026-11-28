@@ -57,7 +57,7 @@ pub fn validate_config_schema_declaration(schema: &JsonValue) -> Result<(), Stri
 /// properties).
 fn check_complexity(schema: &JsonValue) -> Result<(), String> {
     fn walk(v: &JsonValue, depth: usize, budget: &mut usize) -> Result<(), String> {
-        if depth > MAX_SCHEMA_DEPTH {
+        if depth > MAX_SCHEMA_DEPTH && (v.is_object() || v.is_array()) {
             return Err(format!("schema nesting exceeds {MAX_SCHEMA_DEPTH} levels"));
         }
         match v {

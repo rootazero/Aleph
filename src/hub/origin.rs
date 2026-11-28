@@ -19,7 +19,7 @@
 //! following this module pair's existing shape — pure free functions over a
 //! `&Connection` here, thin async wrappers on `CatalogCache`.
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use crate::hub::types::{ExtensionEntry, ExtensionKind, InstallSpec};
@@ -86,7 +86,7 @@ fn outcome_local_ref(o: &crate::hub::install::InstallOutcome) -> &str {
     use crate::hub::install::InstallOutcome;
     match o {
         InstallOutcome::Mcp { id } => id,
-        InstallOutcome::Plugin { path } | InstallOutcome::Skill { path } => path,
+        InstallOutcome::Plugin { path, .. } | InstallOutcome::Skill { path } => path,
     }
 }
 
@@ -190,8 +190,7 @@ fn row_to_origin(row: &rusqlite::Row<'_>) -> rusqlite::Result<InstallOrigin> {
     })
 }
 
-const ALL_ORIGINS_SQL: &str =
-    "SELECT entry_id, kind, source_id, via, version, spec_digest, local_ref, installed_at FROM install_origin";
+const ALL_ORIGINS_SQL: &str = "SELECT entry_id, kind, source_id, via, version, spec_digest, local_ref, installed_at FROM install_origin";
 
 pub fn all_origins(conn: &Connection) -> rusqlite::Result<Vec<InstallOrigin>> {
     let mut stmt = conn.prepare(ALL_ORIGINS_SQL)?;
@@ -280,10 +279,17 @@ pub(super) fn forget_installed(
 /// (`local:{kind}:{backend}`) back to the ledger row that produced it.
 #[must_use]
 pub fn local_ref_addresses(local_ref: &str, backend: &str) -> bool {
+    if backend.starts_with("local:plugin:p:") {
+        return false;
+    }
     let backend_id = backend
-        .strip_prefix("local:")
-        .and_then(|rest| rest.split_once(':'))
-        .map(|(_, id)| id)
+        .strip_prefix("local:plugin:g:")
+        .or_else(|| {
+            backend
+                .strip_prefix("local:")
+                .and_then(|rest| rest.split_once(':'))
+                .map(|(_, id)| id)
+        })
         .unwrap_or(backend);
     if local_ref == backend || local_ref == backend_id {
         return true;

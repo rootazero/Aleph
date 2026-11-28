@@ -6,6 +6,8 @@
 
 use std::path::Path;
 
+use crate::extension::manifest::inputs;
+
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
@@ -108,30 +110,30 @@ pub fn parse_cc_plugin_json_content(
     plugin_dir: &Path,
 ) -> ExtensionResult<PluginManifest> {
     let manifest_path = plugin_dir.join(CC_PLUGIN_JSON);
-
     let json: CcPluginJson = serde_json::from_str(content).map_err(|e| {
         ExtensionError::invalid_manifest(&manifest_path, format!("JSON parse error: {e}"))
     })?;
+    manifest_from_json(&json, plugin_dir)
+}
 
-    // `name` is required
+fn manifest_from_json(json: &CcPluginJson, plugin_dir: &Path) -> ExtensionResult<PluginManifest> {
+    let manifest_path = plugin_dir.join(CC_PLUGIN_JSON);
     let raw_name = json
         .name
+        .as_deref()
+        .filter(|name| !name.is_empty())
         .ok_or_else(|| ExtensionError::missing_field(&manifest_path, "name"))?;
-    if raw_name.is_empty() {
-        return Err(ExtensionError::missing_field(&manifest_path, "name"));
-    }
 
-    // Derive plugin ID from name
-    let plugin_id = sanitize_plugin_id(&raw_name);
+    let plugin_id = sanitize_plugin_id(raw_name);
     validate_plugin_id(&plugin_id)
-        .map_err(|reason| ExtensionError::invalid_plugin_name(&raw_name, reason))?;
+        .map_err(|reason| ExtensionError::invalid_plugin_name(raw_name, reason))?;
 
-    // Read before `json.aleph` is moved out below.
-    let declares_servers = json.mcp_servers.is_some() || plugin_dir.join(KIND_SIDECAR).is_file();
+    let declares_servers =
+        json.mcp_servers.is_some() || inputs::is_file(plugin_dir.join(KIND_SIDECAR));
 
     // Parse [aleph] section from raw JSON value
     let mut superset = AlephSuperset::default();
-    let (kind, entry, aleph_ext, permissions) = if let Some(aleph_val) = json.aleph {
+    let (kind, entry, aleph_ext, permissions) = if let Some(aleph_val) = &json.aleph {
         // The superset reads the same object. Deserializing twice rather than
         // widening `AlephExtensions` keeps the runtime type free of parse-only
         // sections, and unknown keys are ignored by both, so neither view can
@@ -142,7 +144,7 @@ pub fn parse_cc_plugin_json_content(
                 format!("Invalid [aleph] superset section: {e}"),
             )
         })?;
-        let aleph_ext: AlephExtensions = serde_json::from_value(aleph_val).map_err(|e| {
+        let aleph_ext: AlephExtensions = AlephExtensions::deserialize(aleph_val).map_err(|e| {
             ExtensionError::invalid_manifest(
                 &manifest_path,
                 format!("Invalid [aleph] section: {e}"),
@@ -211,9 +213,9 @@ pub fn parse_cc_plugin_json_content(
     }
     let manifest = PluginManifest {
         id: plugin_id,
-        name: raw_name,
-        version: json.version,
-        description: json.description,
+        name: raw_name.to_owned(),
+        version: json.version.clone(),
+        description: json.description.clone(),
         kind,
         entry: entry.into(),
         root_dir: plugin_dir.to_path_buf(),
@@ -235,7 +237,7 @@ pub fn parse_cc_plugin_json_content(
         // CC-compat extensions
         aleph_extensions: aleph_ext,
         memory_manifest: superset.memory,
-        panel: json.panel,
+        panel: json.panel.clone(),
     };
 
     Ok(manifest)
@@ -247,7 +249,7 @@ pub fn parse_cc_plugin_json_content(
 /// * `dir` - Path to the plugin root directory
 pub fn parse_cc_plugin_json_sync(dir: &Path) -> ExtensionResult<PluginManifest> {
     let json_path = dir.join(CC_PLUGIN_JSON);
-    let content = std::fs::read_to_string(&json_path)?;
+    let content = inputs::read_to_string(&json_path)?;
     parse_cc_plugin_json_content(&content, dir)
 }
 
@@ -277,21 +279,18 @@ pub struct ClaudeCodeJsonAdapter;
 
 impl ManifestAdapter for ClaudeCodeJsonAdapter {
     fn detect(&self, plugin_dir: &Path) -> bool {
-        plugin_dir.join(CC_PLUGIN_JSON).exists()
+        inputs::exists(plugin_dir.join(CC_PLUGIN_JSON))
     }
 
     fn parse(&self, plugin_dir: &Path) -> anyhow::Result<AdapterOutput> {
-        let manifest = parse_cc_plugin_json_sync(plugin_dir)
+        let json_path = plugin_dir.join(CC_PLUGIN_JSON);
+        let content = inputs::read_to_string(&json_path)?;
+        let raw: CcPluginJson =
+            serde_json::from_str(&content).map_err(|e| anyhow::anyhow!("JSON parse error: {e}"))?;
+        let manifest = manifest_from_json(&raw, plugin_dir)
             .map_err(|e| anyhow::anyhow!("CC JSON parse error: {e}"))?;
-
         let plugin_id = manifest.id.clone();
         let mut capabilities = Vec::new();
-
-        // Re-parse the raw JSON to get component paths
-        let json_path = plugin_dir.join(CC_PLUGIN_JSON);
-        let content = std::fs::read_to_string(&json_path)?;
-        let raw: CcPluginJson = serde_json::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("JSON re-parse error: {e}"))?;
 
         // Component fields accept a path, an array of paths, or (for hooks and
         // mcpServers) an inlined object — see `component_source`.
@@ -353,16 +352,18 @@ impl ManifestAdapter for ClaudeCodeJsonAdapter {
 
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),
-            name: Some(manifest.name),
-            version: manifest.version,
-            description: manifest.description,
+            name: Some(manifest.name.clone()),
+            version: manifest.version.clone(),
+            description: manifest.description.clone(),
             capabilities,
             source: CapabilitySource {
                 plugin_id,
                 origin: PluginOrigin::Global,
                 format: SourceFormat::ClaudeCode,
             },
-            permissions: manifest.permissions,
+            permissions: manifest.permissions.clone(),
+            runtime_manifest: Some(manifest),
+            diagnostics: Vec::new(),
         })
     }
 

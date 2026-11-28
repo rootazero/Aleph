@@ -269,6 +269,16 @@ impl UsageStore {
     }
 }
 
+/// Sidecar directory for an exact manifest path or a legacy skill layout.
+pub(crate) fn sidecar_dir_for_manifest(manifest: &Path) -> Option<&Path> {
+    let directory = manifest.parent()?;
+    if manifest.file_name().is_some_and(|name| name == "SKILL.md") {
+        directory.parent()
+    } else {
+        Some(directory)
+    }
+}
+
 /// What "a skill was used" consists of, in one place.
 ///
 /// A use is **two** writes — the `.usage.json` counter and the `.cooccur.json`
@@ -353,9 +363,11 @@ mod tests {
     #[test]
     fn a_missing_sidecar_is_an_empty_map() {
         let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
-        assert!(decode_sidecar(Err(missing), Path::new("x"))
-            .expect("a first run has no sidecar yet")
-            .is_empty());
+        assert!(
+            decode_sidecar(Err(missing), Path::new("x"))
+                .expect("a first run has no sidecar yet")
+                .is_empty()
+        );
     }
 
     #[test]

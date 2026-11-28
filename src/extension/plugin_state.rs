@@ -37,6 +37,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::visibility::{PluginInstanceKey, ScopeKey};
+
 /// File name under `<data_dir>`; the twin is `skills.toml`.
 pub const PLUGINS_CONFIG_FILE: &str = "plugins.toml";
 
@@ -98,6 +100,8 @@ pub struct PluginCleanupStep {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[must_use]
 pub struct PluginControlOutcome {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
     pub plugin_id: String,
     pub desired_enabled: bool,
     pub preference_changed: bool,
@@ -240,9 +244,16 @@ pub struct PluginsConfig {
     #[serde(default)]
     pub entries: BTreeMap<String, PluginEntryConfig>,
 
+    /// Preferences written for a particular canonical project and plugin ID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub instances: BTreeMap<String, PluginEntryConfig>,
+
     /// Owner trust policy. See [`PluginTrustConfig`].
     #[serde(default)]
     pub trust: PluginTrustConfig,
+
+    #[serde(flatten, default)]
+    pub(crate) extra: BTreeMap<String, toml::Value>,
 }
 
 impl PluginsConfig {
@@ -292,8 +303,8 @@ impl PluginsConfig {
     #[must_use]
     pub fn restricted_until_repaired() -> Self {
         Self {
-            entries: BTreeMap::new(),
             trust: PluginTrustConfig { enforce: true },
+            ..Self::default()
         }
     }
 
@@ -334,12 +345,42 @@ impl PluginsConfig {
         plugin_id: &str,
         origin: crate::extension::PluginOrigin,
     ) -> Activation {
-        match self.entries.get(plugin_id).and_then(|e| e.enabled) {
+        self.activation_for(&PluginInstanceKey::global(plugin_id), origin)
+    }
+
+    pub(crate) fn activation_for(
+        &self,
+        instance: &PluginInstanceKey,
+        origin: crate::extension::PluginOrigin,
+    ) -> Activation {
+        let preference = self.entry(instance).and_then(|entry| entry.enabled);
+        let legacy_denied = matches!(instance.scope, ScopeKey::Project(_))
+            && self
+                .entries
+                .get(&instance.plugin_id)
+                .and_then(|entry| entry.enabled)
+                == Some(false);
+        match preference.or(legacy_denied.then_some(false)) {
             Some(true) => Activation::Enabled,
             Some(false) => Activation::Disabled,
             None if origin.enabled_by_default() => Activation::Enabled,
             None => Activation::NotEnabled,
         }
+    }
+
+    pub(super) fn entry(&self, instance: &PluginInstanceKey) -> Option<&PluginEntryConfig> {
+        match instance.scope {
+            ScopeKey::Global => self.entries.get(&instance.plugin_id),
+            ScopeKey::Project(_) => self.instances.get(&instance.preference_key()),
+        }
+    }
+
+    fn entry_mut(&mut self, instance: &PluginInstanceKey) -> &mut PluginEntryConfig {
+        let entries = match instance.scope {
+            ScopeKey::Global => &mut self.entries,
+            ScopeKey::Project(_) => &mut self.instances,
+        };
+        entries.entry(instance.preference_key()).or_default()
     }
 
     /// Materialise the runtime owner-trust policy from this document.
@@ -359,6 +400,12 @@ impl PluginsConfig {
                 .filter(|(_, e)| e.trusted == Some(true))
                 .map(|(id, _)| id.clone()),
         )
+        .with_project_allowlist(
+            self.instances
+                .iter()
+                .filter(|(_, entry)| entry.trusted == Some(true))
+                .map(|(selector, _)| selector.clone()),
+        )
     }
 
     /// Record that the operator does (or does not) vouch for this plugin.
@@ -366,7 +413,11 @@ impl PluginsConfig {
     /// Returns `true` when the stored value changed, so a no-op skips the disk
     /// write — same contract as [`Self::set_enabled`].
     pub fn set_trusted(&mut self, plugin_id: &str, trusted: bool) -> bool {
-        let entry = self.entries.entry(plugin_id.to_string()).or_default();
+        self.set_trusted_for(&PluginInstanceKey::global(plugin_id), trusted)
+    }
+
+    pub(crate) fn set_trusted_for(&mut self, instance: &PluginInstanceKey, trusted: bool) -> bool {
+        let entry = self.entry_mut(instance);
         if entry.trusted == Some(trusted) {
             return false;
         }
@@ -387,7 +438,11 @@ impl PluginsConfig {
     /// callers can skip a disk write (and a projection rebuild) on a no-op
     /// toggle.
     pub fn set_enabled(&mut self, plugin_id: &str, enabled: bool) -> bool {
-        let entry = self.entries.entry(plugin_id.to_string()).or_default();
+        self.set_enabled_for(&PluginInstanceKey::global(plugin_id), enabled)
+    }
+
+    pub(crate) fn set_enabled_for(&mut self, instance: &PluginInstanceKey, enabled: bool) -> bool {
+        let entry = self.entry_mut(instance);
         if entry.enabled == Some(enabled) {
             return false;
         }
@@ -402,7 +457,11 @@ impl PluginsConfig {
     /// it through Extism's config, and the RPC face returns it verbatim.
     #[must_use]
     pub fn settings_json(&self, plugin_id: &str) -> serde_json::Value {
-        let Some(entry) = self.entries.get(plugin_id) else {
+        self.settings_json_for(&PluginInstanceKey::global(plugin_id))
+    }
+
+    pub(crate) fn settings_json_for(&self, instance: &PluginInstanceKey) -> serde_json::Value {
+        let Some(entry) = self.entry(instance) else {
             return serde_json::Value::Object(serde_json::Map::new());
         };
         let mut map = serde_json::Map::new();
@@ -412,7 +471,7 @@ impl PluginsConfig {
                     map.insert(key.clone(), v);
                 }
                 Err(e) => tracing::warn!(
-                    plugin_id, key, error = %e,
+                    plugin_id = %instance.plugin_id, key, error = %e,
                     "plugin setting could not be represented as JSON; skipped"
                 ),
             }
@@ -432,7 +491,15 @@ impl PluginsConfig {
         plugin_id: &str,
         settings: BTreeMap<String, toml::Value>,
     ) -> bool {
-        let entry = self.entries.entry(plugin_id.to_string()).or_default();
+        self.set_settings_for(&PluginInstanceKey::global(plugin_id), settings)
+    }
+
+    pub(crate) fn set_settings_for(
+        &mut self,
+        instance: &PluginInstanceKey,
+        settings: BTreeMap<String, toml::Value>,
+    ) -> bool {
+        let entry = self.entry_mut(instance);
         if entry.settings == settings {
             return false;
         }
@@ -447,7 +514,14 @@ impl PluginsConfig {
     /// leftover will be swept up later" only holds for things that changed
     /// name, and a same-id reinstall is never an orphan.
     pub fn forget(&mut self, plugin_id: &str) -> bool {
-        self.entries.remove(plugin_id).is_some()
+        self.forget_instance(&PluginInstanceKey::global(plugin_id))
+    }
+
+    pub(crate) fn forget_instance(&mut self, instance: &PluginInstanceKey) -> bool {
+        match instance.scope {
+            ScopeKey::Global => self.entries.remove(&instance.plugin_id).is_some(),
+            ScopeKey::Project(_) => self.instances.remove(&instance.preference_key()).is_some(),
+        }
     }
 }
 
@@ -510,6 +584,110 @@ pub async fn forget_plugin_sidecars(plugin_id: &str) {
 mod tests {
     use super::*;
     use crate::extension::types::PluginOrigin;
+
+    #[test]
+    fn scoped_policy_preserves_legacy_denial_without_inheriting_allowance_or_settings() {
+        use std::path::PathBuf;
+
+        let id = "same-id";
+        let global = PluginInstanceKey::global(id);
+        let project_a = PluginInstanceKey::new(ScopeKey::Project(PathBuf::from("/a")), id.into());
+        let project_b = PluginInstanceKey::new(ScopeKey::Project(PathBuf::from("/b")), id.into());
+        let mut config: PluginsConfig = toml::from_str(
+            "[trust]\nenforce=true\n[entries.same-id]\nenabled=false\ntrusted=true\n[entries.same-id.settings]\nvalue='global'\n",
+        ).unwrap();
+        assert!(
+            config
+                .owner_trust_policy()
+                .allows_instance(&global, PluginOrigin::Global)
+        );
+        assert!(
+            !config
+                .owner_trust_policy()
+                .allows_instance(&project_a, PluginOrigin::Workspace)
+        );
+        assert_eq!(
+            config.activation_for(&project_a, PluginOrigin::Workspace),
+            Activation::Disabled
+        );
+        assert_eq!(
+            config.settings_json_for(&global),
+            serde_json::json!({"value": "global"})
+        );
+        assert_eq!(config.settings_json_for(&project_a), serde_json::json!({}));
+        config.set_trusted_for(&project_a, true);
+        config.set_settings_for(
+            &project_a,
+            BTreeMap::from([("value".into(), toml::Value::String("a".into()))]),
+        );
+        assert_eq!(
+            config.activation_for(&project_a, PluginOrigin::Workspace),
+            Activation::Disabled
+        );
+        config.set_enabled_for(&project_a, true);
+        let restored: PluginsConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert!(
+            restored
+                .owner_trust_policy()
+                .allows_instance(&project_a, PluginOrigin::Workspace)
+        );
+        assert!(
+            !restored
+                .owner_trust_policy()
+                .allows_instance(&project_b, PluginOrigin::Workspace)
+        );
+        assert_eq!(
+            restored.activation_for(&project_a, PluginOrigin::Workspace),
+            Activation::Enabled
+        );
+        assert_eq!(
+            restored.activation_for(&project_b, PluginOrigin::Workspace),
+            Activation::Disabled
+        );
+        assert_eq!(
+            restored.settings_json_for(&project_a),
+            serde_json::json!({"value": "a"})
+        );
+        assert_eq!(
+            restored.settings_json_for(&project_b),
+            serde_json::json!({})
+        );
+    }
+
+    #[tokio::test]
+    async fn scoped_preferences_follow_canonical_root_on_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let original = temp.path().join("original");
+        let copied = temp.path().join("copied");
+        let moved = temp.path().join("moved");
+        std::fs::create_dir_all(original.join("nested")).unwrap();
+        std::fs::create_dir_all(&copied).unwrap();
+        let instance =
+            |root: &Path| PluginInstanceKey::new(ScopeKey::project(root), "sample".into());
+        let path = temp.path().join(PLUGINS_CONFIG_FILE);
+        let mut config: PluginsConfig =
+            toml::from_str("[entries.sample]\nenabled=true\n[foreign]\nname='preserved'\n")
+                .unwrap();
+        config.set_enabled_for(&instance(&original), false);
+        config.save(&path).await.unwrap();
+        let restored = PluginsConfig::load(&path).unwrap();
+        assert_eq!(restored.extra, config.extra);
+        assert_eq!(
+            restored.activation_for(
+                &instance(&original.join("nested/..")),
+                PluginOrigin::Workspace
+            ),
+            Activation::Disabled
+        );
+        std::fs::rename(&original, &moved).unwrap();
+        for root in [&copied, &moved] {
+            assert_eq!(
+                restored.activation_for(&instance(root), PluginOrigin::Workspace),
+                Activation::Enabled
+            );
+        }
+        assert_eq!(restored.entries["sample"].enabled, Some(true));
+    }
 
     #[test]
     fn absent_preference_means_enabled() {

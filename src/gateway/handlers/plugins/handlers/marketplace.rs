@@ -98,7 +98,7 @@ pub async fn handle_marketplace_browse(request: JsonRpcRequest) -> JsonRpcRespon
 /// calls to land in the same place; `add` keeps one meaning for every client.
 pub async fn handle_marketplace_add(request: JsonRpcRequest) -> JsonRpcResponse {
     use crate::config::PluginMarketplaceEntry;
-    use crate::extension::marketplace::{classify, MarketplaceConfig};
+    use crate::extension::marketplace::{MarketplaceConfig, classify};
     use crate::gateway::protocol::INVALID_PARAMS;
 
     let params: crate::gateway::handlers::plugins::types::MarketplaceAddParams =
@@ -211,100 +211,107 @@ pub async fn handle_marketplace_install(request: JsonRpcRequest) -> JsonRpcRespo
         Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
     };
 
-    let manager = match build_marketplace_manager() {
-        Ok(m) => m,
-        Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
+    let extension = match super::get_extension_manager() {
+        Ok(manager) => manager,
+        Err(response) => return response.with_id(request.id),
     };
-
-    // project_dir is None for now; project/local scope support requires workspace detection
-    match manager.install_to_scope(&params.name, params.marketplace.as_deref(), scope, None) {
-        Ok(installed) => {
-            // Refresh the live extension set, exactly as the git-clone
-            // installer and `plugin.update` do.
-            //
-            // Installing has two routes — `plugins.install` (a git URL) and
-            // this one — and only the other one refreshed. `plugin.install`
-            // sends a bare name here, so the plugin landed on disk and stayed
-            // invisible to `plugins.list` until the daemon was restarted: an
-            // install that reports success and changes nothing an operator can
-            // see. `handle_update`'s own comment says its reload "matches the
-            // install handler's behaviour", which was true of one of the two.
-            if let Ok(mgr) = crate::gateway::handlers::plugins::handlers::get_extension_manager() {
-                if let Err(e) = mgr.reload().await {
-                    tracing::warn!("Failed to refresh extensions after install: {}", e);
-                }
-            }
-            JsonRpcResponse::success(
-                request.id,
-                json!({
-                    "ok": true,
-                    "name": params.name,
-                    "scope": scope_str,
-                    "installed_at": installed.path.to_string_lossy(),
-                    "warnings": installed.warnings,
-                }),
-            )
-        }
-        Err(e) => JsonRpcResponse::error(request.id, -32000, e),
+    let marketplace = match build_marketplace_manager() {
+        Ok(manager) => crate::sync_primitives::Arc::new(manager),
+        Err(error) => return JsonRpcResponse::error(request.id, -32000, error),
+    };
+    let access = crate::gateway::handlers::plugins::current_plugin_access();
+    match extension
+        .install_marketplace_plugin(
+            marketplace,
+            params.name.clone(),
+            params.marketplace,
+            scope,
+            &access,
+        )
+        .await
+    {
+        Ok((installed, instance)) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "ok": true,
+                "name": params.name,
+                "scope": scope_str,
+                "installed_at": installed.path.to_string_lossy(),
+                "warnings": installed.warnings,
+                "selector": instance.selector(),
+            }),
+        ),
+        Err(error) => JsonRpcResponse::error(request.id, -32000, error),
     }
 }
 
 /// Update an installed plugin to the latest marketplace version (in place).
 pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
-    use crate::extension::marketplace::UpdateOutcome;
+    use crate::extension::marketplace::{MarketplaceUpdate, UpdateOutcome};
+    use crate::extension::plugin_target::PluginTarget;
+    use crate::gateway::handlers::plugins::types::UpdatePluginParams;
 
-    let params: crate::gateway::handlers::plugins::types::UpdatePluginParams =
-        match parse_params(&request) {
-            Ok(p) => p,
-            Err(e) => return e,
-        };
-
-    let scope_str = params.scope.as_deref().unwrap_or("user");
-    let scope = match crate::extension::visibility::parse_scope(scope_str) {
-        Ok(s) => s,
-        Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
+    let params: UpdatePluginParams = match parse_params(&request) {
+        Ok(params) => params,
+        Err(response) => return response,
     };
-
-    let manager = match build_marketplace_manager() {
-        Ok(m) => m,
-        Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
+    let scope = match params
+        .scope
+        .as_deref()
+        .map(crate::extension::visibility::parse_scope)
+        .transpose()
+    {
+        Ok(scope) => scope,
+        Err(error) => return JsonRpcResponse::error(request.id, -32000, error),
     };
-
-    let outcome = match manager.update_to_scope(
-        &params.name,
-        params.marketplace.as_deref(),
+    let extension = match super::get_extension_manager() {
+        Ok(manager) => manager,
+        Err(response) => return response.with_id(request.id),
+    };
+    let marketplace = match build_marketplace_manager() {
+        Ok(manager) => manager,
+        Err(error) => return JsonRpcResponse::error(request.id, -32000, error),
+    };
+    let target = PluginTarget::from_fields(params.name, params.selector);
+    let access = crate::gateway::handlers::plugins::current_plugin_access();
+    let update = MarketplaceUpdate {
         scope,
-        None,
-        params.force,
-    ) {
-        Ok(o) => o,
-        Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
+        marketplace: params.marketplace,
+        force: params.force,
     };
-
-    // Refresh the live extension set so an updated plugin's new capabilities take
-    // effect without a daemon restart (matches the install handler's behaviour).
-    if matches!(outcome, UpdateOutcome::Updated { .. }) {
-        if let Ok(mgr) = crate::gateway::handlers::plugins::handlers::get_extension_manager() {
-            if let Err(e) = mgr.reload().await {
-                tracing::warn!("Failed to refresh extensions after update: {}", e);
-            }
-        }
-    }
-
+    let (instance, outcome) = match extension
+        .update_marketplace_plugin(marketplace, &target, &access, update)
+        .await
+    {
+        Ok((instance, Ok(outcome))) => (instance, outcome),
+        Ok((_, Err(error))) => return JsonRpcResponse::error(request.id, -32000, error),
+        Err(error) => return super::plugin_target_error_response(request.id, error),
+    };
+    let (outcome, runtime_error) = outcome;
+    let scope = params
+        .scope
+        .as_deref()
+        .unwrap_or_else(|| match &instance.scope {
+            crate::extension::visibility::ScopeKey::Global => "user",
+            crate::extension::visibility::ScopeKey::Project(_) => "project",
+        });
     let result = match outcome {
         UpdateOutcome::Updated { from, to, warnings } => json!({
             "ok": true,
-            "name": params.name,
-            "scope": scope_str,
+            "name": instance.plugin_id,
+            "scope": scope,
+            "selector": instance.selector(),
             "updated": true,
             "from": from,
             "to": to,
             "warnings": warnings,
+            "runtimeError": runtime_error,
         }),
         UpdateOutcome::AlreadyLatest { version } => json!({
             "ok": true,
-            "name": params.name,
-            "scope": scope_str,
+            "name": instance.plugin_id,
+            "scope": scope,
+            "selector": instance.selector(),
             "updated": false,
             "version": version,
         }),

@@ -36,7 +36,7 @@
 //!    by its own precedence (agent > project > user > plugin), not the
 //!    `SkillSystem` registry's — so the candidates judged are
 //!    `skill_read`'s own, for this run's project and agent
-//!    (`ReadSkillTool::skill_dirs` + `scan_skill_dirs`). Each must sit in a user-level root
+//!    (`ReadSkillTool::skill_dirs` + `scan_skill_files`). Each must sit in a user-level root
 //!    (`utils::paths::user_skills_roots`) or an active plugin's published
 //!    skills dir whose key is `ScopeKey::Global` — and must be denied to the model's file tools
 //!    (`file_ops::get_denied_paths`, which denies every
@@ -73,7 +73,7 @@ use crate::extension::visibility::ScopeKey;
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::skill::SkillSystem;
 
-use super::{slash_skill_scope, RunRequest};
+use super::{RunRequest, slash_skill_scope};
 
 #[cfg(test)]
 mod tests;
@@ -196,9 +196,10 @@ async fn pregrant(skill_id: &str, request: &RunRequest, agent_id: &str) -> Optio
         tokio::task::spawn_blocking(move || {
             // `skill_id` is the name the log lines below inline-capture.
             let skill_id = log_skill.as_str();
-            let candidates = ReadSkillTool::scan_skill_dirs(dirs, &id);
+            let candidates = ReadSkillTool::scan_skill_files(dirs, &id);
             let loaded = candidates.first()?;
-            for dir in &candidates {
+            for skill_md_path in &candidates {
+                let dir = skill_md_path.parent()?;
                 if let Err(origin) = operator_owned(dir) {
                     info!(
                         skill = %skill_id,
@@ -214,8 +215,7 @@ async fn pregrant(skill_id: &str, request: &RunRequest, agent_id: &str) -> Optio
                 // scanner skips symlinked manifest files, so a symlink pointing at a
                 // writable project file would otherwise let the model rewrite the
                 // declaration that this pre-grant is about to trust.
-                let skill_md_path = dir.join("SKILL.md");
-                let canonical_skill_md = match std::fs::canonicalize(&skill_md_path) {
+                let canonical_skill_md = match std::fs::canonicalize(skill_md_path) {
                     Ok(path) => path,
                     Err(_) => {
                         info!(
@@ -250,8 +250,7 @@ async fn pregrant(skill_id: &str, request: &RunRequest, agent_id: &str) -> Optio
                 // authorise whatever the link points at. The canonical-path check
                 // above only proves the *resolved* target is inside the skill
                 // directory, so the link itself has to be rejected here.
-                let skill_md_path = loaded.join("SKILL.md");
-                if std::fs::symlink_metadata(&skill_md_path)
+                if std::fs::symlink_metadata(skill_md_path)
                     .map(|m| m.file_type().is_symlink())
                     .unwrap_or(false)
                 {
@@ -263,11 +262,8 @@ async fn pregrant(skill_id: &str, request: &RunRequest, agent_id: &str) -> Optio
                     return None;
                 }
             }
-            let manifest = crate::skill::parse_skill_file(
-                loaded.join("SKILL.md"),
-                crate::skill::guess_source(loaded),
-            )
-            .ok()?;
+            let manifest =
+                crate::skill::parse_skill_file(loaded, crate::skill::guess_source(loaded)).ok()?;
             manifest.allowed_tools().map(<[String]>::to_vec)
         })
         .await

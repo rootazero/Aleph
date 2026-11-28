@@ -28,7 +28,7 @@ pub(crate) fn parse_chat_sse_event(
     let v: serde_json::Value = match serde_json::from_str(data) {
         Ok(v) => v,
         Err(e) => {
-            warn!(error = %e, data = %data, "Failed to parse Chat Completions SSE event");
+            warn!(error = %e, bytes = data.len(), "Failed to parse Chat Completions SSE event");
             return;
         }
     };

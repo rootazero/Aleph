@@ -3,9 +3,8 @@
 //! Implements the multi-directory scanning strategy with upward traversal.
 
 use super::paths::{
-    agents_home_dir, aleph_home_dir, claude_home_dir, find_dir_upward, find_git_root,
-    AGENTS_HOME_DIR, AGENT_FILE, ALEPH_HOME_DIR, CLAUDE_HOME_DIR, MCP_CONFIG_FILE, PLUGINS_DIR,
-    SKILL_FILE,
+    AGENT_FILE, AGENTS_HOME_DIR, ALEPH_HOME_DIR, CLAUDE_HOME_DIR, MCP_CONFIG_FILE, PLUGINS_DIR,
+    SKILL_FILE, agents_home_dir, aleph_home_dir, claude_home_dir, find_dir_upward, find_git_root,
 };
 use super::types::{
     DiscoveredPath, DiscoveryScope, GlobalRoot, PluginDiscovery, ProjectPluginParent, ScanDirectory,
@@ -475,7 +474,7 @@ impl DirectoryScanner {
 ///
 /// An entry that exists but cannot be listed is named in `unreadable`: its
 /// plugins are unknown this pass, not absent.
-fn plugin_candidates(path: &Path, unreadable: &mut Vec<PathBuf>) -> Vec<PathBuf> {
+pub(crate) fn plugin_candidates(path: &Path, unreadable: &mut Vec<PathBuf>) -> Vec<PathBuf> {
     if has_plugin_manifest(path) {
         return vec![path.to_path_buf()];
     }
@@ -722,7 +721,7 @@ fn component_marker_file(component_name: &str) -> Option<&'static str> {
 /// layout pointing at a shared file) still qualifies its own directory.
 /// Screening it as well would silently drop such a plugin, which is a
 /// behaviour change this module has no reason to make.
-fn has_plugin_manifest(path: &Path) -> bool {
+pub(crate) fn has_plugin_manifest(path: &Path) -> bool {
     const MANIFEST_REL_PATHS: &[&str] = &[
         ".claude-plugin/plugin.toml",
         ".claude-plugin/plugin.json",
@@ -742,6 +741,7 @@ fn has_plugin_manifest(path: &Path) -> bool {
     MANIFEST_REL_PATHS
         .iter()
         .any(|rel| path.join(rel).is_file())
+        || crate::extension::manifest::adapters::pi::candidate_marker(path)
         || is_existing_dir_no_follow(&path.join(".cursor/rules"))
         || is_existing_dir_no_follow(&path.join("skills"))
         || is_existing_dir_no_follow(&path.join("commands"))

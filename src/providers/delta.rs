@@ -183,7 +183,7 @@ impl DeltaCollector {
     /// inside string literals, invalid escape sequences, trailing commas) and
     /// retries the parse. Only when the payload is still unparseable — the
     /// signature of genuine mid-stream truncation — is a warning logged
-    /// (including the full raw payload for telemetry) and an empty object
+    /// and an empty object
     /// `Value::Object({})` returned with `truncated_tool_call` flagged, so the
     /// consumer promotes the turn to a retryable transient error.
     #[must_use]
@@ -211,7 +211,7 @@ impl DeltaCollector {
                     match serde_json::from_str::<Value>(&raw_args) {
                         Ok(v) => v,
                         Err(e) => match salvage_malformed_args(&raw_args) {
-                            Some(v) => {
+                            Some(v) if !crate::builtin_tools::bash_jsonl::is_private(&name, &v) => {
                                 warn!(
                                     tool_id = %id,
                                     tool_name = %name,
@@ -220,12 +220,11 @@ impl DeltaCollector {
                                 );
                                 v
                             }
-                            None => {
+                            _ => {
                                 warn!(
                                     tool_id = %id,
                                     tool_name = %name,
                                     error = %e,
-                                    raw_args = %raw_args,
                                     "Malformed tool arguments — defaulting to empty object ((the tool layer will report missing fields))"
                                 );
                                 truncated_tool_call
@@ -245,7 +244,12 @@ impl DeltaCollector {
             .collect();
 
         if tool_calls.is_empty() && !self.text.is_empty() {
-            if let Some(tc) = Self::parse_json_tool_call(&self.text) {
+            if let Some(mut tc) = Self::parse_json_tool_call(&self.text) {
+                if let Some(projected) =
+                    crate::builtin_tools::bash_jsonl::project_arguments(&tc.name, &tc.arguments)
+                {
+                    tc.arguments = projected;
+                }
                 tool_calls.push(tc);
                 self.text.clear();
             }
@@ -284,23 +288,11 @@ impl DeltaCollector {
     /// {"reasoning": "...", "action": {"type": "tool", "tool_name": "...", "arguments": {...}}}
     /// ```
     fn parse_json_tool_call(text: &str) -> Option<NativeToolCall> {
-        let trimmed = text.trim();
-        // Strip markdown code fence if present
-        let json_str = if trimmed.starts_with("```") {
-            trimmed
-                .lines()
-                .skip(1)
-                .take_while(|l| !l.trim_start().starts_with("```"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            trimmed.to_string()
-        };
-        let json_trimmed = json_str.trim_start();
-        if !json_trimmed.starts_with('{') && !json_trimmed.starts_with('[') {
+        let body = crate::tools::text_tool_call::json_action_body(text);
+        if !body.starts_with('{') {
             return None;
         }
-        let value: Value = serde_json::from_str(&json_str).ok()?;
+        let value: Value = serde_json::from_str(body).ok()?;
         let action = value.get("action")?;
         if action.get("type").and_then(Value::as_str) != Some("tool") {
             return None;

@@ -67,8 +67,26 @@ pub fn is_known_plugin_runtime(runtime: &str) -> bool {
     PLUGIN_RUNTIMES.contains(&runtime)
 }
 
+/// An unsupported declaration in a package manifest.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginImportDiagnostic {
+    /// Path relative to the package, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub message: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PluginRow {
+    /// Exact instance identity passed separately from the logical name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    /// Scope kind (`global` or `project`), when provided by the Gateway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_kind: Option<String>,
+    /// Static package declarations that the importer could not publish.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub import_diagnostics: Vec<PluginImportDiagnostic>,
     /// Registry id. Also the key `uninstall` / `enable` / `disable` take, so a
     /// list that shows something else shows an id the caller cannot act on.
     pub name: String,
@@ -241,7 +259,11 @@ pub struct PluginListResult {
 #[serde(rename_all = "camelCase")]
 pub struct PluginCallToolParams {
     /// Registry id of the plugin owning the handler.
+    #[serde(default)]
     pub plugin_id: String,
+    /// Exact selector returned by the plugin inventory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
     /// Exported handler function to invoke.
     pub handler: String,
     /// Arguments passed through to the handler.
@@ -253,24 +275,31 @@ pub struct PluginCallToolParams {
 // Simple by-name parameter families
 // =============================================================================
 
-/// Parameters for every `plugins.{uninstall,enable,disable}` and
-/// `plugin.update` call: a single plugin id under the key `name`.
+/// Target for `plugins.{uninstall,enable,disable}` and `plugin.update`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginNameParams {
+    #[serde(default)]
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
 }
 
 /// Parameters for `plugin.reload`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginReloadParams {
+    #[serde(default)]
     pub plugin_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
 }
 
 /// Parameters for `plugins.install` (a git URL).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginInstallParams {
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 /// Parameters for `plugin.install` — the unified entry point that classifies
@@ -449,7 +478,10 @@ pub struct MarketplaceListResult {
 /// Parameters for `plugin.update` — upgrade an installed plugin in place.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginUpdateParams {
+    #[serde(default)]
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marketplace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

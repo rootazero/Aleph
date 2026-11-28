@@ -1,36 +1,12 @@
 #!/usr/bin/env python3
-"""Plugin visibility on a real daemon: what the MODEL is shown, per run.
+"""Verify plugin visibility against the real Gateway and the mock provider's requests.
 
-  python3 drive_visibility.py <ws-url> <project_root> <request_log> register
-      -> projects.add the folder (loopback = operator); checks the row.
-  python3 drive_visibility.py <ws-url> <project_root> <request_log> probe
-      -> two chat.send runs, one with project_root and one without, then
-         reads what the MOCK PROVIDER was sent in each run.
-
-The oracle is the mock's request log, never an RPC reply: the claim is about
-what the model was shown, and the only witness to that is the request body.
-`plugins.list` and `tools.catalog` are management faces and list the plugin
-for everyone; they are read here only as preconditions ("was it discovered",
-"has its MCP server finished the handshake"), so that a missing entry in a
-request reads as a visibility answer and not as a plugin that never loaded.
-
-Three faces, one owner (`qa-vis`, planted by `plant_visibility.py`), each
-asserted where it lands in the project-bound run:
-  * skill  — the `<available_skills>` index in `system`;
-  * agent  — the `<available_agents>` catalog in `system`;
-  * MCP    — the joined tool in `tools[]` (`defer_mcp_tools` is off by default,
-             so it is not in a deferred catalog).
-The project-less run's negatives read the WHOLE request instead: the skill
-also reaches a project-bound run through a second face, the project-skills
-`<system-reminder>` in `messages` (`collect_project_skill_block`), and a leak
-through any face is the same leak.
-
-Requests are attributed to a run by the run's own message text, not by log
-position: a run also makes side-channel provider calls (planning, titling)
-that may land after its terminal frame, and a positional window would hand
-run 1's late call to run 2.
+The two fixtures share an ID and a server name. Requests inside the project
+must expose the project copy. Sessionless requests must expose the global
+copy. Once the project copy is disabled, the project must see neither.
 """
 import asyncio
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -40,14 +16,16 @@ from qa_rpc import Ledger, ws_connect  # noqa: E402
 
 WS, PROJECT, REQ_LOG, PHASE = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4]
 L = Ledger()
-PLUGIN, SKILL, AGENT = "qa-vis", "qa-vis-skill", "qa-vis-agent"
-# `McpHandler::qualified_name` of `plugin:qa-vis/vis` + `qa_echo`, as observed
-# in the request log on the first green run (2026-09-23). Asserted exactly on
-# the positive arm; the negative arm refuses ANY `__qa_echo` spelling, so a
-# changed sanitiser cannot turn a leak into a pass.
-MCP_TOOL = "plugin_qa-vis_vis__qa_echo"
-MCP_SUFFIX = "__qa_echo"
-IN_MARK, OUT_MARK = "hello from inside", "hello from nowhere"
+PLUGIN = "qa-vis"
+GLOBAL_TOOL = "plugin_qa-vis_vis__qa_echo"
+
+
+def project_tool_name(selector):
+    scope_digest = selector.removeprefix("p:")
+    server_id = f"plugin:p_{scope_digest}_{PLUGIN}/vis"
+    server = hashlib.sha256(b"mcp-server\0" + server_id.encode()).hexdigest()[:30]
+    tool = hashlib.sha256(b"mcp-tool\0qa_echo").hexdigest()[:32]
+    return f"p_{server}{tool}"
 
 
 class Conn:
@@ -119,20 +97,6 @@ def tool_names(body):
     return [t.get("name", "") for t in body.get("tools") or [] if isinstance(t, dict)]
 
 
-def names(node, out):
-    """Every `name` string anywhere in an RPC result (envelope-agnostic, as in
-    `drive_scope.py`: a moved envelope reads as "absent", not a KeyError)."""
-    if isinstance(node, dict):
-        if isinstance(node.get("name"), str):
-            out.add(node["name"])
-        for v in node.values():
-            names(v, out)
-    elif isinstance(node, list):
-        for v in node:
-            names(v, out)
-    return out
-
-
 async def register(conn):
     res = await conn.call("projects.add", {"path": str(PROJECT), "name": "qa-vis"})
     L.check("projects.add registers the folder", "result" in res, json.dumps(res)[:200])
@@ -142,68 +106,67 @@ async def register(conn):
 
 
 async def preconditions(conn):
-    """Discovered, loaded, and its server is up — before any claim about runs."""
-    rows = ((await conn.call("plugins.list", {})).get("result") or {}).get("plugins", [])
-    row = next((r for r in rows if r.get("name") == PLUGIN), None)
-    L.log("plugins.list row ->", {k: row.get(k) for k in ("status", "kind")} if row else None)
-    L.check("precondition: discovery walked the registered project (plugins.list has qa-vis loaded)",
-            row is not None and row.get("status") == "loaded", str(row and row.get("status")))
-    # The MCP half mounts asynchronously: the tool bridge registers the tool
-    # when the handshake completes. A run sent before that would miss the tool
-    # for a reason unrelated to visibility.
+    latest = {}
     for _ in range(60):
-        cat = names((await conn.call("tools.catalog", {})).get("result", {}), set())
-        hits = sorted(n for n in cat if n.endswith(MCP_SUFFIX))
-        if hits:
+        rows = ((await conn.call("plugins.list", {})).get("result") or {}).get("plugins", [])
+        latest = {row.get("scope_kind"): row for row in rows if row.get("name") == PLUGIN}
+        if all(latest.get(scope, {}).get("status") == "loaded" for scope in ("project", "global")):
             break
         await asyncio.sleep(0.5)
-    L.check("precondition: the plugin's MCP server finished its handshake (tools.catalog lists it)",
-            bool(hits), f"catalog name(s)={hits}")
+    L.check("both exact instances loaded and completed MCP startup",
+            all(latest.get(scope, {}).get("status") == "loaded" for scope in ("project", "global")),
+            json.dumps(latest)[:600])
+    selector = latest.get("project", {}).get("selector")
+    L.check("project instance supplies an exact selector", bool(selector and selector.startswith("p:")))
+    return selector
+
+
+async def check_run(conn, marker, project_root, expected_copy, project_tool):
+    outcome = await run(conn, marker, f"agent:main:{marker}", project_root)
+    L.check(f"{marker}: run reached a terminal frame", outcome == "stream.run_complete", outcome)
+    bodies = requests_of(marker)
+    main = [body for body in bodies if tool_names(body)]
+    L.check(f"{marker}: a main request reached the model", bool(main), str(len(bodies)))
+    L.check(f"{marker}: skill index and agent catalog rendered",
+            any("<available_skills>" in system_text(body) for body in main)
+            and any("<available_agents>" in system_text(body) for body in main))
+
+    for copy, tool in [("project", project_tool), ("global", GLOBAL_TOOL)]:
+        wanted = expected_copy == copy
+        for contribution in ("skill", "agent"):
+            name = f"qa-vis-{copy}-{contribution}"
+            seen = any(name in json.dumps(body) for body in bodies)
+            L.check(f"{marker}: {name} visible={wanted}", seen == wanted)
+        offered = any(tool in tool_names(body) for body in main)
+        L.check(f"{marker}: {copy} MCP tool visible={wanted}", offered == wanted, tool)
+
+
+async def check_command(conn, marker, project_root, expected_copy):
+    outcome = await run(conn, f"/{PLUGIN}:echo {marker}", f"agent:main:{marker}", project_root)
+    L.check(f"{marker}: command turn reached a terminal frame",
+            outcome == "stream.run_complete", outcome)
+    rendered = json.dumps(requests_of(marker))
+    for copy in ("project", "global"):
+        wanted = expected_copy == copy
+        seen = f"QA_COMMAND_{copy}: {marker}" in rendered
+        L.check(f"{marker}: {copy} command rendered={wanted}", seen == wanted)
 
 
 async def probe(conn):
-    await preconditions(conn)
+    selector = await preconditions(conn)
+    if not selector:
+        return
+    project_tool = project_tool_name(selector)
+    await check_run(conn, "qa-vis-inside", PROJECT, "project", project_tool)
+    await check_run(conn, "qa-vis-outside", None, "global", project_tool)
+    await check_command(conn, "qa-vis-project-command", PROJECT, "project")
+    await check_command(conn, "qa-vis-global-command", None, "global")
 
-    L.log("\n--- run 1: bound to the project ---")
-    outcome = await run(conn, IN_MARK, "agent:main:qa-vis-in", PROJECT)
-    L.check("project-bound run reached a terminal frame", outcome == "stream.run_complete", outcome)
-    inside = requests_of(IN_MARK)
-    main_in = [b for b in inside if tool_names(b)]
-    L.check("project-bound run: a main-turn request (with a tool surface) was recorded",
-            bool(main_in), f"{len(inside)} request(s), {len(main_in)} with tools")
-    L.check("project-bound run: the model saw the plugin skill",
-            any(SKILL in system_text(b) for b in inside), f"{len(inside)} request(s)")
-    L.check("project-bound run: the model saw the plugin agent",
-            any(AGENT in system_text(b) for b in inside), f"{len(inside)} request(s)")
-    joined = sorted({n for b in inside for n in tool_names(b) if n.endswith(MCP_SUFFIX)})
-    L.check("project-bound run: the model saw the plugin MCP tool",
-            MCP_TOOL in joined, f"expected {MCP_TOOL!r}; tools[] carried {joined}")
-
-    L.log("\n--- run 2: no project (daemon CWD has no .aleph/plugins) ---")
-    outcome = await run(conn, OUT_MARK, "agent:main:qa-vis-out", None)
-    L.check("project-less run reached a terminal frame", outcome == "stream.run_complete", outcome)
-    outside = requests_of(OUT_MARK)
-    main_out = [b for b in outside if tool_names(b)]
-    # Controls: the negatives below are only claims about a prompt that WAS
-    # built — a tool surface to be absent from, and a skill index and an agent
-    # catalog that rendered (other skills and the builtin sub-agents fill
-    # them) for the plugin's entries to be missing from.
-    L.check("project-less run: a main-turn request (with a tool surface) was recorded",
-            bool(main_out), f"{len(outside)} request(s), {len(main_out)} with tools")
-    L.check("project-less run: the skill index rendered (`<available_skills>`)",
-            any("<available_skills>" in system_text(b) for b in main_out))
-    L.check("project-less run: the agent catalog rendered (`<available_agents>`)",
-            any("<available_agents>" in system_text(b) for b in main_out))
-    # The whole request body — system, tools[] and messages: the run's own
-    # user text names none of these, so any hit is a plugin face leaking.
-    seen = [json.dumps(b) for b in outside]
-    L.check("project-less run: the plugin skill is NOT in the prompt",
-            not any(SKILL in s for s in seen), f"{len(outside)} request(s)")
-    L.check("project-less run: the plugin agent is NOT in the prompt",
-            not any(AGENT in s for s in seen), f"{len(outside)} request(s)")
-    leaked = sorted({n for b in outside for n in tool_names(b) if n.endswith(MCP_SUFFIX)})
-    L.check("project-less run: the plugin MCP tool is NOT in the prompt",
-            not leaked and not any(MCP_SUFFIX in s for s in seen), f"tools[] carried {leaked}")
+    response = await conn.call("plugins.disable", {"selector": selector})
+    L.check("operator disabled the exact project copy", "result" in response, json.dumps(response)[:400])
+    await check_run(conn, "qa-vis-disabled", PROJECT, None, project_tool)
+    await check_command(conn, "qa-vis-shadowed-command", PROJECT, None)
+    await check_run(conn, "qa-vis-global-still-live", None, "global", project_tool)
 
 
 async def main():

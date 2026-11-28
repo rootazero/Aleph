@@ -16,12 +16,11 @@ use github_source::sync_github_marketplace;
 use local_source::resolve_local_marketplace;
 use manifest::parse_marketplace_manifest;
 pub use names::reject_unsafe_segment;
-pub use source_spec::{classify, MarketplaceSpec};
+pub use source_spec::{MarketplaceSpec, classify};
 pub use types::{
-    configs_from_entries, default_install_dir, marketplace_cache_dir, MarketplaceConfig,
-    MarketplaceListing, MarketplaceManifest, MarketplacePluginEntry, MarketplaceProblem,
-    MarketplaceSourceType, PluginSearchResult, BUILTIN_MARKETPLACE_NAME,
-    BUILTIN_MARKETPLACE_SOURCE,
+    BUILTIN_MARKETPLACE_NAME, BUILTIN_MARKETPLACE_SOURCE, MarketplaceConfig, MarketplaceListing,
+    MarketplaceManifest, MarketplacePluginEntry, MarketplaceProblem, MarketplaceSourceType,
+    PluginSearchResult, configs_from_entries, default_install_dir, marketplace_cache_dir,
 };
 
 // =============================================================================
@@ -357,6 +356,17 @@ impl MarketplaceManager {
         scope: crate::extension::types::PluginScope,
         project_dir: Option<&std::path::Path>,
     ) -> Result<InstalledPlugin, String> {
+        self.prepare_install_to_scope(plugin_name, marketplace_name, scope, project_dir)?
+            .publish()
+    }
+
+    pub(crate) fn prepare_install_to_scope(
+        &self,
+        plugin_name: &str,
+        marketplace_name: Option<&str>,
+        scope: crate::extension::types::PluginScope,
+        project_dir: Option<&Path>,
+    ) -> Result<PreparedMarketplaceInstall, String> {
         let mut results = self.search_plugin(plugin_name);
 
         if let Some(mkt) = marketplace_name {
@@ -370,29 +380,6 @@ impl MarketplaceManager {
             1 => {
                 let result = &results[0];
                 let plugin_path = result.installable_path()?;
-                // Verify integrity before installing when the marketplace entry
-                // declares a hash (no-op when `sha256` is absent).
-                installer::verify_plugin_integrity(plugin_path, result.plugin.sha256.as_deref())?;
-                // Gate on manifest soundness before copying into place: a plugin
-                // whose manifest fails to parse, has duplicate tools, or declares
-                // a malformed `config_schema` cannot load anyway, so reject it
-                // here with the concrete reasons rather than after install.
-                let validation = crate::extension::validation::validate_plugin(plugin_path);
-                if !validation.is_valid() {
-                    return Err(format!(
-                        "Plugin '{}' failed validation and was not installed:\n  - {}",
-                        plugin_name,
-                        validation.errors.join("\n  - ")
-                    ));
-                }
-                // The warnings are not fatal, but they are the operator's only
-                // clue that the installed plugin is not actually usable yet
-                // (entry file never built, duplicate hook handler, ...). They
-                // travel with the outcome instead of being dropped here.
-                let warnings = validation.warnings.clone();
-                for warning in &warnings {
-                    tracing::warn!(plugin = plugin_name, "{}", warning);
-                }
                 let install_dir =
                     crate::extension::visibility::scope_install_dir(scope, project_dir)?;
                 // review(extension): refuse symlink escapes at the install
@@ -410,9 +397,26 @@ impl MarketplaceManager {
                         "Refusing to install '{plugin_name}' into unsafe location: {e}"
                     ));
                 }
-                let path =
-                    installer::install_plugin_from_cache(plugin_path, &install_dir, plugin_name)?;
-                Ok(InstalledPlugin { path, warnings })
+                let (prepared, (plugin_id, warnings)) = installer::prepare_install(
+                    plugin_path,
+                    &install_dir,
+                    plugin_name,
+                    |candidate| {
+                        validate_staged_plugin(
+                            candidate,
+                            plugin_name,
+                            result.plugin.sha256.as_deref(),
+                            "installed",
+                        )
+                    },
+                )?;
+                Ok(PreparedMarketplaceInstall {
+                    prepared,
+                    plugin_id,
+                    warnings,
+                    scope,
+                    project_dir: project_dir.map(Path::to_path_buf),
+                })
             }
             _ => {
                 let names: Vec<_> = results
@@ -453,6 +457,25 @@ impl MarketplaceManager {
         project_dir: Option<&std::path::Path>,
         force: bool,
     ) -> Result<UpdateOutcome, String> {
+        self.update_to_scope_checked(
+            plugin_name,
+            marketplace_name,
+            scope,
+            project_dir,
+            force,
+            None,
+        )
+    }
+
+    pub(crate) fn update_to_scope_checked(
+        &self,
+        plugin_name: &str,
+        marketplace_name: Option<&str>,
+        scope: crate::extension::types::PluginScope,
+        project_dir: Option<&Path>,
+        force: bool,
+        expected_plugin_id: Option<&str>,
+    ) -> Result<UpdateOutcome, String> {
         let install_dir = crate::extension::visibility::scope_install_dir(scope, project_dir)?;
         let installed_path = install_dir.join(plugin_name);
         if !installed_path.exists() {
@@ -487,10 +510,18 @@ impl MarketplaceManager {
 
                 // Read the currently-installed version from its manifest so we can
                 // decide whether anything actually changed.
-                let installed_version = read_installed_plugin_version(&installed_path);
+                let incumbent = crate::extension::manifest::adapter::AdapterRegistry::defaults()
+                    .parse_dir_fresh(&installed_path)
+                    .ok();
+                let incumbent_id = incumbent.as_ref().map(|output| output.plugin_id.as_str());
+                if expected_plugin_id.is_some() && expected_plugin_id != incumbent_id {
+                    return Err("Installed plugin identity changed before update".to_owned());
+                }
+                let installed_version = incumbent.and_then(|output| output.version);
                 let candidate_version = result.plugin.version.clone();
 
-                if !force && !should_update(installed_version.as_deref(), candidate_version.as_deref())
+                if !force
+                    && !should_update(installed_version.as_deref(), candidate_version.as_deref())
                 {
                     return Ok(UpdateOutcome::AlreadyLatest {
                         version: installed_version.or(candidate_version),
@@ -498,23 +529,26 @@ impl MarketplaceManager {
                 }
 
                 let plugin_path = result.installable_path()?;
-                // Same gates as install: integrity hash (when declared) + manifest
-                // soundness, before touching the existing install.
-                installer::verify_plugin_integrity(plugin_path, result.plugin.sha256.as_deref())?;
-                let validation = crate::extension::validation::validate_plugin(plugin_path);
-                if !validation.is_valid() {
-                    return Err(format!(
-                        "Plugin '{}' failed validation and was not updated:\n  - {}",
-                        plugin_name,
-                        validation.errors.join("\n  - ")
-                    ));
-                }
-                let warnings = validation.warnings.clone();
-                for warning in &warnings {
-                    tracing::warn!(plugin = plugin_name, "{}", warning);
-                }
-
-                installer::update_plugin_from_cache(plugin_path, &install_dir, plugin_name)?;
+                let (_, warnings) = installer::update_checked(
+                    plugin_path,
+                    &install_dir,
+                    plugin_name,
+                    |candidate| {
+                        let (candidate_id, warnings) = validate_staged_plugin(
+                            candidate,
+                            plugin_name,
+                            result.plugin.sha256.as_deref(),
+                            "updated",
+                        )?;
+                        if expected_plugin_id.is_some_and(|expected| candidate_id != expected) {
+                            return Err(
+                                "The update changes the installed plugin's identity".to_owned()
+                            );
+                        }
+                        crate::extension::visibility::scope_install_dir(scope, project_dir)?;
+                        Ok(warnings)
+                    },
+                )?;
 
                 Ok(UpdateOutcome::Updated {
                     from: installed_version,
@@ -582,8 +616,26 @@ impl MarketplaceManager {
 // Update outcome
 // =============================================================================
 
-/// The result of a marketplace install: where the plugin landed, plus the
-/// non-fatal validation warnings the operator should see.
+pub(crate) struct PreparedMarketplaceInstall {
+    prepared: installer::PreparedInstall,
+    pub(crate) plugin_id: String,
+    warnings: Vec<String>,
+    scope: crate::extension::types::PluginScope,
+    project_dir: Option<PathBuf>,
+}
+
+impl PreparedMarketplaceInstall {
+    pub(crate) fn publish(self) -> Result<InstalledPlugin, String> {
+        crate::extension::visibility::scope_install_dir(self.scope, self.project_dir.as_deref())?;
+        let path = self.prepared.publish()?;
+        Ok(InstalledPlugin {
+            path,
+            warnings: self.warnings,
+        })
+    }
+}
+
+/// The installed path and its non-fatal validation warnings.
 #[derive(Debug, Clone)]
 pub struct InstalledPlugin {
     /// Directory the plugin was installed into.
@@ -625,12 +677,145 @@ pub enum UpdateOutcome {
 /// Reuses the same adapter parsing path used at install time, so every manifest
 /// format Aleph understands (`.claude-plugin/plugin.toml`, `plugin.json`,
 /// auto-discovery, legacy) is handled identically.
-fn read_installed_plugin_version(installed_path: &Path) -> Option<String> {
-    use crate::extension::manifest::adapter::AdapterRegistry;
-    AdapterRegistry::with_defaults()
-        .parse_dir(installed_path)
-        .ok()
-        .and_then(|output| output.version)
+fn validate_staged_plugin(
+    candidate: &Path,
+    plugin_name: &str,
+    expected_hash: Option<&str>,
+    action: &str,
+) -> Result<(String, Vec<String>), String> {
+    installer::verify_plugin_integrity(candidate, expected_hash)?;
+    let output = crate::extension::manifest::adapter::AdapterRegistry::defaults()
+        .parse_dir_fresh(candidate)
+        .map_err(|error| format!("Failed to parse manifest: {error}"))?;
+    let validation = crate::extension::validation::validate_output(candidate, &output);
+    if !validation.is_valid() {
+        return Err(format!(
+            "Plugin '{plugin_name}' failed validation and was not {action}:
+  - {}",
+            validation.errors.join(
+                "
+  - "
+            )
+        ));
+    }
+    for warning in &validation.warnings {
+        tracing::warn!(plugin = plugin_name, "{}", warning);
+    }
+    Ok((output.plugin_id, validation.warnings))
+}
+
+impl super::ExtensionManager {
+    pub(crate) async fn install_marketplace_plugin(
+        &self,
+        marketplace: crate::sync_primitives::Arc<MarketplaceManager>,
+        name: String,
+        marketplace_name: Option<String>,
+        scope: super::PluginScope,
+        access: &super::plugin_target::PluginAccess,
+    ) -> Result<(InstalledPlugin, super::visibility::PluginInstanceKey), String> {
+        let scope_key = access
+            .install_scope(scope)
+            .map_err(|error| error.to_string())?;
+        let project = access.project_root().map(Path::to_path_buf);
+        let prepared = crate::skill::run_blocking_fs("prepare marketplace install", move || {
+            marketplace.prepare_install_to_scope(
+                &name,
+                marketplace_name.as_deref(),
+                scope,
+                project.as_deref(),
+            )
+        })
+        .await
+        .ok_or("Marketplace install preparation was cancelled")??;
+        let instance = super::visibility::PluginInstanceKey {
+            scope: scope_key,
+            plugin_id: prepared.plugin_id.clone(),
+        };
+        let installed = self
+            .publish_plugin_install(std::slice::from_ref(&instance), move || prepared.publish())
+            .await?;
+        Ok((installed, instance))
+    }
+
+    pub(crate) async fn update_marketplace_plugin(
+        &self,
+        marketplace: MarketplaceManager,
+        target: &super::plugin_target::PluginTarget,
+        access: &super::plugin_target::PluginAccess,
+        request: MarketplaceUpdate,
+    ) -> Result<
+        (
+            super::visibility::PluginInstanceKey,
+            Result<(UpdateOutcome, Option<String>), String>,
+        ),
+        super::plugin_target::PluginTargetError,
+    > {
+        let _guard = self.load_guard.lock().await;
+        let instance = self.resolve_plugin_target(target, access).await?;
+        let path = self
+            .plugin_registry
+            .read()
+            .await
+            .get_plugin_instance(&instance)
+            .map(|record| record.root_dir.clone())
+            .ok_or(super::plugin_target::PluginTargetError::NotFound)?;
+        let project = match &instance.scope {
+            super::visibility::ScopeKey::Global => None,
+            super::visibility::ScopeKey::Project(root) => Some(root.clone()),
+        };
+        let id = instance.plugin_id.clone();
+        let result = crate::skill::run_blocking_fs("update marketplace plugin", move || {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or("Invalid install directory name")?;
+            let scopes = [
+                super::PluginScope::User,
+                super::PluginScope::Project,
+                super::PluginScope::Local,
+            ];
+            let scope = scopes
+                .into_iter()
+                .find(|scope| {
+                    request.scope.is_none_or(|requested| requested == *scope)
+                        && (project.is_none() == (*scope == super::PluginScope::User))
+                        && super::visibility::scope_install_dir(*scope, project.as_deref())
+                            .is_ok_and(|root| root.join(name) == path)
+                })
+                .ok_or("The selected plugin is outside the requested marketplace install scope")?;
+            marketplace.update_to_scope_checked(
+                name,
+                request.marketplace.as_deref(),
+                scope,
+                project.as_deref(),
+                request.force,
+                Some(&id),
+            )
+        })
+        .await
+        .unwrap_or_else(|| Err("Marketplace update was cancelled".to_owned()));
+        let result = match result {
+            Ok(outcome) => {
+                let runtime_error = if matches!(outcome, UpdateOutcome::Updated { .. }) {
+                    self.reload_plugin_instance_locked(&instance)
+                        .await
+                        .err()
+                        .map(|error| error.to_string())
+                } else {
+                    None
+                };
+                Ok((outcome, runtime_error))
+            }
+            Err(error) => Err(error),
+        };
+        Ok((instance, result))
+    }
+}
+
+pub(crate) struct MarketplaceUpdate {
+    pub(crate) marketplace: Option<String>,
+    pub(crate) scope: Option<super::PluginScope>,
+    pub(crate) force: bool,
 }
 
 /// Decide whether the marketplace `candidate` version should replace the
@@ -1056,10 +1241,11 @@ mod tests {
         assert_eq!(by_desc.entries.len(), 1);
         assert_eq!(by_desc.entries[0].plugin.name, "alpha");
 
-        assert!(mgr
-            .browse(None, Some("nothing-matches-this"))
-            .entries
-            .is_empty());
+        assert!(
+            mgr.browse(None, Some("nothing-matches-this"))
+                .entries
+                .is_empty()
+        );
         // A blank query is "everything", not "match the empty string".
         assert_eq!(mgr.browse(None, Some("   ")).entries.len(), 3);
     }

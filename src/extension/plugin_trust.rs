@@ -35,6 +35,8 @@ use std::collections::HashSet;
 
 use crate::extension::types::PluginOrigin;
 
+use super::visibility::{PluginInstanceKey, ScopeKey};
+
 /// Plugin owner trust policy.
 ///
 /// Mirrors openclaw's `passesManifestOwnerBasePolicy`:
@@ -54,6 +56,7 @@ pub struct OwnerTrustPolicy {
     /// `~/.aleph/trusted-plugins.toml`. Empty allowlist + `restrictive()`
     /// = nothing from `Workspace`/`Global`/`ClaudeCache` may load.
     allowlist: HashSet<String>,
+    project_allowlist: HashSet<String>,
     /// When `true`, [`Self::allows`] enforces the allowlist for `Workspace`,
     /// `Global` and `ClaudeCache` origins. When `false`, every plugin passes
     /// (the legacy "load everything" default).
@@ -67,6 +70,7 @@ impl OwnerTrustPolicy {
     pub fn permissive() -> Self {
         Self {
             allowlist: HashSet::new(),
+            project_allowlist: HashSet::new(),
             enforce: false,
         }
     }
@@ -79,8 +83,17 @@ impl OwnerTrustPolicy {
     pub fn restrictive(allowlist: impl IntoIterator<Item = String>) -> Self {
         Self {
             allowlist: allowlist.into_iter().collect(),
+            project_allowlist: HashSet::new(),
             enforce: true,
         }
+    }
+
+    pub(crate) fn with_project_allowlist(
+        mut self,
+        selectors: impl IntoIterator<Item = String>,
+    ) -> Self {
+        self.project_allowlist = selectors.into_iter().collect();
+        self
     }
 
     /// Add a plugin id to the allowlist. Used by `plugin trust <id>`.
@@ -104,6 +117,21 @@ impl OwnerTrustPolicy {
     /// Whether the given plugin id may load under this policy.
     #[must_use]
     pub fn allows(&self, plugin_id: &str, origin: PluginOrigin) -> bool {
+        self.allows_with(origin, || self.allowlist.contains(plugin_id))
+    }
+
+    pub(crate) fn allows_instance(
+        &self,
+        instance: &PluginInstanceKey,
+        origin: PluginOrigin,
+    ) -> bool {
+        self.allows_with(origin, || match instance.scope {
+            ScopeKey::Global => self.allowlist.contains(&instance.plugin_id),
+            ScopeKey::Project(_) => self.project_allowlist.contains(&instance.selector()),
+        })
+    }
+
+    fn allows_with(&self, origin: PluginOrigin, vouches: impl FnOnce() -> bool) -> bool {
         if !self.enforce {
             return true;
         }
@@ -111,9 +139,7 @@ impl OwnerTrustPolicy {
             // Bundled (built-in plugins) and Config (operator-explicit) are
             // always trusted — the operator put them there on purpose.
             PluginOrigin::Bundled | PluginOrigin::Config => true,
-            PluginOrigin::Workspace | PluginOrigin::Global | PluginOrigin::ClaudeCache => {
-                self.allowlist.contains(plugin_id)
-            }
+            PluginOrigin::Workspace | PluginOrigin::Global | PluginOrigin::ClaudeCache => vouches(),
         }
     }
 }

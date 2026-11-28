@@ -186,6 +186,39 @@ pub fn build_request_tool_service(
     deferred: Arc<crate::tools::scoped::DeferredTools>,
     tool_health: Option<Arc<crate::tool_metadata::ToolHealthCache>>,
 ) -> Arc<dyn ToolService> {
+    Arc::new(build_scoped_request_tool_service(
+        tool_registry,
+        allowed_tools,
+        subagent_tool,
+        turn_context,
+        hook_executor,
+        session_id,
+        tool_permissions,
+        exec_tier,
+        unattended,
+        core_tools,
+        truncate_tool_descriptions,
+        deferred,
+        tool_health,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn build_scoped_request_tool_service(
+    tool_registry: Arc<LoopToolRegistry>,
+    allowed_tools: BTreeSet<String>,
+    subagent_tool: Option<Arc<SubagentTool>>,
+    turn_context: Option<crate::tools::turn_context::TurnContext>,
+    hook_executor: Option<Arc<HookExecutor>>,
+    session_id: impl Into<String>,
+    tool_permissions: Option<super::turn_permissions::TurnToolPolicy>,
+    exec_tier: crate::config::types::policies::ExecTier,
+    unattended: bool,
+    core_tools: &[String],
+    truncate_tool_descriptions: bool,
+    deferred: Arc<crate::tools::scoped::DeferredTools>,
+    tool_health: Option<Arc<crate::tool_metadata::ToolHealthCache>>,
+) -> ScopedToolService {
     let session_id: String = session_id.into();
     // Construction inherits the Policy Arc from this registry's canonical
     // mounted facade. Run/resume/MCP/slash therefore share the same guard,
@@ -251,8 +284,7 @@ pub fn build_request_tool_service(
     }
     // Deferred exposure tier: drop these names from the LLM-visible lists.
     // Empty set (defer_mcp_tools off) is a no-op — byte-identical surface.
-    svc = svc.with_deferred(deferred);
-    Arc::new(svc)
+    svc.with_deferred(deferred)
 }
 
 #[cfg(test)]

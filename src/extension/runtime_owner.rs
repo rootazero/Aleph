@@ -6,12 +6,12 @@ use super::{ExtensionManager, PluginStatus};
 use crate::sync_primitives::Arc;
 use futures::FutureExt;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use super::manifest::{adapter::AdapterOutput, PluginManifest};
+use super::manifest::{PluginManifest, adapter::AdapterOutput};
 use super::runtime::wasm::WasmMountIdentity;
 use crate::tools::descriptor::ToolCapabilityDescriptor;
 use crate::tools::registry::{
@@ -48,6 +48,7 @@ pub(super) struct RuntimeOwner {
     pub output: AdapterOutput,
     pub manifest: PluginManifest,
     pub record: PluginRecord,
+    pub runtime_key: String,
     pub identity: Mutex<Option<WasmMountIdentity>>,
     pub owner_generation: u64,
     pub receipt: Mutex<Option<PluginBatchRegistration>>,
@@ -153,8 +154,9 @@ impl RuntimeOwner {
     }
 
     pub fn new(output: AdapterOutput, manifest: PluginManifest, record: PluginRecord) -> Self {
+        let runtime_key = record.instance_key().runtime_key();
         let provider = ProviderHandle::new(ProviderLifecycle::new(
-            ProviderId::new(format!("plugin/{}", record.id)).expect("nonempty plugin provider id"),
+            ProviderId::new(format!("plugin/{runtime_key}")).expect("nonempty plugin provider id"),
             ProviderTransport::InProcess,
         ));
         provider
@@ -166,6 +168,7 @@ impl RuntimeOwner {
             output,
             manifest,
             record,
+            runtime_key,
             identity: Mutex::new(None),
             owner_generation: {
                 let mut next = NEXT_OWNER_GENERATION.lock().unwrap();
@@ -194,12 +197,31 @@ impl RuntimeOwner {
 }
 
 impl ExtensionManager {
+    pub(super) fn runtime_owner_at(&self, runtime_key: &str) -> Option<Arc<RuntimeOwner>> {
+        let owners = self.runtime_owners.lock().unwrap();
+        owners
+            .values()
+            .find(|owner| owner.runtime_key == runtime_key)
+            .cloned()
+    }
+
+    #[cfg(test)]
     pub(super) fn runtime_owner(&self, id: &str) -> Option<Arc<RuntimeOwner>> {
-        self.runtime_owners.lock().unwrap().get(id).cloned()
+        let owners = self.runtime_owners.lock().unwrap();
+        let mut matching = owners.iter().filter(|(key, _)| key.plugin_id == id);
+        let (_, owner) = matching.next()?;
+        matching.next().is_none().then(|| Arc::clone(owner))
+    }
+
+    pub(super) fn runtime_owner_for(
+        &self,
+        instance: &super::visibility::PluginInstanceKey,
+    ) -> Option<Arc<RuntimeOwner>> {
+        self.runtime_owners.lock().unwrap().get(instance).cloned()
     }
 
     pub(super) fn owner_is_current(&self, owner: &Arc<RuntimeOwner>) -> bool {
-        self.runtime_owner(&owner.record.id)
+        self.runtime_owner_for(&owner.record.instance_key())
             .is_some_and(|current| Arc::ptr_eq(&current, owner))
     }
 
@@ -210,13 +232,13 @@ impl ExtensionManager {
         mut record: PluginRecord,
         manifest: PluginManifest,
     ) -> PluginStatus {
-        let id = record.id.clone();
+        let instance = record.instance_key();
         record.status = PluginStatus::Cold;
         let owner = Arc::new(RuntimeOwner::new(output, manifest, record.clone()));
         self.runtime_owners
             .lock()
             .unwrap()
-            .insert(id, Arc::clone(&owner));
+            .insert(instance, Arc::clone(&owner));
         self.plugin_registry.write().await.register_plugin(record);
         let registry = self
             .tool_handler_registry
@@ -251,7 +273,7 @@ impl ExtensionManager {
                 })
                 .collect();
             let receipt = registry.publish_plugin_cold_batch(PluginColdBatch {
-                plugin_id: owner.record.id.clone(),
+                plugin_id: owner.runtime_key.clone(),
                 owner_generation: owner.owner_generation,
                 entries,
             });
@@ -324,7 +346,7 @@ impl ExtensionManager {
                 state => {
                     return Err(ExtensionError::Runtime(format!(
                         "plugin owner rejects activation: {state:?}"
-                    )))
+                    )));
                 }
             }
         }
@@ -363,17 +385,17 @@ impl ExtensionManager {
             _ = &mut stopped => return Err("activation fenced before control".into()),
             control = self.load_guard.lock() => control,
         };
-        let id = &owner.record.id;
+        let runtime_key = &owner.runtime_key;
         if !self.owner_is_current(owner)
             || owner.provider.snapshot() != (ProviderState::Starting, generation)
         {
             return Err("activation incarnation is stale".into());
         }
-        self.admit(id, owner.record.origin)
+        self.admit(&owner.record.instance_key(), owner.record.origin)
             .await
             .map_err(|e| e.to_string())?;
         // Never accept the loader's duplicate-load no-op as our own mount.
-        if self.plugin_loader.read().await.is_loaded(id) {
+        if self.plugin_loader.read().await.is_loaded(runtime_key) {
             return Err("activation found an unowned runtime; explicit recovery required".into());
         }
         let mut record = owner.record.clone();
@@ -397,7 +419,7 @@ impl ExtensionManager {
             .plugin_loader
             .read()
             .await
-            .wasm_mount_identity(id)
+            .wasm_mount_identity(runtime_key)
             .ok_or_else(|| "mount completed without a WASM identity".to_owned())?;
         // load_guard excludes replacement/control commits until publication.
         // Still fence explicitly: no completion may publish a different owner.
@@ -406,7 +428,7 @@ impl ExtensionManager {
         {
             return Err("mount completion is stale; retained effects require cleanup".into());
         }
-        self.admit(id, owner.record.origin)
+        self.admit(&owner.record.instance_key(), owner.record.origin)
             .await
             .map_err(|e| e.to_string())?;
         *owner.identity.lock().unwrap() = Some(identity.clone());
@@ -451,7 +473,11 @@ impl ExtensionManager {
                 }
                 // Dispose only this fenced mount. A failed disposer report
                 // remains on the owner, without retry.
-                let scope = self.scopes.lock().unwrap().remove(id);
+                let scope = self
+                    .scopes
+                    .lock()
+                    .unwrap()
+                    .remove(&owner.record.instance_key());
                 if let Some(scope) = scope {
                     let report = scope.dispose().await;
                     if !report.all_ok() {
@@ -478,7 +504,12 @@ impl ExtensionManager {
                 return Err(reason);
             }
         }
-        if let Some(row) = self.plugin_registry.write().await.get_plugin_mut(id) {
+        if let Some(row) = self
+            .plugin_registry
+            .write()
+            .await
+            .get_plugin_instance_mut(&owner.record.instance_key())
+        {
             row.status = PluginStatus::Loaded;
         }
         // This is still under load_guard; stop cannot overtake the unique
@@ -496,11 +527,11 @@ impl ExtensionManager {
         let registry = self.plugin_registry.read().await;
         let loader = self.plugin_loader.read().await;
         let entries = registry
-            .list_tools_for_plugin(&owner.record.id)
+            .list_tools_for_plugin(&owner.runtime_key)
             .into_iter()
             .map(|registration| {
                 let binding = loader
-                    .bind_wasm(&owner.record.id, &registration.handler)
+                    .bind_wasm(&owner.runtime_key, &registration.handler)
                     .map_err(|error| PluginPublicationError::InvalidEntry {
                         name: registration.name.clone(),
                         reason: error.to_string(),
@@ -523,7 +554,7 @@ impl ExtensionManager {
             })
             .collect::<Result<Vec<_>, PluginPublicationError>>()?;
         Ok(PluginBatch {
-            plugin_id: owner.record.id.clone(),
+            plugin_id: owner.runtime_key.clone(),
             provider: owner.provider.clone(),
             provider_generation: generation,
             owner_generation: owner.owner_generation,

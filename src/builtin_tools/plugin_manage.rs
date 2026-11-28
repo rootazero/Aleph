@@ -43,6 +43,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AlephError, Result};
+use crate::extension::PluginInfo;
+use crate::extension::plugin_target::{PluginAccess, PluginTarget, PluginTargetError};
 use crate::tools::AlephTool;
 
 /// Plugin operation.
@@ -93,6 +95,10 @@ pub struct PluginManageArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
+    /// Exact plugin instance selector from list, with precedence over name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+
     /// marketplace_add: owner/repo, GitHub URL or local directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -128,42 +134,24 @@ impl PluginManageTool {
         Self
     }
 
-    /// Whether THIS face — the model — may turn `name` on. Disabling needs no
-    /// such check: it is the fail-safe direction.
-    ///
-    /// - An id no load lists is refused: recording `enabled = true` for it
-    ///   would let the model pre-approve a Claude Code plugin that is not
-    ///   listed yet (or whose index could not be read this load).
-    /// - A `claude_cache` row is refused (D-A, provisional ruling pending
-    ///   the user's decision): enabling it runs code another tool installed
-    ///   — and Claude Code does not let its model enable plugins either. The
-    ///   refusal names the human faces that can.
-    async fn may_enable(manager: &crate::extension::ExtensionManager, name: &str) -> Result<()> {
-        use crate::extension::PluginOrigin;
-        let origin = manager.get_plugin_record(name).await.map(|r| r.origin);
-        match origin {
-            None => Err(AlephError::config(format!(
-                "No plugin '{name}'. Call action='list' to see what is installed."
-            ))),
-            // A deliberate refusal, so the policy label — not `config`, whose
-            // "Configuration/Database error:" reads as something broken.
-            Some(PluginOrigin::ClaudeCache) => Err(AlephError::PermissionDenied {
-                message: format!(
-                    "'{name}' was installed by Claude Code (origin claude_cache). Enabling it \
-                     runs code another tool installed, so the operator turns it on: \
-                     `aleph plugin enable {name}`, or the Panel's plugin settings. Tell them \
-                     that; you may still disable it."
-                ),
+    fn require_target(args: &PluginManageArgs) -> Result<PluginTarget> {
+        if let Some(selector) = &args.selector {
+            return Ok(PluginTarget::Exact(selector.clone()));
+        }
+        Self::require_name(args).map(|name| PluginTarget::Bare(name.to_owned()))
+    }
+
+    fn target_error(error: PluginTargetError) -> AlephError {
+        match error {
+            PluginTargetError::OperatorRequired(_) => AlephError::PermissionDenied {
+                message: error.to_string(),
                 suggestion: None,
-            }),
-            // Named, no wildcard: a new origin decides whether the model may
-            // turn it on.
-            Some(
-                PluginOrigin::Config
-                | PluginOrigin::Workspace
-                | PluginOrigin::Global
-                | PluginOrigin::Bundled,
-            ) => Ok(()),
+            },
+            PluginTargetError::Ambiguous { selectors } => AlephError::config(format!(
+                "Multiple plugin instances match. Use one of these selectors: {}",
+                selectors.join(", ")
+            )),
+            _ => AlephError::config(error.to_string()),
         }
     }
 
@@ -180,9 +168,8 @@ impl PluginManageTool {
 #[async_trait]
 impl AlephTool for PluginManageTool {
     const NAME: &'static str = "plugin_manage";
-    const DESCRIPTION: &'static str =
-        "Inspect, enable/disable, reload and configure installed plugins. \
-         list reports kind (wasm/mcp/static), status/error and component counts; show includes schema. \
+    const DESCRIPTION: &'static str = "Inspect, enable/disable, reload and configure installed plugins. \
+         list reports the selector, scope, kind (wasm/mcp/static), status/error and component counts. Use selector to address an exact instance. \
          context_status(name) reports mounted context descriptors/session grants; context_plugin confirms grant/revoke. \
          config_set REPLACES configuration: config_get first, merge, then reload. \
          trust_status/trust/untrust/trust_enforce control LOAD gates for workspace/global/claude_cache; \
@@ -226,9 +213,20 @@ impl PluginManageTool {
             }
         }
 
+        let access = PluginAccess::for_run();
+        if matches!(
+            args.action,
+            PluginAction::ConfigSet | PluginAction::Trust | PluginAction::Untrust
+        ) {
+            manager
+                .ensure_discovered()
+                .await
+                .map_err(|error| AlephError::config(error.to_string()))?;
+        }
+
         match args.action {
             PluginAction::List => {
-                let plugins = manager.get_plugin_info().await;
+                let plugins = manager.plugin_info_visible_to(&access).await;
                 let summary = format!("{} plugin(s) installed", plugins.len());
                 Ok(PluginManageOutput {
                     summary,
@@ -236,30 +234,24 @@ impl PluginManageTool {
                 })
             }
             PluginAction::Show => {
-                let name = Self::require_name(&args)?;
-                let info = manager
-                    .get_plugin_info()
+                let target = Self::require_target(&args)?;
+                let (record, config) = manager
+                    .plugin_target_snapshot(&target, &access)
                     .await
-                    .into_iter()
-                    .find(|p| p.name == name)
-                    .ok_or_else(|| {
-                        AlephError::config(format!(
-                            "No plugin '{name}'. Call action='list' to see what is installed."
-                        ))
-                    })?;
-                let config = manager.plugin_settings(name).await;
+                    .map_err(Self::target_error)?;
+                let info = PluginInfo::from(&record);
                 Ok(PluginManageOutput {
-                    summary: format!("{name}: {} ({})", info.status, info.kind),
+                    summary: format!("{}: {} ({})", info.name, info.status, info.kind),
                     data: serde_json::json!({ "plugin": info, "config": config }),
                 })
             }
             PluginAction::ContextStatus => {
-                let name = Self::require_name(&args)?;
-                let declarations = manager
-                    .context_declarations(name)
+                let target = Self::require_target(&args)?;
+                let caller = super::context_plugin::host_caller()?;
+                let (instance, declarations) = manager
+                    .context_target_declarations(&target, &access)
                     .await
                     .map_err(|error| AlephError::config(error.to_string()))?;
-                let caller = super::context_plugin::host_caller()?;
                 let registry = manager.get_plugin_registry().await;
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -270,7 +262,7 @@ impl PluginManageTool {
                     .into_iter()
                     .map(|declaration| {
                         let key = crate::extension::registry::namespaced_component_key(
-                            name,
+                            &instance.plugin_id,
                             &declaration.descriptor.id,
                         );
                         serde_json::json!({"descriptor": declaration.descriptor, "key": key,
@@ -280,25 +272,23 @@ impl PluginManageTool {
                 Ok(PluginManageOutput {
                     summary: format!("{} mounted context capability declaration(s)", states.len()),
                     data: serde_json::json!({
+                        "selector": instance.selector(),
                         "capabilities": states,
-                        "stats": registry.context_stats(),
-                        // The grant decisions themselves (allowed and refused),
-                        // not just their counts: the ring is bounded, so this is
-                        // the retained tail, not the full history.
-                        "audit": registry.context_audit(),
                     }),
                 })
             }
             PluginAction::Enable | PluginAction::Disable => {
-                let name = Self::require_name(&args)?;
+                let target = Self::require_target(&args)?;
                 let enable = matches!(args.action, PluginAction::Enable);
-                if enable {
-                    Self::may_enable(manager, name).await?;
-                }
-                let (ok, outcome) = match manager.set_plugin_enabled(name, enable).await {
+                let result = manager
+                    .set_plugin_target_enabled(&target, &access, enable, false)
+                    .await
+                    .map_err(Self::target_error)?;
+                let (ok, outcome) = match result {
                     Ok(outcome) => (true, outcome),
                     Err(error) => (false, *error.outcome),
                 };
+                let name = &outcome.plugin_id;
                 Ok(PluginManageOutput {
                     summary: if ok {
                         format!(
@@ -306,35 +296,41 @@ impl PluginManageTool {
                             outcome.actual_state
                         )
                     } else {
-                        format!("Plugin '{name}' control failed: {}; desired persisted={}, actual_state={}", outcome.error.as_deref().unwrap_or("unknown error"), outcome.persisted, outcome.actual_state)
+                        format!(
+                            "Plugin '{name}' control failed: {}; desired persisted={}, actual_state={}",
+                            outcome.error.as_deref().unwrap_or("unknown error"),
+                            outcome.persisted,
+                            outcome.actual_state
+                        )
                     },
-                    data: serde_json::json!({ "ok": ok, "name": name, "enabled": enable, "changed": outcome.changed(), "outcome": outcome }),
+                    data: serde_json::json!({ "ok": ok, "name": name, "selector": outcome.selector, "enabled": enable, "changed": outcome.changed(), "outcome": outcome }),
                 })
             }
             PluginAction::Reload => {
-                let name = Self::require_name(&args)?;
-                let status = manager
-                    .reload_plugin(name)
+                let target = Self::require_target(&args)?;
+                let (instance, status) = manager
+                    .reload_plugin_target(&target, &access)
                     .await
-                    .map_err(|e| AlephError::config(format!("Reload failed: {e}")))?;
+                    .map_err(Self::target_error)?;
+                let status = status
+                    .map_err(|error| AlephError::config(format!("Reload failed: {error}")))?;
                 Ok(PluginManageOutput {
-                    summary: format!("Plugin '{name}' reloaded"),
-                    data: serde_json::json!({ "name": name, "status": status.label() }),
+                    summary: format!("Plugin '{}' reloaded", instance.plugin_id),
+                    data: serde_json::json!({ "name": instance.plugin_id, "selector": instance.selector(), "status": status.label() }),
                 })
             }
             PluginAction::ConfigGet => {
-                let name = Self::require_name(&args)?;
-                let config = manager.plugin_settings(name).await;
-                let schema = {
-                    let registry = manager.get_plugin_registry().await;
-                    registry.get_plugin(name).and_then(|record| {
-                        crate::extension::manifest::parse_manifest_from_dir_cached_global(
-                            &record.root_dir,
-                        )
-                        .ok()
-                        .and_then(|m| m.config_schema.clone())
-                    })
-                };
+                let target = Self::require_target(&args)?;
+                let (record, config) = manager
+                    .plugin_target_snapshot(&target, &access)
+                    .await
+                    .map_err(Self::target_error)?;
+                let name = &record.id;
+                let schema = crate::extension::manifest::parse_manifest_from_dir_cached_global(
+                    &record.root_dir,
+                )
+                .ok()
+                .and_then(|manifest| manifest.config_schema);
                 let summary = match &schema {
                     Some(_) => format!("Configuration for '{name}' (schema available)"),
                     None => format!(
@@ -344,18 +340,23 @@ impl PluginManageTool {
                 };
                 Ok(PluginManageOutput {
                     summary,
-                    data: serde_json::json!({ "name": name, "config": config, "schema": schema }),
+                    data: serde_json::json!({ "name": name, "selector": record.instance_key().selector(), "config": config, "schema": schema }),
                 })
             }
             PluginAction::ConfigSet => {
-                let name = Self::require_name(&args)?;
+                let target = Self::require_target(&args)?;
                 let config = args.config.clone().ok_or_else(|| {
                     AlephError::config(
                         "'config' is required for config_set. It REPLACES the stored \
                          configuration — read it with config_get first and send the merged result.",
                     )
                 })?;
-                match manager.set_plugin_settings(name, config).await {
+                let (instance, result) = manager
+                    .set_plugin_target_settings(&target, &access, config)
+                    .await
+                    .map_err(Self::target_error)?;
+                let name = &instance.plugin_id;
+                match result {
                     Ok(changed) => Ok(PluginManageOutput {
                         summary: if changed {
                             format!(
@@ -367,6 +368,7 @@ impl PluginManageTool {
                         },
                         data: serde_json::json!({
                             "name": name,
+                            "selector": instance.selector(),
                             "changed": changed,
                             "reload_required": changed,
                         }),
@@ -378,7 +380,7 @@ impl PluginManageTool {
                 }
             }
             PluginAction::TrustStatus => {
-                let (enforced, trusted) = manager.trust_status().await;
+                let (enforced, trusted) = manager.trust_status_visible_to(&access).await;
                 let summary = if enforced {
                     format!(
                         "Owner trust is ENFORCED. {} plugin(s) vouched for; any other plugin \
@@ -399,10 +401,14 @@ impl PluginManageTool {
                 })
             }
             PluginAction::Trust | PluginAction::Untrust => {
-                let name = Self::require_name(&args)?;
+                let target = Self::require_target(&args)?;
                 let trust = matches!(args.action, PluginAction::Trust);
-                let changed = manager.set_plugin_trusted(name, trust).await;
-                let (enforced, _) = manager.trust_status().await;
+                let (instance, changed) = manager
+                    .set_plugin_target_trusted(&target, &access, trust)
+                    .await
+                    .map_err(Self::target_error)?;
+                let name = &instance.plugin_id;
+                let (enforced, _) = manager.trust_status_visible_to(&access).await;
                 // Two things a caller must not infer: that untrusting stops a
                 // running plugin (it is a load gate — `disable` is the verb
                 // that stops one now), and that trusting matters at all while
@@ -426,6 +432,7 @@ impl PluginManageTool {
                     summary,
                     data: serde_json::json!({
                         "name": name,
+                        "selector": instance.selector(),
                         "trusted": trust,
                         "changed": changed,
                         "enforced": enforced,
@@ -441,7 +448,7 @@ impl PluginManageTool {
                     )
                 })?;
                 let changed = manager.set_trust_enforced(enforce).await;
-                let (_, trusted) = manager.trust_status().await;
+                let (_, trusted) = manager.trust_status_visible_to(&access).await;
                 let summary = if enforce {
                     format!(
                         "Owner trust enforcement is ON. {} plugin(s) are vouched for; \
@@ -485,7 +492,7 @@ impl PluginManageTool {
     /// and folding it into the match above would put a second subsystem
     /// inside one 200-line function.
     fn marketplace(args: PluginManageArgs) -> Result<PluginManageOutput> {
-        use crate::extension::marketplace::{classify, MarketplaceConfig, MarketplaceManager};
+        use crate::extension::marketplace::{MarketplaceConfig, MarketplaceManager, classify};
         // The two row builders the Panel and the CLI already render, so
         // "what a marketplace row looks like" has one answer across all three.
         use crate::gateway::handlers::plugins::types::{
@@ -671,13 +678,14 @@ mod tests {
             let args = PluginManageArgs {
                 action,
                 name: None,
+                selector: None,
                 config: None,
                 enforce: None,
                 source: None,
                 query: None,
             };
             assert!(
-                PluginManageTool::require_name(&args).is_err(),
+                PluginManageTool::require_target(&args).is_err(),
                 "{action:?} must refuse a missing name"
             );
         }
@@ -690,12 +698,13 @@ mod tests {
         let args = PluginManageArgs {
             action: PluginAction::Show,
             name: Some(String::new()),
+            selector: None,
             config: None,
             enforce: None,
             source: None,
             query: None,
         };
-        assert!(PluginManageTool::require_name(&args).is_err());
+        assert!(PluginManageTool::require_target(&args).is_err());
     }
 
     /// The description tells the model this tool cannot install — the claim it
@@ -717,6 +726,7 @@ mod tests {
         let args = PluginManageArgs {
             action: PluginAction::MarketplaceRemove,
             name: None,
+            selector: None,
             config: None,
             enforce: None,
             source: None,
@@ -737,6 +747,7 @@ mod tests {
         let err = PluginManageTool::marketplace(PluginManageArgs {
             action: PluginAction::MarketplaceAdd,
             name: None,
+            selector: None,
             config: None,
             enforce: None,
             source: None,

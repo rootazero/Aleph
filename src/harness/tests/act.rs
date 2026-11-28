@@ -223,6 +223,15 @@ impl ToolService for ScriptedTools {
         outcomes.remove(0)
     }
 
+    async fn execute_shell_jsonl(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        self.execute(name, input).await
+    }
+
     async fn execute_with_cancel_effective(
         &self,
         name: &str,
@@ -505,6 +514,86 @@ fn capturing_deps(
         in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     }
+}
+
+#[tokio::test]
+async fn fixed_jsonl_calls_project_before_trace_and_replay() {
+    use serde_json::json;
+
+    let inputs = [
+        json!({"process_action":"write_stdin", "process_id":19, "record":"WRITE_CANARY"}),
+        json!({"process_action":"write_stdin", "process_id":19, "record":"DENIED_CANARY"}),
+        json!({"process_action":"close_stdin", "process_id":19, "record":"MALFORMED_CANARY"}),
+    ];
+    let calls = inputs
+        .iter()
+        .enumerate()
+        .map(|(index, arguments)| NativeToolCall {
+            id: format!("jsonl-{index}"),
+            name: "bash".into(),
+            arguments: arguments.clone(),
+            thought_signature: None,
+        })
+        .collect();
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("inspect")]);
+    let tools = ScriptedTools::new_capturing(vec![
+        Ok(ok_output(json!({"status":"written"}))),
+        Err(ToolError::PermissionDenied {
+            name: "bash".into(),
+            reason: "fixed JSONL effect refused".into(),
+        }),
+        Err(ToolError::ValidationFailed {
+            name: "bash".into(),
+            cause: "invalid arguments for the fixed JSONL profile".into(),
+        }),
+    ]);
+    let (sink, traced) = super::stability::RecordingTraceSink::new();
+    let mut deps = capturing_deps(session.clone(), tools.clone(), calls);
+    deps.trace_sink = Some(sink as Arc<dyn crate::harness::TraceSink>);
+    let _ = AgentHarness::new(deps)
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .unwrap();
+    let delivered: Vec<_> = tools
+        .calls()
+        .await
+        .into_iter()
+        .map(|(_, input)| input)
+        .collect();
+    assert_eq!(delivered, inputs);
+
+    let events = session.snapshot().await;
+    let requests: Vec<_> = events
+        .iter()
+        .filter_map(|row| match &row.event {
+            SessionEvent::ToolCallRequested {
+                call_id,
+                input,
+                identity,
+                ..
+            } => {
+                assert!(identity.is_none());
+                assert_eq!(input["redacted"], true);
+                Some(call_id.as_str())
+            }
+            SessionEvent::ToolCallEffectiveInput { .. } => panic!("unexpected replayable input"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(requests, ["jsonl-0", "jsonl-1", "jsonl-2"]);
+    assert!(!format!("{events:?}").contains("CANARY"));
+    assert!(!format!("{:?}", traced.lock().unwrap()).contains("CANARY"));
+
+    let provider = CapturingProvider::text_only("complete");
+    let mut deps = capturing_deps(session, tools, Vec::new());
+    deps.llm = provider.clone();
+    let _ = AgentHarness::new(deps)
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .unwrap();
+    let prompt = format!("{:?}", provider.last_request_messages().await.unwrap());
+    assert!(!prompt.contains("CANARY"));
+    assert!(prompt.contains("jsonl-0"));
 }
 
 #[tokio::test]

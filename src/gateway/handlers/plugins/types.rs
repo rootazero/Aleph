@@ -33,6 +33,9 @@ use crate::extension::PluginInfo;
 #[must_use]
 pub fn plugin_row(info: PluginInfo) -> PluginRow {
     PluginRow {
+        selector: info.selector,
+        scope_kind: info.scope_kind,
+        import_diagnostics: info.import_diagnostics,
         name: info.name,
         version: info.version.unwrap_or_default(),
         description: info.description.unwrap_or_default(),
@@ -80,6 +83,8 @@ fn parse_status(label: &str) -> PluginRuntimeStatus {
 pub struct InstallFromZipParams {
     /// Base64-encoded zip data
     pub data: String,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 // ============================================================================
@@ -186,6 +191,9 @@ mod tests {
     #[test]
     fn the_row_carries_the_origin_label() {
         let info = PluginInfo {
+            import_diagnostics: Vec::new(),
+            selector: Some("g:cc".into()),
+            scope_kind: Some("global".into()),
             name: "cc".into(),
             version: None,
             description: None,
@@ -204,5 +212,7 @@ mod tests {
         };
         let wire = serde_json::to_value(plugin_row(info)).unwrap();
         assert_eq!(wire["origin"], "claude_cache");
+        assert_eq!(wire["selector"], "g:cc");
+        assert_eq!(wire["scope_kind"], "global");
     }
 }

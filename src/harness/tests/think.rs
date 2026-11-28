@@ -307,6 +307,129 @@ async fn think_with_no_tool_use_returns_done() {
     assert_eq!(assistant, "hi");
 }
 
+struct StreamingText {
+    text: &'static str,
+    stop_reason: crate::providers::adapter::StopReason,
+    continuation: Option<&'static str>,
+    reasoning: &'static str,
+}
+
+impl AiProvider for StreamingText {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        let continuation = self.continuation.expect("unexpected continuation request");
+        Box::pin(async move { Ok(ProviderResponse::text_only(continuation.to_owned())) })
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn execute_streaming_dyn<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+        sink: &'a dyn crate::providers::DeltaSink,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            for character in self.reasoning.chars() {
+                sink.on_delta(&crate::providers::ProviderDelta::ThinkingDelta(
+                    character.to_string(),
+                ))
+                .await;
+            }
+            for character in self.text.chars() {
+                sink.on_delta(&crate::providers::ProviderDelta::TextDelta(
+                    character.to_string(),
+                ))
+                .await;
+            }
+            Ok(ProviderResponse {
+                stop_reason: self.stop_reason.clone(),
+                thinking: Some(self.reasoning.to_owned()),
+                ..ProviderResponse::text_only(self.text.to_owned())
+            })
+        })
+    }
+
+    fn name(&self) -> &str {
+        "streaming-text"
+    }
+
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+#[tokio::test]
+async fn streamed_tool_envelopes_stay_private_in_broadcasts_and_session() {
+    use crate::orchestrator::dispatch::FlowStreamEvent;
+    use crate::providers::adapter::StopReason;
+
+    for (text, stop_reason, continuation, expected) in [
+        (
+            r#"前 <tool_call>{"name":"bash","arguments":{"process_action":"write_stdin","record":"PRIVATE_CANARY"}}</tool_call> 后"#,
+            StopReason::EndTurn,
+            None,
+            "前  后",
+        ),
+        (
+            r#"前 <tool_call>{"name":"bash","arguments":{"process_action":"write_stdin","record":"PRIVATE_CANARY"#,
+            StopReason::MaxTokens,
+            None,
+            "前 ",
+        ),
+        (
+            r#"前 <function=bash><parameter=record>"PRIVATE</parameter></function>_CANARY"</parameter></function> 后"#,
+            StopReason::EndTurn,
+            None,
+            "前 ",
+        ),
+        (
+            r#"{"answer":"hello"#,
+            StopReason::MaxTokens,
+            Some(r#" world"}"#),
+            r#"{"answer":"hello world"}"#,
+        ),
+    ] {
+        let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
+        let reasoning = "```json\n{\"step\":1}\n```";
+        let provider = Arc::new(StreamingText {
+            text,
+            stop_reason,
+            continuation,
+            reasoning,
+        });
+        let harness = AgentHarness::new(default_deps(session.clone(), provider));
+        let (tx, mut rx) = tokio::sync::broadcast::channel(32);
+        let mut callback = crate::orchestrator::harness_bridge::test_broadcast_callback(tx);
+        let state = harness
+            .run_turn(&sample_session_id(), &mut callback)
+            .await
+            .unwrap();
+        assert_eq!(state, TurnState::Done);
+
+        let mut streamed = String::new();
+        let mut streamed_reasoning = String::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                FlowStreamEvent::Delta(delta) => streamed.push_str(&delta),
+                FlowStreamEvent::Reasoning(delta) => streamed_reasoning.push_str(&delta),
+                _ => {}
+            }
+        }
+        assert_eq!(streamed, expected);
+        assert_eq!(streamed_reasoning, reasoning);
+        let events = session.snapshot().await;
+        let assistant = events.iter().find_map(|r| match &r.event {
+            SessionEvent::AssistantMessage { content, .. } => Some(content.text.as_str()),
+            _ => None,
+        });
+        assert_eq!(assistant, Some(expected));
+    }
+}
+
 /// One Think iteration with a thinking block records exactly one
 /// `ReasoningEmitted` beside its `TextEmitted{Final}`, carrying the same
 /// iteration and the whole block. This is the record `trace.by_runs`

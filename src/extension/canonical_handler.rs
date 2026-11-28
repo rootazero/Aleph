@@ -1,9 +1,9 @@
 //! Canonical handlers bound to one real RuntimeOwner and mounted export.
 
+use super::PluginLoader;
 use super::registry::ToolRegistration;
 use super::runtime::wasm::WasmBinding;
 use super::runtime_owner::RuntimeOwner;
-use super::PluginLoader;
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::descriptor::ToolCallIdentity;
@@ -17,6 +17,8 @@ struct PluginColdHandler {
     manager: Weak<super::ExtensionManager>,
     owner: Weak<RuntimeOwner>,
     owner_generation: u64,
+    provider_name: String,
+    runtime_key: String,
     registration: ToolRegistration,
 }
 
@@ -35,6 +37,11 @@ impl ToolHandler for PluginColdHandler {
             .owner
             .upgrade()
             .ok_or_else(|| error("runtime owner is gone".into()))?;
+        if !super::plugin_target::PluginAccess::for_run().allows(&owner.record.scope_key) {
+            return Err(error(
+                "plugin owner is outside the authorized project".into(),
+            ));
+        }
         if !manager.owner_is_current(&owner) || owner.owner_generation != self.owner_generation {
             return Err(error("cold plugin owner incarnation is stale".into()));
         }
@@ -52,9 +59,9 @@ impl ToolHandler for PluginColdHandler {
             .clone()
             .ok_or_else(|| error("canonical tool registry is unavailable".into()))?;
         let lease = registry
-            .capture_entry(&self.registration.name)
+            .capture_entry(&self.provider_name)
             .ok_or_else(|| error("activated plugin tool is not callable".into()))?;
-        if !lease.matches_plugin_owner(&self.registration.plugin_id, self.owner_generation) {
+        if !lease.matches_plugin_owner(&self.runtime_key, self.owner_generation) {
             return Err(error("activated plugin owner incarnation is stale".into()));
         }
         if lease.is_cold_declaration() {
@@ -78,11 +85,11 @@ impl ToolHandler for PluginColdHandler {
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
-            name: self.registration.name.clone(),
+            name: self.provider_name.clone(),
             description: self.registration.description.clone(),
             input_schema: self.registration.parameters.clone(),
             source: ToolSource::Extension {
-                plugin_id: self.registration.plugin_id.clone(),
+                plugin_id: self.runtime_key.clone(),
             },
             metadata: ToolDefinitionMetadata::default(),
         }
@@ -98,6 +105,11 @@ pub(super) fn build_cold_handler(
         manager,
         owner: Arc::downgrade(owner),
         owner_generation: owner.owner_generation,
+        provider_name: owner
+            .record
+            .instance_key()
+            .tool_provider_name(&registration.name),
+        runtime_key: owner.runtime_key.clone(),
         registration,
     })
 }
@@ -107,6 +119,8 @@ struct PluginCanonicalHandler {
     owner: Weak<RuntimeOwner>,
     generation: u64,
     binding: WasmBinding,
+    provider_name: String,
+    runtime_key: String,
     registration: ToolRegistration,
 }
 
@@ -121,9 +135,14 @@ impl ToolHandler for PluginCanonicalHandler {
             .owner
             .upgrade()
             .ok_or_else(|| error("runtime owner is gone".into()))?;
+        if !super::plugin_target::PluginAccess::for_run().allows(&owner.record.scope_key) {
+            return Err(error(
+                "plugin owner is outside the authorized project".into(),
+            ));
+        }
         let authority = crate::tools::dispatch_verdict::PluginActivationAuthority::from_current(
-            &self.registration.name,
-            &self.registration.plugin_id,
+            &self.provider_name,
+            &self.runtime_key,
             &self.registration.handler,
             &input,
         )
@@ -131,13 +150,10 @@ impl ToolHandler for PluginCanonicalHandler {
             error("canonical plugin invocation has no sealed producer authority".into())
         })?;
         let validate = || {
-            if !authority.validates(
-                &self.registration.plugin_id,
-                &self.registration.handler,
-                &input,
-            ) || !authority
-                .binding_for(&owner.provider, owner.owner_generation)
-                .is_some_and(|binding| binding.same_binding(&self.binding))
+            if !authority.validates(&self.runtime_key, &self.registration.handler, &input)
+                || !authority
+                    .binding_for(&owner.provider, owner.owner_generation)
+                    .is_some_and(|binding| binding.same_binding(&self.binding))
                 || !owner
                     .identity
                     .lock()
@@ -207,11 +223,11 @@ impl ToolHandler for PluginCanonicalHandler {
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
-            name: self.registration.name.clone(),
+            name: self.provider_name.clone(),
             description: self.registration.description.clone(),
             input_schema: self.registration.parameters.clone(),
             source: ToolSource::Extension {
-                plugin_id: self.registration.plugin_id.clone(),
+                plugin_id: self.runtime_key.clone(),
             },
             metadata: ToolDefinitionMetadata::default(),
         }
@@ -230,6 +246,11 @@ pub(super) fn build_canonical_handler(
         owner: Arc::downgrade(owner),
         generation,
         binding,
+        provider_name: owner
+            .record
+            .instance_key()
+            .tool_provider_name(&registration.name),
+        runtime_key: owner.runtime_key.clone(),
         registration,
     })
 }

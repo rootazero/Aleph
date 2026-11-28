@@ -52,15 +52,15 @@ use std::path::{Path, PathBuf};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::extension::hooks::{ShellHookConsent, INLINE_COMMAND_EVENT};
+use crate::extension::hooks::{INLINE_COMMAND_EVENT, ShellHookConsent};
 use crate::extension::inline_shell::{
-    run_inline_process, withheld, InlineConsent, Withheld, NO_RUN_DIRECTORY,
+    InlineConsent, NO_RUN_DIRECTORY, Withheld, run_inline_process, withheld,
 };
 use crate::extension::plugin_secrets::SettingsForm;
 use crate::extension::visibility::ScopeKey;
 use crate::extension::{
-    inline_shell_command, ExtensionError, ExtensionManager, InlineArgs, InlineShell, InlineSite,
-    PluginRecord, PluginRegistry, SkillRegistration, SkillTemplate, SkillType, TemplateCtx,
+    ExtensionError, ExtensionManager, InlineArgs, InlineShell, InlineSite, PluginRecord,
+    PluginRegistry, SkillRegistration, SkillTemplate, SkillType, TemplateCtx, inline_shell_command,
 };
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::gateway::model_override::ModelOverride;
@@ -252,18 +252,19 @@ pub(super) async fn render_command(
     // One registry read for the registration and its plugin's record: the
     // install root (not `reg.base_dir()`, which is `<root>/commands`) and the
     // visibility key the consent entry is filed under.
-    let (reg, plugin_root, scope) = {
+    let (reg, plugin_id, plugin_root, scope) = {
         let registry = manager.get_plugin_registry().await;
         let Some((reg, record)) = owned_command(mode, &registry) else {
             return Ok(None);
         };
         (
             reg.clone(),
+            record.id.clone(),
             record.root_dir.clone(),
             record.scope_key.clone(),
         )
     };
-    let qualified = reg.qualified_name();
+    let logical_name = crate::extension::registry::namespaced_component_key(&plugin_id, &reg.name);
     let shell: Box<dyn InlineShell> = match refusal {
         Some(reason) => Box::new(Withheld(reason)),
         None => Box::new(ConsentedShell {
@@ -280,8 +281,8 @@ pub(super) async fn render_command(
     let rendered = render_registration(&reg, args, Some(&*shell))
         .await
         .map_err(|e| e.to_string())?;
-    let block = wrap_block(&qualified, &reg.plugin_id, &rendered);
-    Ok(Some((qualified, block)))
+    let block = wrap_block(&logical_name, &plugin_id, &rendered);
+    Ok(Some((reg.qualified_name(), block)))
 }
 
 /// The plugin command a slash mode names — the one the fast path's owner gate
@@ -320,9 +321,7 @@ fn owned_command<'r>(
             && reg.plugin_id == owner
             && reg.qualified_name() == skill_id
     })?;
-    let record = registry
-        .get_plugin(&reg.plugin_id)
-        .filter(|record| record.status.is_active())?;
+    let record = registry.active_plugin(&reg.plugin_id)?;
     Some((reg, record))
 }
 
@@ -336,6 +335,7 @@ pub(super) async fn render_registration(
     shell: Option<&dyn InlineShell>,
 ) -> Result<String, ExtensionError> {
     SkillTemplate::with_base_dir(&reg.content, reg.base_dir())
+        .with_dialect(reg.template_dialect)
         .render(args, &TemplateCtx { shell })
         .await
 }

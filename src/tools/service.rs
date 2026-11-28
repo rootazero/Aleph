@@ -51,6 +51,12 @@ pub use aleph_slot_api::error_kind::ToolErrorKind;
 pub trait ToolService: Send + Sync + 'static {
     async fn execute(&self, name: &str, input: serde_json::Value) -> Result<ToolOutput, ToolError>;
 
+    #[cfg(all(feature = "test-helpers", target_os = "linux"))]
+    #[doc(hidden)]
+    fn paired_shell_test_service(&self) -> Option<&super::scoped::ScopedToolService> {
+        None
+    }
+
     async fn list(&self) -> Vec<ToolDefinition>;
 
     /// Every tool the model may legitimately CALL — the visible list plus the
@@ -168,6 +174,21 @@ pub trait ToolService: Send + Sync + 'static {
         _cancel: CancellationToken,
     ) -> Result<ToolOutput, ToolError> {
         self.execute(name, input).await
+    }
+
+    /// Dispatch a protected Bash JSONL operation only on a service that owns
+    /// the live paired route. Other transports must never see the record.
+    #[doc(hidden)]
+    async fn execute_shell_jsonl(
+        &self,
+        name: &str,
+        _input: serde_json::Value,
+        _cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        Err(ToolError::PermissionDenied {
+            name: name.into(),
+            reason: "fixed JSONL input requires an eligible paired Bash call".into(),
+        })
     }
 
     /// Execute with cancellation AND report the post-guardrail

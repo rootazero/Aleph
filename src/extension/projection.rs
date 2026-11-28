@@ -22,7 +22,7 @@
 //!     (delegation) and the harness prompt builder (`<available_agents>`).
 //!   - `SkillSystem` — the scan that feeds the model's `<available_skills>`
 //!     index; `init` receives the base dirs only.
-//!   - `ExtensionManager::active_plugin_tools` — the tool-name index.
+//!   - `ExtensionManager::plugin_runtime_view` — tool registrations and package winners.
 //!     (The hook executor is the fifth view; see `Views::after_transition`
 //!     for how it is rebuilt.)
 //!
@@ -73,8 +73,7 @@ use std::path::PathBuf;
 use tokio::sync::RwLock;
 
 use super::hooks::HookRegistry;
-use super::visibility::ScopeKey;
-use super::{ExtensionManager, PluginRegistry, ToolRegistration};
+use super::{ExtensionManager, PluginRegistry, PluginRuntimeView};
 use crate::discovery::DiscoveryManager;
 use crate::sync_primitives::{Arc, AtomicU64, Mutex as StdMutex, RwLock as StdRwLock};
 
@@ -90,11 +89,13 @@ pub(super) struct Views {
     pub(super) plugin_registry: Arc<RwLock<PluginRegistry>>,
     pub(super) discovery: Arc<DiscoveryManager>,
     pub(super) skill_system: crate::skill::SkillSystem,
-    pub(super) active_plugin_tools: Arc<StdRwLock<HashMap<String, ToolRegistration>>>,
-    pub(super) plugin_scope_keys: Arc<StdRwLock<HashMap<String, ScopeKey>>>,
+    pub(super) plugin_runtime_view: Arc<StdRwLock<PluginRuntimeView>>,
     pub(super) plugin_tool_revision: Arc<AtomicU64>,
-    pub(super) runtime_owners:
-        Arc<StdMutex<HashMap<String, Arc<super::runtime_owner::RuntimeOwner>>>>,
+    pub(super) runtime_owners: Arc<
+        StdMutex<
+            HashMap<super::visibility::PluginInstanceKey, Arc<super::runtime_owner::RuntimeOwner>>,
+        >,
+    >,
     pub(super) owner_trust_policy:
         Arc<crate::sync_primitives::RwLock<crate::extension::plugin_trust::OwnerTrustPolicy>>,
     pub(super) panel_publication:
@@ -109,8 +110,7 @@ impl ExtensionManager {
             plugin_registry: Arc::clone(&self.plugin_registry),
             discovery: Arc::clone(&self.discovery),
             skill_system: self.skill_system.clone(),
-            active_plugin_tools: Arc::clone(&self.active_plugin_tools),
-            plugin_scope_keys: Arc::clone(&self.plugin_scope_keys),
+            plugin_runtime_view: Arc::clone(&self.plugin_runtime_view),
             plugin_tool_revision: Arc::clone(&self.plugin_tool_revision),
             runtime_owners: Arc::clone(&self.runtime_owners),
             owner_trust_policy: Arc::clone(&self.owner_trust_policy),
@@ -159,24 +159,39 @@ impl Views {
     /// nothing — which is the whole point: an inactive plugin must be
     /// invisible to the model, not merely absent from the management list.
     async fn project_plugins(&self) -> PluginProjection {
-        let (records, subagents) = {
+        let (records, subagents, selected_skills) = {
             let registry = self.plugin_registry.read().await;
             let records: Vec<_> = registry.list_plugins().into_iter().cloned().collect();
             let subagents = registry
                 .list_agents()
                 .into_iter()
                 .filter_map(|agent| {
-                    let plugin = registry.get_plugin(&agent.plugin_id)?;
-                    if !plugin.status.is_active() {
-                        return None;
-                    }
+                    let plugin = registry.active_plugin(&agent.plugin_id)?;
                     super::plugin_agent_to_def(agent).map(|def| crate::agents::PluginSubagent {
                         scope_key: plugin.scope_key.clone(),
+                        owner: Some(agent.plugin_id.clone()),
                         def,
                     })
                 })
                 .collect();
-            (records, subagents)
+            let selected_skills = registry
+                .list_skills()
+                .into_iter()
+                .filter(|skill| skill.skill_type == super::types::SkillType::Skill)
+                .filter_map(|skill| {
+                    let owner = registry.active_plugin(&skill.plugin_id)?;
+                    owner.selected_skill_files.then(|| {
+                        crate::utils::paths::PublishedPluginSkillDir {
+                            dir: skill.source_path.clone(),
+                            exact_file: true,
+                            plugin_id: owner.id.clone(),
+                            scope_key: owner.scope_key.clone(),
+                            plugin_root: owner.root_dir.clone(),
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+            (records, subagents, selected_skills)
         };
         let trust_policy = self
             .owner_trust_policy
@@ -187,12 +202,16 @@ impl Views {
         // copied in the same loop as `record.scope_key`, so "whose dir" and
         // "which key" cannot come from two derivations (D-4: the directory
         // name is not the id).
-        let mut plugin_skill_dirs: Vec<crate::utils::paths::PublishedPluginSkillDir> = Vec::new();
-        for record in records.iter().filter(|record| record.status.is_active()) {
+        let mut plugin_skill_dirs = selected_skills;
+        for record in records
+            .iter()
+            .filter(|record| record.status.is_active() && !record.selected_skill_files)
+        {
             let dir = record.root_dir.join("skills");
             if dir.is_dir() && !plugin_skill_dirs.iter().any(|d| d.dir == dir) {
                 plugin_skill_dirs.push(crate::utils::paths::PublishedPluginSkillDir {
                     dir,
+                    exact_file: false,
                     plugin_id: record.id.clone(),
                     scope_key: record.scope_key.clone(),
                     plugin_root: record.root_dir.clone(),

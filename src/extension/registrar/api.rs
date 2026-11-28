@@ -4,10 +4,10 @@
 //! `CapabilityDeclaration` variants to the appropriate `register_*` method,
 //! with tiered permission checking.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use crate::extension::capability::{CapabilityDeclaration, Tier};
-use crate::extension::effects::{async_disposer, Disposer};
+use crate::extension::effects::{Disposer, async_disposer};
 use crate::extension::manifest::PluginPermission;
 use crate::extension::registry::{DiagnosticLevel, PluginDiagnostic, PluginRegistry};
 use crate::extension::types::PluginRecord;
@@ -24,6 +24,7 @@ pub(crate) struct CapabilityApi<'a> {
     registry: &'a mut PluginRegistry,
     /// ID of the plugin performing registration
     plugin_id: String,
+    runtime_key: Option<String>,
     /// Permissions granted to this plugin
     permissions: Vec<PluginPermission>,
 }
@@ -38,6 +39,7 @@ impl<'a> CapabilityApi<'a> {
         Self {
             registry,
             plugin_id,
+            runtime_key: None,
             permissions,
         }
     }
@@ -66,22 +68,27 @@ impl<'a> CapabilityApi<'a> {
 
     /// Dispatch a capability declaration to the appropriate registry method.
     fn dispatch(&mut self, decl: CapabilityDeclaration) -> Result<()> {
+        let owner = self.runtime_key.as_ref().unwrap_or(&self.plugin_id);
         match decl {
-            CapabilityDeclaration::Tool(tool) => {
+            CapabilityDeclaration::Tool(mut tool) => {
+                tool.plugin_id.clone_from(owner);
                 self.registry.register_tool(tool);
             }
-            CapabilityDeclaration::Hook(hook) => {
+            CapabilityDeclaration::Hook(mut hook) => {
+                hook.plugin_id.clone_from(owner);
                 self.registry.register_hook(hook);
             }
-            CapabilityDeclaration::Service(service) => {
+            CapabilityDeclaration::Service(mut service) => {
+                service.plugin_id.clone_from(owner);
                 self.registry.register_service(service);
             }
-            CapabilityDeclaration::Skill(skill) => {
-                // Plugin `commands/` markdown arrives here too, as a
-                // `SkillRegistration` tagged `skill_type = Command`.
+            CapabilityDeclaration::Skill(mut skill) => {
+                skill.plugin_id.clone_from(owner);
+                // Plugin `commands/` markdown is a Command-typed skill.
                 self.registry.register_skill(skill);
             }
-            CapabilityDeclaration::Agent(agent) => {
+            CapabilityDeclaration::Agent(mut agent) => {
+                agent.plugin_id.clone_from(owner);
                 self.registry.register_agent(agent);
             }
             CapabilityDeclaration::Context(_) => {
@@ -153,6 +160,7 @@ pub(crate) async fn register_plugin_row(
     permissions: Vec<PluginPermission>,
     capabilities: Vec<CapabilityDeclaration>,
 ) -> Disposer {
+    let instance = record.instance_key();
     let plugin_id = record.id.clone();
     {
         let mut reg = registry.write().await;
@@ -160,6 +168,7 @@ pub(crate) async fn register_plugin_row(
         let mut refused: Vec<String> = Vec::new();
         {
             let mut api = CapabilityApi::new(&mut reg, plugin_id.clone(), permissions);
+            api.runtime_key = Some(instance.runtime_key());
             for cap in capabilities {
                 let kind = cap.kind_name();
                 if let Err(e) = api.register_capability(cap) {
@@ -178,7 +187,7 @@ pub(crate) async fn register_plugin_row(
         }
     }
     async_disposer(move || async move {
-        registry.write().await.unregister_plugin(&plugin_id);
+        registry.write().await.unregister_plugin_instance(&instance);
         Ok(())
     })
 }
@@ -231,6 +240,7 @@ mod tests {
 
     fn make_skill() -> CapabilityDeclaration {
         CapabilityDeclaration::Skill(SkillRegistration {
+            template_dialect: Default::default(),
             name: "test-skill".to_string(),
             description: "A test skill".to_string(),
             content: "You are a test skill.".to_string(),

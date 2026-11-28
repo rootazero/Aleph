@@ -41,12 +41,15 @@
 //! worst case — small enough to keep in memory without a cap.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use crate::sync_primitives::Mutex;
 
 use lru::LruCache;
 
+use super::adapter::AdapterOutput;
+use super::inputs::SourceObservations;
 use super::types::PluginManifest;
 
 /// Returns `(dev, ino)` for a file. On Unix, both are taken from
@@ -103,13 +106,31 @@ pub const MAX_ENTRIES: usize = 512;
 /// (see [`inode_change_time`]), so a rewrite that preserves the size and the
 /// mtime still invalidates the entry.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct ManifestCacheKey {
-    path: PathBuf,
+pub(super) struct FileStamp {
     size: u64,
-    mtime: SystemTime,
-    ctime: SystemTime,
+    mtime: Option<SystemTime>,
+    ctime: Option<SystemTime>,
     dev: u64,
     ino: u64,
+}
+
+impl FileStamp {
+    pub(super) fn from_metadata(meta: &std::fs::Metadata) -> Self {
+        let (dev, ino) = device_and_inode(meta);
+        Self {
+            size: meta.len(),
+            mtime: meta.modified().ok(),
+            ctime: inode_change_time(meta),
+            dev,
+            ino,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct ManifestCacheKey {
+    path: PathBuf,
+    stamp: FileStamp,
     /// `<plugin dir>/.mcp.json` is a file — an input of the kind (module doc).
     kind_sidecar: bool,
 }
@@ -125,14 +146,12 @@ impl ManifestCacheKey {
         path: &Path,
         meta: &std::fs::Metadata,
     ) -> Option<Self> {
-        let (dev, ino) = device_and_inode(meta);
+        let stamp = FileStamp::from_metadata(meta);
+        stamp.mtime?;
+        stamp.ctime?;
         Some(Self {
             path: path.to_path_buf(),
-            size: meta.len(),
-            mtime: meta.modified().ok()?,
-            ctime: inode_change_time(meta)?,
-            dev,
-            ino,
+            stamp,
             kind_sidecar: plugin_dir
                 .join(super::cc_plugin_json::KIND_SIDECAR)
                 .is_file(),
@@ -140,21 +159,51 @@ impl ManifestCacheKey {
     }
 }
 
-/// LRU cache for parsed [`PluginManifest`]s.
+#[derive(Debug)]
+struct CachedPackage {
+    output: AdapterOutput,
+    inputs: SourceObservations,
+}
+
+/// LRU storage for metadata and normalized package parses.
 #[derive(Debug)]
 pub struct ManifestCache {
     inner: Mutex<LruCache<ManifestCacheKey, PluginManifest>>,
+    packages: Mutex<LruCache<PathBuf, Arc<CachedPackage>>>,
 }
 
 impl ManifestCache {
     /// Build a cache with [`MAX_ENTRIES`] capacity.
     #[must_use]
     pub fn new() -> Self {
+        let capacity = std::num::NonZeroUsize::new(MAX_ENTRIES).expect("MAX_ENTRIES > 0");
         Self {
-            inner: Mutex::new(LruCache::new(
-                std::num::NonZeroUsize::new(MAX_ENTRIES).expect("MAX_ENTRIES > 0"),
-            )),
+            inner: Mutex::new(LruCache::new(capacity)),
+            packages: Mutex::new(LruCache::new(capacity)),
         }
+    }
+
+    pub(super) fn get_package(&self, dir: &Path) -> Option<AdapterOutput> {
+        let entry = self
+            .packages
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(dir)
+            .cloned()?;
+        entry.inputs.verify().ok()?;
+        Some(entry.output.clone())
+    }
+
+    pub(super) fn put_package(
+        &self,
+        dir: &Path,
+        output: AdapterOutput,
+        inputs: SourceObservations,
+    ) {
+        self.packages.lock().unwrap_or_else(|e| e.into_inner()).put(
+            dir.to_path_buf(),
+            Arc::new(CachedPackage { output, inputs }),
+        );
     }
 
     /// Look up a cached manifest. The key is recomputed from `plugin_dir` +
@@ -192,8 +241,11 @@ impl ManifestCache {
     /// production code should rely on the size/mtime/ctime tuple to invalidate
     /// entries naturally.
     pub fn clear(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        guard.clear();
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.packages
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 
     /// Current cache length. Used by `extensions.stat` RPC surfaces (planned).

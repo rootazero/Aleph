@@ -16,7 +16,7 @@ use crate::capability::descriptor::{
 use crate::capability::facade::Scope;
 use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
 use crate::tools::descriptor::{
-    canonicalize_json, canonicalize_services, ReplayPolicy, ToolCapabilityDescriptor, ToolSource,
+    ReplayPolicy, ToolCapabilityDescriptor, ToolSource, canonicalize_json, canonicalize_services,
 };
 use sha2::{Digest, Sha256};
 
@@ -73,6 +73,22 @@ impl ToolBackendAdapter {
             && scope.facet.is_none_or(|facet| descriptor.supports(facet))
     }
 
+    pub(super) fn source_allowed(
+        source: &ToolSource,
+        visibility: &crate::extension::visibility::VisibilityCtx,
+    ) -> bool {
+        let owner = match source {
+            ToolSource::Extension { plugin_id } => Some(plugin_id.as_str()),
+            ToolSource::Mcp { server_id } => {
+                crate::extension::mcp_config::owning_plugin_of_server_id(server_id)
+            }
+            _ => None,
+        };
+        owner.is_none_or(|owner| {
+            crate::extension::visibility::PluginInstanceKey::runtime_key_allowed(owner, visibility)
+        })
+    }
+
     /// `(descriptors, revision)` from ONE registry generation.
     ///
     /// Both halves come from a single `canonical_publication()` load, so a
@@ -84,9 +100,11 @@ impl ToolBackendAdapter {
     #[must_use]
     pub fn snapshot_capabilities(&self, scope: &Scope) -> (Vec<CapabilityDescriptor>, u64) {
         let snap = self.registry.canonical_publication();
+        let visibility = crate::extension::visibility::VisibilityCtx::for_authorized_run();
         let capabilities = snap
             .entries()
             .values()
+            .filter(|entry| Self::source_allowed(&entry.descriptor.source, &visibility))
             .map(|entry| {
                 let mut descriptor = to_descriptor(entry.descriptor.as_ref());
                 // The registry descriptor is identity-level; the facade binds
@@ -107,13 +125,21 @@ impl CapabilityBackend for ToolBackendAdapter {
         }
         self.registry
             .descriptor(&id.name)
+            .filter(|desc| {
+                Self::source_allowed(
+                    &desc.source,
+                    &crate::extension::visibility::VisibilityCtx::for_authorized_run(),
+                )
+            })
             .map(|desc| to_descriptor(&desc))
     }
 
     fn enumerate(&self, scope: &Scope) -> Vec<CapabilityDescriptor> {
         let snapshot = self.registry.descriptor_snapshot();
+        let visibility = crate::extension::visibility::VisibilityCtx::for_authorized_run();
         snapshot
             .values()
+            .filter(|desc| Self::source_allowed(&desc.source, &visibility))
             .map(|desc| to_descriptor(desc))
             .filter(|d| Self::descriptor_in_scope(d, scope))
             .collect()

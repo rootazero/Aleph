@@ -132,7 +132,12 @@ impl AgentHarness {
         // run the whole batch through one dispatch group (identical to the
         // legacy path, including the shared within-batch dedup memo).
         let parallel_enabled = matches!(self.deps.parallel_tool_concurrency, Some(n) if n >= 2);
-        if !parallel_enabled || tool_calls.len() < 2 {
+        if !parallel_enabled
+            || tool_calls.len() < 2
+            || tool_calls.iter().any(|call| {
+                crate::builtin_tools::bash_jsonl::is_private(&call.name, &call.arguments)
+            })
+        {
             return self
                 .dispatch_group(
                     session_id,
@@ -450,8 +455,14 @@ impl AgentHarness {
             // R10-safe: mechanical identifier repair against a fixed offered
             // set, not intent inference; downstream guardrails/approval still
             // gate the resolved call.
-            if let Some(repair) =
-                crate::tools::name_repair::repair_tool_name(&call.name, &offered_names)
+            let private_input =
+                crate::builtin_tools::bash_jsonl::project_arguments(&call.name, &call.arguments)
+                    .map(|projected| std::mem::replace(&mut call.arguments, projected));
+            // Private input requires the exact tool name and never goes to a name repairer.
+            if let Some(repair) = private_input
+                .is_none()
+                .then(|| crate::tools::name_repair::repair_tool_name(&call.name, &offered_names))
+                .flatten()
             {
                 if repair.tier != crate::tools::name_repair::RepairTier::Exact
                     && repair.name != call.name
@@ -481,15 +492,41 @@ impl AgentHarness {
                 call.id.clone(),
                 call.name.clone(),
                 call.arguments.clone(),
-                self.deps
-                    .tool_descriptor_lookup
-                    .as_ref()
-                    .and_then(|lookup| lookup.tool_call_identity(&call.name)),
+                private_input
+                    .is_none()
+                    .then(|| {
+                        self.deps
+                            .tool_descriptor_lookup
+                            .as_ref()
+                            .and_then(|lookup| lookup.tool_call_identity(&call.name))
+                    })
+                    .flatten(),
             );
             self.deps.session.emit_event(session_id, requested).await?;
 
             // Stage 5b (#9): Tool-call guardrail (Block skips THIS call).
             if let Some(registry) = self.deps.guardrails.as_ref() {
+                if private_input.is_some()
+                    && registry.is_enabled()
+                    && registry.tool_call_count() > 0
+                {
+                    self.emit_tool_error(
+                        session_id,
+                        turn_id,
+                        &call,
+                        crate::tools::service::ToolError::PermissionDenied {
+                            name: call.name.clone(),
+                            reason:
+                                "the active tool-call guardrail cannot process private JSONL input"
+                                    .into(),
+                        },
+                        started,
+                        iteration,
+                        callback,
+                    )
+                    .await;
+                    continue;
+                }
                 match self
                     .apply_tool_call_guardrail(
                         registry, session_id, turn_id, &call, started, iteration, callback,
@@ -511,17 +548,22 @@ impl AgentHarness {
             // inside this single tool batch return the first result without
             // re-executing. The memo is per-`act()` call, so a cross-turn
             // repeat always re-runs against fresh state.
-            let cache_key = (
-                call.name.clone(),
-                super::canonical_json_string(&call.arguments),
-            );
+            let cache_key = private_input.is_none().then(|| {
+                (
+                    call.name.clone(),
+                    super::canonical_json_string(&call.arguments),
+                )
+            });
 
             // Cross-batch dedup: refuse identical (tool, args) that already
             // failed earlier in this run. The synthesized ToolError nudges
             // the LLM to pivot instead of looping on the same deterministic
             // failure (sandbox-blocked URL, quota-exhausted API, etc.). The
             // failure set is cleared whenever any tool succeeds.
-            if self.is_recent_failure(&call.name, &cache_key.1) {
+            if cache_key
+                .as_ref()
+                .is_some_and(|(name, args)| self.is_recent_failure(name, args))
+            {
                 tracing::warn!(
                     tool = %call.name,
                     call_id = %call.id,
@@ -534,7 +576,7 @@ impl AgentHarness {
                 continue;
             }
 
-            if let Some(cached) = tool_call_cache.get(&cache_key) {
+            if let Some(cached) = cache_key.as_ref().and_then(|key| tool_call_cache.get(key)) {
                 tracing::warn!(
                     tool = %call.name,
                     call_id = %call.id,
@@ -615,9 +657,17 @@ impl AgentHarness {
                                 call_id: call.id.clone(),
                             }),
                             async move {
-                                tools
-                                    .execute_with_cancel_effective(&name, args, call_cancel)
-                                    .await
+                                match private_input {
+                                    Some(input) => (
+                                        tools.execute_shell_jsonl(&name, input, call_cancel).await,
+                                        None,
+                                    ),
+                                    None => {
+                                        tools
+                                            .execute_with_cancel_effective(&name, args, call_cancel)
+                                            .await
+                                    }
+                                }
                             },
                         ),
                     ));
@@ -640,8 +690,10 @@ impl AgentHarness {
             match outcome {
                 Ok(mut output) => {
                     executed_count = executed_count.saturating_add(1);
-                    self.apply_turn_budget(budget_turn_id, &call, &mut output);
-                    tool_call_cache.insert(cache_key.clone(), output.clone());
+                    if let Some(cache_key) = cache_key {
+                        self.apply_turn_budget(budget_turn_id, &call, &mut output);
+                        tool_call_cache.insert(cache_key, output.clone());
+                    }
                     // Cross-batch dedup: a single success clears the failure
                     // set — the LLM has demonstrably pivoted to a working
                     // strategy.
@@ -665,8 +717,8 @@ impl AgentHarness {
                     // A wall-clock `Timeout` (or a `Transport` blip) says nothing
                     // about the call, and banning it refused the very retry the
                     // error text invites on the very next batch.
-                    if !e.is_retryable() {
-                        self.record_failure(call.name.clone(), cache_key.1.clone());
+                    if let Some((name, args)) = cache_key.filter(|_| !e.is_retryable()) {
+                        self.record_failure(name, args);
                     }
                     self.emit_tool_error(
                         session_id, turn_id, &call, e, started, iteration, callback,

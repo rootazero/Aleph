@@ -57,6 +57,13 @@ mod public_spend_tests;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(crate) fn test_broadcast_callback(
+    tx: tokio::sync::broadcast::Sender<crate::orchestrator::dispatch::FlowStreamEvent>,
+) -> impl crate::harness::callback::HarnessCallback {
+    callback::BroadcastCallback::new(tx, 0)
+}
+
 // `active_strategy` is called from `gateway::execution_engine::run_loop::inner`
 // (src/gateway/execution_engine/run_loop/inner.rs:1270), so it must remain `pub`.
 pub use context_blocks::active_strategy;

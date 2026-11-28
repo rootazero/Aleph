@@ -12,6 +12,7 @@ use super::types::{
 };
 use crate::extension::capability::ContextGrantAudit;
 use crate::extension::types::{PluginRecord, PluginStatus};
+use crate::extension::visibility::{PluginInstanceKey, ScopeKey};
 
 mod context;
 
@@ -25,8 +26,8 @@ mod context;
 /// - Priority-ordered hook execution
 #[derive(Debug, Default)]
 pub struct PluginRegistry {
-    /// Registered plugins by ID
-    plugins: HashMap<String, PluginRecord>,
+    /// Group exact instances by logical ID for bare-name resolution.
+    plugins: HashMap<String, HashMap<ScopeKey, PluginRecord>>,
 
     /// Registered tools by name
     tools: HashMap<String, ToolRegistration>,
@@ -105,31 +106,79 @@ impl PluginRegistry {
     // Plugin Management
     // =========================================================================
 
-    /// Register a plugin in the registry.
-    ///
-    /// If a plugin with the same ID already exists, it will be replaced.
+    /// Register or replace the record for one exact instance.
     pub fn register_plugin(&mut self, record: PluginRecord) {
-        if self.plugins.contains_key(&record.id) {
-            self.unregister_plugin(&record.id);
+        let instance = record.instance_key();
+        if self.get_plugin_instance(&instance).is_some() {
+            self.unregister_plugin_instance(&instance);
         }
-        self.plugins.insert(record.id.clone(), record);
+        self.plugins
+            .entry(instance.plugin_id)
+            .or_default()
+            .insert(instance.scope, record);
     }
 
-    /// Get a plugin by ID.
+    pub(crate) fn get_plugin_instance(
+        &self,
+        instance: &PluginInstanceKey,
+    ) -> Option<&PluginRecord> {
+        self.plugins.get(&instance.plugin_id)?.get(&instance.scope)
+    }
+
+    pub(crate) fn get_plugin_instance_mut(
+        &mut self,
+        instance: &PluginInstanceKey,
+    ) -> Option<&mut PluginRecord> {
+        self.plugins
+            .get_mut(&instance.plugin_id)?
+            .get_mut(&instance.scope)
+    }
+
+    pub(crate) fn get_plugin_by_runtime_key(&self, runtime_key: &str) -> Option<&PluginRecord> {
+        let id = PluginInstanceKey::runtime_group(runtime_key);
+        self.plugin_instances(id)
+            .find(|record| record.instance_key().runtime_key() == runtime_key)
+    }
+
+    pub(crate) fn active_plugin(&self, runtime_key: &str) -> Option<&PluginRecord> {
+        self.get_plugin_by_runtime_key(runtime_key)
+            .filter(|record| record.status.is_active())
+    }
+
+    fn get_plugin_by_runtime_key_mut(&mut self, runtime_key: &str) -> Option<&mut PluginRecord> {
+        let instance = self.get_plugin_by_runtime_key(runtime_key)?.instance_key();
+        self.get_plugin_instance_mut(&instance)
+    }
+
+    pub(crate) fn plugin_instances(&self, id: &str) -> impl Iterator<Item = &PluginRecord> {
+        self.plugins
+            .get(id)
+            .into_iter()
+            .flat_map(|rows| rows.values())
+    }
+
+    /// Legacy lookup for an unambiguous logical ID.
     #[must_use]
     pub fn get_plugin(&self, id: &str) -> Option<&PluginRecord> {
-        self.plugins.get(id)
+        let rows = self.plugins.get(id)?;
+        (rows.len() == 1).then(|| rows.values().next()).flatten()
     }
 
-    /// Get a mutable reference to a plugin by ID.
+    /// Legacy mutable lookup for an unambiguous logical ID.
     pub fn get_plugin_mut(&mut self, id: &str) -> Option<&mut PluginRecord> {
-        self.plugins.get_mut(id)
+        let rows = self.plugins.get_mut(id)?;
+        (rows.len() == 1)
+            .then(|| rows.values_mut().next())
+            .flatten()
     }
 
     /// List all registered plugins.
     #[must_use]
     pub fn list_plugins(&self) -> Vec<&PluginRecord> {
-        self.plugins.values().collect()
+        self.plugins
+            .values()
+            .flat_map(|rows| rows.values())
+            .collect()
     }
 
     /// List all active (loaded) plugins.
@@ -137,6 +186,7 @@ impl PluginRegistry {
     pub fn list_active_plugins(&self) -> Vec<&PluginRecord> {
         self.plugins
             .values()
+            .flat_map(|rows| rows.values())
             .filter(|p| p.status.is_active())
             .collect()
     }
@@ -147,15 +197,24 @@ impl PluginRegistry {
     /// There is no `enable_plugin` twin: re-enabling is a `mount`, which
     /// writes `Loaded` through `register_plugin_row`.
     pub fn disable_plugin(&mut self, id: &str) -> bool {
-        if let Some(plugin) = self.plugins.get_mut(id) {
-            plugin.status = PluginStatus::Disabled;
+        self.get_plugin(id)
+            .map(PluginRecord::instance_key)
+            .is_some_and(|instance| self.disable_plugin_instance(&instance))
+    }
+
+    pub(crate) fn disable_plugin_instance(&mut self, instance: &PluginInstanceKey) -> bool {
+        let Some(plugin) = self.get_plugin_instance_mut(instance) else {
+            return false;
+        };
+        let was_active = plugin.status.is_active();
+        plugin.status = PluginStatus::Disabled;
+        let id = &instance.plugin_id;
+        if was_active || !self.plugin_instances(id).any(|row| row.status.is_active()) {
             self.contexts.retain(|_, registration| {
-                registration.plugin_id.is_empty() || registration.plugin_id != id
+                registration.plugin_id.is_empty() || registration.plugin_id != *id
             });
-            true
-        } else {
-            false
         }
+        true
     }
 
     // =========================================================================
@@ -174,8 +233,7 @@ impl PluginRegistry {
             crate::extension::namespaced_component_key(&tool.plugin_id, &tool.name);
         let short_key = tool.name.clone();
 
-        // Update plugin record (track by namespaced key)
-        if let Some(plugin) = self.plugins.get_mut(&plugin_id) {
+        if let Some(plugin) = self.get_plugin_by_runtime_key_mut(&plugin_id) {
             if !plugin.tool_names.contains(&namespaced_key) {
                 plugin.tool_names.push(namespaced_key.clone());
             }
@@ -216,11 +274,7 @@ impl PluginRegistry {
         self.tools
             .values()
             .filter(|tool| tool.name == name)
-            .filter(|tool| {
-                self.plugins
-                    .get(&tool.plugin_id)
-                    .is_some_and(|plugin| plugin.status.is_active())
-            })
+            .filter(|tool| self.active_plugin(&tool.plugin_id).is_some())
             .min_by(|a, b| a.plugin_id.cmp(&b.plugin_id))
     }
 
@@ -259,8 +313,7 @@ impl PluginRegistry {
         // Sort by priority (stable sort to preserve insertion order for equal priorities)
         self.hooks.sort_by_key(|h| h.priority);
 
-        // Update plugin record
-        if let Some(plugin) = self.plugins.get_mut(&plugin_id) {
+        if let Some(plugin) = self.get_plugin_by_runtime_key_mut(&plugin_id) {
             plugin.hook_count += 1;
         }
     }
@@ -283,8 +336,7 @@ impl PluginRegistry {
 
         self.services.insert(namespaced_key, service);
 
-        // Update plugin record
-        if let Some(plugin) = self.plugins.get_mut(&plugin_id) {
+        if let Some(plugin) = self.get_plugin_by_runtime_key_mut(&plugin_id) {
             if !plugin.service_ids.contains(&service_id) {
                 plugin.service_ids.push(service_id);
             }
@@ -352,11 +404,7 @@ impl PluginRegistry {
         self.skills
             .values()
             .filter(|skill| skill.name == name)
-            .filter(|skill| {
-                self.plugins
-                    .get(&skill.plugin_id)
-                    .is_some_and(|plugin| plugin.status.is_active())
-            })
+            .filter(|skill| self.active_plugin(&skill.plugin_id).is_some())
             .min_by(|a, b| a.plugin_id.cmp(&b.plugin_id))
     }
 
@@ -408,11 +456,7 @@ impl PluginRegistry {
         self.agents
             .values()
             .filter(|agent| agent.name == name)
-            .filter(|agent| {
-                self.plugins
-                    .get(&agent.plugin_id)
-                    .is_some_and(|plugin| plugin.status.is_active())
-            })
+            .filter(|agent| self.active_plugin(&agent.plugin_id).is_some())
             .min_by(|a, b| a.plugin_id.cmp(&b.plugin_id))
     }
 
@@ -457,32 +501,33 @@ impl PluginRegistry {
     /// - All agents registered by this plugin
     /// - All diagnostics from this plugin
     pub fn unregister_plugin(&mut self, plugin_id: &str) {
-        // Remove the plugin record
-        self.plugins.remove(plugin_id);
+        if let Some(instance) = self.get_plugin(plugin_id).map(PluginRecord::instance_key) {
+            self.unregister_plugin_instance(&instance);
+        }
+    }
 
-        // Remove all tools from this plugin
-        self.tools.retain(|_, t| t.plugin_id != plugin_id);
+    pub(crate) fn unregister_plugin_instance(&mut self, instance: &PluginInstanceKey) {
+        let Some(rows) = self.plugins.get_mut(&instance.plugin_id) else {
+            return;
+        };
+        if rows.remove(&instance.scope).is_none() {
+            return;
+        }
+        if rows.is_empty() {
+            self.plugins.remove(&instance.plugin_id);
+        }
 
-        // Remove all hooks from this plugin
-        self.hooks.retain(|h| h.plugin_id != plugin_id);
-
-        // Remove all services from this plugin
-        self.services.retain(|_, s| s.plugin_id != plugin_id);
-
-        // Remove all skills (and `commands/`-derived Command-typed skills) from
-        // this plugin
-        self.skills.retain(|_, s| s.plugin_id != plugin_id);
-
-        // Remove all agents and context registrations owned by this plugin.
-        // An empty id denotes Core ownership, never a plugin cleanup target.
-        self.agents.retain(|_, a| a.plugin_id != plugin_id);
-        self.contexts.retain(|_, registration| {
-            registration.plugin_id.is_empty() || registration.plugin_id != plugin_id
-        });
-
-        // Remove all diagnostics from this plugin
+        let owner = instance.runtime_key();
+        self.tools.retain(|_, tool| tool.plugin_id != owner);
+        self.hooks.retain(|hook| hook.plugin_id != owner);
+        self.services
+            .retain(|_, service| service.plugin_id != owner);
+        self.skills.retain(|_, skill| skill.plugin_id != owner);
+        self.agents.retain(|_, agent| agent.plugin_id != owner);
+        self.contexts
+            .retain(|_, registration| registration.plugin_id != owner);
         self.diagnostics
-            .retain(|d| d.plugin_id.as_deref() != Some(plugin_id));
+            .retain(|diagnostic| diagnostic.plugin_id.as_deref() != Some(owner.as_str()));
     }
 }
 

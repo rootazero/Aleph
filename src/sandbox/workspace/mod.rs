@@ -258,7 +258,13 @@ enum WorkspaceExecution<'a> {
     FixedJsonl {
         control: &'a super::shell_lifecycle::ShellLifecycle,
         workspace: &'a super::shell_workspace::ShellWorkspace,
+        deadline: tokio::time::Instant,
     },
+}
+
+#[cfg(target_os = "linux")]
+fn fixed_jsonl_startup_expired() -> SandboxError {
+    SandboxError::ExecutionFailed("fixed JSONL startup deadline elapsed".into())
 }
 
 impl WorkspaceSandbox {
@@ -268,14 +274,25 @@ impl WorkspaceSandbox {
     }
 
     #[cfg(target_os = "linux")]
+    pub(crate) fn can_run_fixed_jsonl(&self, config: &crate::Config) -> bool {
+        self.fixed_jsonl_policy()
+            .is_some_and(|policy| policy.matches_config(config))
+            && self.os_driver.can_run_fixed_jsonl()
+    }
+
+    #[cfg(target_os = "linux")]
     pub(crate) async fn execute_fixed_jsonl(
         &self,
         cmd: SandboxCommand,
         workspace: &super::shell_workspace::ShellWorkspace,
         control: &super::shell_lifecycle::ShellLifecycle,
+        deadline: tokio::time::Instant,
     ) -> Result<SandboxOutput, SandboxError> {
         use super::shell_input::{JSONL_ARGS, JSONL_PROGRAM};
 
+        if tokio::time::Instant::now() >= deadline {
+            return Err(fixed_jsonl_startup_expired());
+        }
         let workspace_binding = super::context::current_exec_workspace_binding();
         if self.shell_policy.is_none()
             || cmd.program != JSONL_PROGRAM
@@ -297,8 +314,15 @@ impl WorkspaceSandbox {
                 reason: "not the eligible fixed JSONL launch".into(),
             });
         }
-        self.execute_in_mode(cmd, WorkspaceExecution::FixedJsonl { control, workspace })
-            .await
+        self.execute_in_mode(
+            cmd,
+            WorkspaceExecution::FixedJsonl {
+                control,
+                workspace,
+                deadline,
+            },
+        )
+        .await
     }
 
     // rust-doctor-disable-next-line high-cyclomatic-complexity
@@ -316,14 +340,23 @@ impl WorkspaceSandbox {
         self.os_driver.execution_preflight()?;
         // Only admission is safe to drop. Once in `run`, the driver must
         // retain ownership until it can confirm cleanup.
+        let prepare = async {
+            #[cfg(target_os = "linux")]
+            if let WorkspaceExecution::FixedJsonl { deadline, .. } = mode {
+                return tokio::time::timeout_at(deadline, self.prepare_command(cmd))
+                    .await
+                    .map_err(|_| fixed_jsonl_startup_expired())?;
+            }
+            self.prepare_command(cmd).await
+        };
         let prepared = if let Some(control) = lifecycle {
             tokio::select! {
                 biased;
                 _ = control.cancelled() => return Err(control.cancel_before_spawn()),
-                prepared = self.prepare_command(cmd) => prepared?,
+                prepared = prepare => prepared?,
             }
         } else {
-            self.prepare_command(cmd).await?
+            prepare.await?
         };
         let PreparedCommand {
             cmd,
@@ -334,17 +367,25 @@ impl WorkspaceSandbox {
         } = prepared;
         let mut output = match mode {
             #[cfg(target_os = "linux")]
-            WorkspaceExecution::FixedJsonl { control, workspace } => {
+            WorkspaceExecution::FixedJsonl {
+                control,
+                workspace,
+                deadline,
+            } => {
                 if !workspace.is_current(&cwd).unwrap_or(false) {
                     return Err(SandboxError::CapabilityDenied {
                         reason: "fixed JSONL workspace changed during admission".into(),
                     });
                 }
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err(fixed_jsonl_startup_expired());
+                }
                 self.os_driver
                     .run_fixed_jsonl(
                         workspace.directory(),
                         &profile,
-                        timeout,
+                        timeout.min(remaining),
                         self.max_output_bytes,
                         control,
                     )
@@ -1089,6 +1130,103 @@ mod tests {
     use crate::sandbox::driver::OsSandboxProfile;
     use crate::sandbox::exec_approval::gate::ApprovalRequester;
     use crate::sync_primitives::Mutex;
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn shell_jsonl_uses_the_mounted_prepared_input_policy() {
+        use crate::sandbox::shell_input::{
+            JsonlFrame, ShellEffectDenied, JSONL_ARGS, JSONL_PROGRAM, MAX_PREFIX,
+        };
+        use serde_json::json;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut app = crate::Config::default();
+        app.sandbox.enabled = true;
+        app.sandbox.workspace_root = root.path().to_owned();
+        app.sandbox.command_policy = serde_json::from_value(json!({
+            "use_default_rules": false,
+            "custom_rules": [{"name": "test_advisory", "regex": "INPUT_ADVISORY", "action": "warn"}]
+        }))
+        .unwrap();
+        app.security = serde_json::from_value(json!({
+            "enable_custom_patterns": true,
+            "custom_blocked": [{"pattern": "(?s)/records.*POLICY_ALPHA.*POLICY_BETA"}],
+            "custom_danger": [{"pattern": "INPUT_ADVISORY"}]
+        }))
+        .unwrap();
+
+        for tunable in [true, false] {
+            app.sandbox.command_policy.enabled = tunable;
+            let driver = Arc::new(FakeDriver::new());
+            let sandbox = crate::sandbox::build_sandbox(
+                &app.sandbox,
+                driver.clone(),
+                Arc::new(ApprovalGate::new(None)),
+                Default::default(),
+                &app.security,
+            );
+            let workspace = sandbox.as_workspace().unwrap();
+            let policy = workspace.fixed_jsonl_policy().unwrap();
+            assert!(policy.matches_config(&app));
+            let launch = SandboxCommand {
+                session_id: crate::routing::session_key::SessionKey::ephemeral(
+                    "mounted-jsonl-policy",
+                ),
+                tool_name: "bash".into(),
+                program: JSONL_PROGRAM.into(),
+                args: JSONL_ARGS.into_iter().map(str::to_owned).collect(),
+                env: Default::default(),
+                stdin: None,
+                cwd: None,
+                capabilities: SandboxCapabilities::session_baseline(),
+                timeout: None,
+            };
+            assert!(workspace.prepare_command(launch.clone()).await.is_ok());
+            let alpha = JsonlFrame::from_record(&json!("POLICY_ALPHA")).unwrap();
+            for (prefix, input, block, warn) in [
+                (&[][..], "POLICY_ALPHA", false, false),
+                (&[][..], "POLICY_BETA", false, false),
+                (alpha.bytes(), "POLICY_BETA", true, false),
+                (&[][..], "INPUT_ADVISORY", false, true),
+                (&[][..], "普通文本", false, false),
+                // Inert policy text. Only prepare_command runs in this test.
+                (&[][..], "rm -rf /", true, false),
+            ] {
+                let frame = JsonlFrame::from_record(&json!(input)).unwrap();
+                let mut prepared = launch.clone();
+                prepared.stdin = Some([prefix, frame.bytes()].concat());
+                let prepared = workspace.prepare_command(prepared).await;
+                let live = policy.check_frame(&launch, prefix, &frame);
+                if block {
+                    assert!(
+                        matches!(prepared, Err(SandboxError::CapabilityDenied { .. })),
+                        "{input}"
+                    );
+                    assert!(
+                        matches!(live, Err(ShellEffectDenied::PolicyBlocked)),
+                        "{input}"
+                    );
+                } else {
+                    assert!(prepared.is_ok(), "{input}");
+                    let warnings = live.unwrap();
+                    assert_eq!(warnings.operator, warn, "{input}");
+                    assert_eq!(
+                        warnings.builtin == ["test_advisory"],
+                        warn && tunable,
+                        "{input}"
+                    );
+                }
+            }
+            assert!(matches!(
+                policy.check_frame(&launch, &vec![b' '; MAX_PREFIX], &alpha),
+                Err(ShellEffectDenied::TooLarge)
+            ));
+            let mut changed = app.clone();
+            changed.security.enable_custom_patterns = false;
+            assert!(!policy.matches_config(&changed));
+            assert_eq!(*driver.run_count.read().await, 0);
+        }
+    }
 
     /// A no-op driver for tests — avoids invoking the real macOS sandbox-exec.
     struct FakeDriver {

@@ -899,6 +899,7 @@ impl McpManagerActor {
     /// Calls `client.stop_all()` and removes from tracking maps.
     async fn stop_server_internal(&mut self, server_id: &str) {
         if let Some(client) = self.clients.remove(server_id) {
+            client.retire();
             if let Err(e) = client.stop_all().await {
                 tracing::warn!(
                     server_id = %server_id,
@@ -1360,9 +1361,11 @@ mod tests {
             .expect("add_server");
 
         let configs = handle.list_server_configs().await.expect("list configs");
-        assert!(configs
-            .iter()
-            .any(|c| c.id == "srv-a" && c.name == "Server A"));
+        assert!(
+            configs
+                .iter()
+                .any(|c| c.id == "srv-a" && c.name == "Server A")
+        );
 
         let _ = tokio::fs::remove_file(&path).await;
     }

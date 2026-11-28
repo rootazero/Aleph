@@ -502,6 +502,7 @@ dependencies = [
  "landlock",
  "lettre",
  "libc",
+ "libyaml-rs",
  "log",
  "loom",
  "lopdf 0.45.0",

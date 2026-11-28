@@ -11,12 +11,12 @@ use crate::capability::ownership::{OwnerRef, RunId, VisibilityScope};
 use crate::capability::policy_runtime::{
     CapabilityCallContext, PolicyAttachment, ResourceUse, RunningCapabilityCall,
 };
-use crate::extension::hooks::{
-    budget_hook_contexts, HookContext, HookExecutor, PermissionDecision,
-};
 use crate::extension::HookEvent;
+use crate::extension::hooks::{
+    HookContext, HookExecutor, PermissionDecision, budget_hook_contexts,
+};
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
-use crate::sandbox::exec_approval::{denial_ledger, grants, ApprovalAction, Grant, GrantScope};
+use crate::sandbox::exec_approval::{ApprovalAction, Grant, GrantScope, denial_ledger, grants};
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::descriptor::{ReplayPolicy, ToolCallIdentity, ToolCapabilityDescriptor};
@@ -24,9 +24,9 @@ use crate::tools::registry::{CanonicalEntryLease, RegistryEntry, ToolHandlerRegi
 use crate::tools::runtime::LoopTool;
 use crate::tools::service::{RefusedBy, ToolError};
 
+use super::ScopedToolService;
 use super::gate_chain::GateRule;
 use super::ledger::ApprovalRecord;
-use super::ScopedToolService;
 
 /// Result size (per [`crate::tool_output::ingress::size_hint`]) at which the
 /// ingress clean moves off the async executor onto a blocking worker. Below it
@@ -443,10 +443,16 @@ impl ScopedToolService {
         if self.unattended
             || !self.is_allowed(NAME)
             || self.inner.is_request_local(NAME)
-            || self
-                .hook_executor
-                .as_ref()
-                .is_some_and(|hooks| hooks.has_hooks_for(HookEvent::BeforeToolCall))
+            || self.hook_executor.as_ref().is_some_and(|hooks| {
+                [
+                    HookEvent::BeforeToolCall,
+                    HookEvent::AfterToolCall,
+                    HookEvent::AfterToolCallFailure,
+                    HookEvent::PermissionDenied,
+                ]
+                .into_iter()
+                .any(|event| hooks.has_hooks_for(event))
+            })
         {
             return Err(ShellEffectDenied::Stale);
         }
@@ -487,6 +493,191 @@ impl ScopedToolService {
         Ok((facade.clone(), lease))
     }
 
+    #[cfg(target_os = "linux")]
+    pub(super) fn can_offer_shell_jsonl(&self) -> bool {
+        self.paired_shell
+            .as_ref()
+            .is_some_and(|route| route.can_offer())
+            && self.turn_context.is_some()
+            && matches!(
+                self.config_approval_requester,
+                Some(super::ConfigApprovalRequester::Operator(_))
+            )
+            && self.capture_paired_shell().is_ok()
+    }
+
+    pub(super) async fn dispatch_shell_jsonl(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        let unavailable = || ToolError::PermissionDenied {
+            name: name.into(),
+            reason: "fixed JSONL input requires an eligible paired Bash call".into(),
+        };
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (input, cancel);
+            Err(unavailable())
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use crate::builtin_tools::bash_jsonl::Operation;
+            use crate::builtin_tools::process_registry::{process_registry, WaitOutcome};
+            use crate::sandbox::shell_input::{
+                ShellEffectDenied, ShellEffectResult, ShellInputAction,
+            };
+            use serde_json::json;
+            use std::time::Duration;
+
+            if name != "bash" || !self.can_offer_shell_jsonl() {
+                return Err(unavailable());
+            }
+            let operation =
+                Operation::parse(input).map_err(|reason| ToolError::ValidationFailed {
+                    name: name.into(),
+                    cause: reason.into(),
+                })?;
+            let denied = |reason: ShellEffectDenied| ToolError::PermissionDenied {
+                name: name.into(),
+                reason: format!("fixed JSONL effect refused ({reason:?})"),
+            };
+            let value = match operation {
+                Operation::Launch {
+                    background,
+                    yield_ms,
+                } => {
+                    let timeout = Duration::from_secs(if background { 3600 } else { 60 });
+                    let id = self
+                        .launch_paired_shell(timeout, &cancel)
+                        .await
+                        .map_err(denied)?;
+                    let mut value =
+                        json!({"process_id": id, "status": "starting", "background": true});
+                    if let Some(ms) = yield_ms {
+                        let caller = self.turn_context.as_ref().map(|turn| {
+                            crate::builtin_tools::process_registry::encode_session_label(
+                                &turn.session_key,
+                            )
+                        });
+                        let duration = Duration::from_millis(ms);
+                        let registry = process_registry();
+                        tokio::select! {
+                            _ = cancel.cancelled() => {
+                                let _ = registry.kill(id, caller.as_deref());
+                                value["status"] = json!("stopping");
+                            }
+                            outcome = registry.wait(id, caller.as_deref(), duration) => {
+                                value["status"] = match outcome {
+                                    WaitOutcome::Done(_) => json!("done"),
+                                    WaitOutcome::Killed => json!("killed"),
+                                    WaitOutcome::TimedOut { state, .. } => json!(state.label()),
+                                    WaitOutcome::NotFound => json!("not_found"),
+                                };
+                            }
+                        }
+                    }
+                    value
+                }
+                action => {
+                    let (id, action) = match action {
+                        Operation::Write { id, frame } => (id, ShellInputAction::Write(frame)),
+                        Operation::Close { id } => (id, ShellInputAction::Close),
+                        Operation::Launch { .. } => unreachable!(),
+                    };
+                    match self
+                        .input_paired_shell(id, &cancel, action)
+                        .await
+                        .map_err(denied)?
+                    {
+                        ShellEffectResult::Written(bytes) => {
+                            json!({"process_id": id, "status": "written", "bytes": bytes})
+                        }
+                        ShellEffectResult::Closed => json!({"process_id": id, "status": "closed"}),
+                        ShellEffectResult::AlreadyClosed => {
+                            json!({"process_id": id, "status": "already_closed"})
+                        }
+                        ShellEffectResult::Ambiguous => {
+                            json!({"process_id": id, "status": "outcome_unknown", "stopping": true})
+                        }
+                    }
+                }
+            };
+            Ok(ToolOutput {
+                value,
+                metadata: Default::default(),
+            })
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn launch_paired_shell(
+        &self,
+        timeout: std::time::Duration,
+        cancel: &CancellationToken,
+    ) -> Result<u64, crate::sandbox::shell_input::ShellEffectDenied> {
+        use crate::sandbox::shell_input::ShellEffectDenied;
+        let route = self.paired_shell.as_ref().ok_or(ShellEffectDenied::Stale)?;
+        let turn = self.turn_context.clone().ok_or(ShellEffectDenied::Stale)?;
+        crate::tools::turn_context::TURN_CONTEXT
+            .scope(turn, route.launch(self, timeout, cancel))
+            .await
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn input_paired_shell(
+        &self,
+        id: u64,
+        cancel: &CancellationToken,
+        action: crate::sandbox::shell_input::ShellInputAction,
+    ) -> Result<
+        crate::sandbox::shell_input::ShellEffectResult,
+        crate::sandbox::shell_input::ShellEffectDenied,
+    > {
+        use crate::sandbox::shell_input::ShellEffectDenied;
+        let route = self.paired_shell.as_ref().ok_or(ShellEffectDenied::Stale)?;
+        let Some(super::ConfigApprovalRequester::Operator(approval)) =
+            self.config_approval_requester.as_ref()
+        else {
+            return Err(ShellEffectDenied::ApprovalRequired);
+        };
+        let turn = self.turn_context.clone().ok_or(ShellEffectDenied::Stale)?;
+        crate::tools::turn_context::TURN_CONTEXT
+            .scope(turn, route.input(self, approval, id, cancel, action))
+            .await
+    }
+
+    #[cfg(all(feature = "test-helpers", target_os = "linux"))]
+    #[doc(hidden)]
+    pub async fn test_launch_fixed_shell(&self, cancel: &CancellationToken) -> Result<u64, String> {
+        self.launch_paired_shell(std::time::Duration::from_secs(15), cancel)
+            .await
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    #[cfg(all(feature = "test-helpers", target_os = "linux"))]
+    #[doc(hidden)]
+    pub async fn test_fixed_shell_input(
+        &self,
+        id: u64,
+        cancel: &CancellationToken,
+        record: Option<Value>,
+    ) -> Result<(), String> {
+        use crate::sandbox::shell_input::{JsonlFrame, ShellEffectResult, ShellInputAction};
+        let action = match record {
+            Some(record) => ShellInputAction::Write(
+                JsonlFrame::from_record(&record).map_err(|error| format!("{error:?}"))?,
+            ),
+            None => ShellInputAction::Close,
+        };
+        match self.input_paired_shell(id, cancel, action).await {
+            Ok(ShellEffectResult::Written(_) | ShellEffectResult::Closed) => Ok(()),
+            Ok(unexpected) => Err(format!("{unexpected:?}")),
+            Err(denied) => Err(format!("{denied:?}")),
+        }
+    }
+
     /// Every gate, then the call — the body [`Self::execute_inner`] wraps.
     async fn execute_gated(
         &self,
@@ -518,17 +709,17 @@ impl ScopedToolService {
             if is_subagent || self.inner.is_request_local(name) {
                 None
             } else if let Some(projection) = resolved {
-                let lease = registry
-                    .capture_entry(name)
-                    .ok_or_else(|| ToolError::NotFound { name: name.into() })?;
-                let mut entry = lease.entry().clone();
-                captured_lease = Some(lease.clone());
                 let projected = projection.capability_descriptor().ok_or_else(|| {
                     ToolError::PermissionDenied {
                         name: name.into(),
                         reason: "noncanonical production projection cannot dispatch".into(),
                     }
                 })?;
+                let lease = registry
+                    .capture_entry(&projected.name)
+                    .ok_or_else(|| ToolError::NotFound { name: name.into() })?;
+                let mut entry = lease.entry().clone();
+                captured_lease = Some(lease.clone());
                 if projected.source != entry.descriptor.source {
                     return Err(ToolError::PermissionDenied {
                         name: name.into(),
@@ -557,7 +748,7 @@ impl ScopedToolService {
                         reason: "canonical MCP visibility is not bound".into(),
                     });
                 }
-                let backend_lease = self.resolve_canonical_tool(name, lease)?;
+                let backend_lease = self.resolve_canonical_tool(&projected.name, lease)?;
                 captured_backend_lease = Some(backend_lease);
                 Some(entry)
             } else {
@@ -1315,7 +1506,7 @@ impl ScopedToolService {
             })?;
             let identity = ToolCallIdentity::from_descriptor(&entry.descriptor);
             let proof_input = input.clone();
-            let proof_name = name.clone();
+            let proof_name = entry.descriptor.name.clone();
             let actor = crate::identity::current_actor();
             let facade =
                 self.canonical_facade
@@ -2176,7 +2367,7 @@ impl ScopedToolService {
         rule: Option<&str>,
         decision: ApprovalRecord<'_>,
     ) {
-        use crate::session::events::{now_ms, SessionEvent};
+        use crate::session::events::{SessionEvent, now_ms};
 
         let Some(turn) = self.turn_context.as_ref() else {
             return;
@@ -2336,6 +2527,13 @@ impl ScopedToolService {
         }
 
         let effective_input = hook_result.updated_input.unwrap_or_else(|| input.clone());
+        if crate::builtin_tools::bash_jsonl::is_private(name, &effective_input) {
+            return Err(ToolError::Refused {
+                name: name.to_string(),
+                by: RefusedBy::Hook,
+                reason: "hook rewrite produced a fixed JSONL operation".into(),
+            });
+        }
         let same_authorized_bytes = already_authorized && effective_input == input;
         let mut hook_authorized = false;
 
@@ -2864,7 +3062,7 @@ impl ScopedToolService {
     /// pipeline, so without reaching back in, a panic body would be the one
     /// error text the model sees unbounded and unfenced.
     pub(super) fn sanitize_tool_error(name: &str, err: ToolError) -> ToolError {
-        use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
+        use crate::security::content_sanitizer::{ContentSource, wrap_external_content};
         // Preserve the original variant so callers can keep matching on
         // `Timeout` / `Transport` / `Execution`; only the `cause` /
         // message string is bounded and sanitized.

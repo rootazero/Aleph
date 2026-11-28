@@ -550,9 +550,10 @@ async fn plugin_collection_uses_active_owning_row_identity_despite_builtin_spell
     {
         let mut registry = manager.plugin_registry.write().await;
         registry.register_plugin(owner.clone());
-        registry.register_hook(registration(HookPriority::High.as_i32(), &owner.id));
-        registry.register_hook(registration(HookPriority::System.as_i32(), &owner.id));
-        registry.register_hook(registration(HookPriority::Normal.as_i32(), "no-owning-row"));
+        let runtime_owner = owner.instance_key().runtime_key();
+        registry.register_hook(registration(HookPriority::High.as_i32(), &runtime_owner));
+        registry.register_hook(registration(HookPriority::System.as_i32(), &runtime_owner));
+        registry.register_hook(registration(HookPriority::Normal.as_i32(), &owner.id));
     }
     let inputs = manager.views().sync_hooks_from_registry().await;
     assert_eq!(

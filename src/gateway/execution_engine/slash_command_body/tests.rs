@@ -7,7 +7,7 @@ use crate::discovery::DiscoveryConfig;
 use crate::extension::{ExtensionConfig, PluginKind, PluginOrigin, PluginRecord};
 use crate::gateway::agent_instance::AgentInstance;
 use crate::providers::session_model_handle::{
-    with_test_selectable_models, SelectableModelsSnapshot,
+    SelectableModelsSnapshot, with_test_selectable_models,
 };
 use std::collections::BTreeSet;
 use tempfile::TempDir;
@@ -49,6 +49,7 @@ async fn turn_permissions(request: &RunRequest, agent: &AgentInstance) -> TurnPe
 
 fn command(body: &str) -> SkillRegistration {
     SkillRegistration {
+        template_dialect: Default::default(),
         name: "greet".into(),
         plugin_id: PLUGIN.into(),
         skill_type: SkillType::Command,
@@ -627,11 +628,12 @@ async fn a_command_renders_only_while_its_plugin_is_active_here() {
     assert_eq!(rendered, None, "an orphan registration rendered");
 
     let f = Fixture::new("Hi [!`echo hi`]", None).await;
-    assert!(f
-        .manager
-        .get_plugin_registry_mut()
-        .await
-        .disable_plugin(PLUGIN));
+    assert!(
+        f.manager
+            .get_plugin_registry_mut()
+            .await
+            .disable_plugin(PLUGIN)
+    );
     assert!(
         f.manager
             .get_plugin_registry()
@@ -1172,7 +1174,7 @@ async fn a_turn_start_deny_hook_stops_the_commands_inline_shell() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_plan_turn_runs_no_inline_command_in_the_run_loop() {
-    use crate::config::types::policies::{ExecTier, EXEC_TIER_SESSION_KEY};
+    use crate::config::types::policies::{EXEC_TIER_SESSION_KEY, ExecTier};
     assert!(
         !run_loop_with_prompt_hook(None, &[(EXEC_TIER_SESSION_KEY, ExecTier::Plan.id())]).await,
         "an approved inline command ran on a plan turn"
@@ -1429,7 +1431,7 @@ async fn inline_commands_run_only_for_an_operator() {
 #[tokio::test]
 #[cfg(unix)]
 async fn a_turn_whose_tool_gate_denies_bash_runs_no_inline_command() {
-    use crate::config::types::policies::{ExecTier, EXEC_TIER_SESSION_KEY};
+    use crate::config::types::policies::{EXEC_TIER_SESSION_KEY, ExecTier};
     let deny_bash = r#"{"default":"allow","overrides":{"bash":"deny"}}"#;
     let deny_other = r#"{"default":"allow","overrides":{"web_fetch":"deny"}}"#;
     let channel = super::super::CHANNEL_TOOL_PERMISSIONS_KEY;

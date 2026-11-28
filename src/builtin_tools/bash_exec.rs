@@ -401,6 +401,15 @@ impl AlephTool for BashExecTool {
     type Args = BashExecArgs;
     type Output = super::code_exec::CodeExecOutput;
 
+    fn validate_json_args(&self, args: &serde_json::Value) -> Result<()> {
+        if super::bash_jsonl::is_private(Self::NAME, args) {
+            return Err(crate::error::AlephError::Validation(
+                "fixed JSONL input requires an eligible paired Bash call".into(),
+            ));
+        }
+        Ok(())
+    }
+
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let yield_window = match args.yield_ms {
             None => None,

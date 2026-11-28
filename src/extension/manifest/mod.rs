@@ -13,6 +13,7 @@ pub mod cc_plugin_toml;
 pub mod component_source;
 pub mod config_validation;
 pub mod declared_sections;
+pub(crate) mod inputs;
 pub mod manifest_cache;
 #[cfg(test)]
 mod panel_schema_tests;
@@ -41,10 +42,18 @@ pub fn global_manifest_cache() -> &'static ManifestCache {
     GLOBAL_MANIFEST_CACHE.get_or_init(ManifestCache::new)
 }
 
-/// Like [`parse_manifest_from_dir_sync`] but consults + populates the
-/// process-wide [`GLOBAL_MANIFEST_CACHE`].
+/// Read the runtime metadata from the shared normalized package snapshot.
 pub fn parse_manifest_from_dir_cached_global(dir: &Path) -> ExtensionResult<PluginManifest> {
-    parse_manifest_from_dir_sync_with(dir, Some(global_manifest_cache()))
+    let output = adapter::AdapterRegistry::defaults()
+        .parse_declarations(dir)
+        .map_err(|error| ExtensionError::InvalidManifest {
+            path: dir.to_owned(),
+            message: error.to_string(),
+        })?;
+    output.runtime_manifest.ok_or_else(|| ExtensionError::InvalidManifest {
+        path: dir.to_owned(),
+        message: "Package has no runtime manifest".into(),
+    })
 }
 
 // Re-export TOML types and parsing
@@ -265,7 +274,7 @@ pub fn auto_discover_manifest(dir: &Path) -> ExtensionResult<PluginManifest> {
         // plugin: the `mcp_server` effect keys on `kind == Mcp`, so a Static
         // kind counted the servers and never started one. Same sidecar
         // caliber as the CC parsers.
-        let (kind, entry) = if dir.join(cc_plugin_json::KIND_SIDECAR).is_file() {
+        let (kind, entry) = if inputs::is_file(dir.join(cc_plugin_json::KIND_SIDECAR)) {
             (PluginKind::Mcp, cc_plugin_json::KIND_SIDECAR.to_string())
         } else {
             (PluginKind::Static, ".".to_string())
@@ -287,12 +296,12 @@ fn has_any_component(root: &Path) -> bool {
         let target = root.join(dir_path);
         match suffix {
             None => {
-                if target.exists() {
+                if inputs::exists(&target) {
                     return true;
                 }
             }
             Some(suf) => {
-                if let Ok(entries) = std::fs::read_dir(&target) {
+                if let Ok(entries) = inputs::read_dir(&target) {
                     for entry in entries.flatten() {
                         let name = entry.file_name();
                         if name.to_str().is_some_and(|s| s.ends_with(suf)) {
@@ -301,8 +310,8 @@ fn has_any_component(root: &Path) -> bool {
                         // Recurse one level for skills/*/SKILL.md pattern
                         if suf == "SKILL.md" {
                             let nested = entry.path();
-                            if nested.is_dir() {
-                                if let Ok(inner) = std::fs::read_dir(&nested) {
+                            if inputs::is_dir(&nested) {
+                                if let Ok(inner) = inputs::read_dir(&nested) {
                                     for inner_entry in inner.flatten() {
                                         if inner_entry
                                             .file_name()

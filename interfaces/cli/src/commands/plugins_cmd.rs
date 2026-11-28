@@ -31,7 +31,7 @@ fn dash_if_empty(value: &str) -> String {
 /// (not a filesystem path), so the same call works whether the daemon is local
 /// or remote. Keeping the encoding here keeps the interface a pure I/O shim (R4).
 fn zip_install_params(zip_path: &std::path::Path) -> CliResult<Value> {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
     let bytes = fs::read(zip_path).map_err(|e| {
         CliError::Other(format!("Failed to read zip '{}': {e}", zip_path.display()))
     })?;
@@ -227,6 +227,7 @@ pub async fn install(
             "plugins.install",
             serde_json::to_value(PluginInstallParams {
                 url: source.to_string(),
+                scope: None,
             })
             .unwrap_or_default(),
         )
@@ -255,6 +256,7 @@ pub async fn uninstall(
 
     let params = PluginNameParams {
         name: name.to_string(),
+        selector: None,
     };
     let result: Value = client.call("plugins.uninstall", Some(params)).await?;
 
@@ -274,6 +276,7 @@ pub async fn enable(server_url: &str, config: &CliConfig, name: &str, json: bool
 
     let params = PluginNameParams {
         name: name.to_string(),
+        selector: None,
     };
     let result: Value = client.call("plugins.enable", Some(params)).await?;
 
@@ -298,6 +301,7 @@ pub async fn disable(
 
     let params = PluginNameParams {
         name: name.to_string(),
+        selector: None,
     };
     let result: Value = client.call("plugins.disable", Some(params)).await?;
 
@@ -335,6 +339,7 @@ pub async fn call(
     // INVALID_PARAMS.
     let params = PluginCallToolParams {
         plugin_id: plugin.to_string(),
+        selector: None,
         handler: tool.to_string(),
         args: tool_params,
     };
@@ -362,6 +367,7 @@ pub async fn update(server_url: &str, config: &CliConfig, name: &str, json: bool
 
     let params = PluginNameParams {
         name: name.to_string(),
+        selector: None,
     };
     let result: Value = client.call("plugin.update", Some(params)).await?;
 
@@ -381,6 +387,7 @@ pub async fn reload(server_url: &str, config: &CliConfig, name: &str, json: bool
 
     let params = PluginReloadParams {
         plugin_id: name.to_string(),
+        selector: None,
     };
     let result: Value = client.call("plugin.reload", Some(params)).await?;
 
@@ -463,6 +470,7 @@ mod tests {
     fn call_params_map_the_cli_words_onto_the_wire_words() {
         let params = PluginCallToolParams {
             plugin_id: "diagnostics".into(),
+            selector: None,
             handler: "system_health".into(),
             args: serde_json::json!({}),
         };

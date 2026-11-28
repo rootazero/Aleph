@@ -30,6 +30,7 @@ pub struct PanelShellOwners {
     pub agents: Arc<AgentRegistry>,
     pub agent_manager: Arc<crate::AgentManager>,
     pub sessions: Arc<dyn crate::gateway::session_store::SessionStore>,
+    pub sandbox: Arc<dyn crate::sandbox::Sandbox>,
 }
 
 struct PairedShellRun {

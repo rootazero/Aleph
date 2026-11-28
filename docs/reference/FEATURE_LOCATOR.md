@@ -1283,7 +1283,9 @@ The dictionary below preserves round-specific implementation evidence and earlie
 - **口语关键词**：bash、shell、脚本执行、后台进程、限时首批返回、游标、wait/poll/read/kill、ALEPH_SESSION_ID、Windows PowerShell。
 - **代码锚点**：`src/builtin_tools/bash_exec.rs`（`BashExecTool`、`BashExecArgs`、后台/限时首批返回入口）；`src/builtin_tools/process_registry.rs`（会话所有权、上限、状态、游标、完成通知）；`src/builtin_tools/code_exec.rs`（共用启动参数、环境注入与最终结果）；`src/sandbox/shell_lifecycle.rs`、`src/sandbox/workspace/mod.rs`、`src/sandbox/platforms/common.rs`（共用准入、原生启动/回收及管道收尾）。工具 Capability 仍是 `bash`，由 `src/executor/builtin_registry/builder/core_tools.rs` 发布；描述读 `BashExecTool::DESCRIPTION`，解释器与 argv 的唯一事实源是 `src/utils/shell.rs`。Windows 真机入口：`qa/winshell/run.sh`。
 - **当前行为 / Current contract**：前台默认 60 秒、上限 170 秒；`background: true` 才启用 3600/14400 秒预算。可用 `yield_ms`（1–10000 毫秒）限制首次等待，未完成时返回原作业的 `process_id`，不延长执行期限。`wait` 默认 60 秒、上限 170 秒；占用名额的 Shell 作业每会话最多 8 个、全局 32 个。`kill` 请求取消（`stopping`）；只有证明未启动，或原生驱动确认直接子进程退出，才返回 `killed`。停机入口是 `shutdown_background_jobs`，不是 abort 确认回收。
-- **Incremental output / 增量输出**：same-session `read` uses boot-local cursors over the bounded stdout/stderr tails, with explicit lost and withheld source ranges and a `pending` flag for an incomplete line. The same window remains available after settlement until eviction; `poll` or `wait` still delivers the final tool result. No arbitrary stdin/EOF, Agent PTY, reconnectable process, or universal process-tree guarantee. 见 [工具参数](TOOL_SYSTEM.md#code-execution)、[进程生命周期](PROCESS_MANAGEMENT.md#agent-shell-子进程-agent-shell-children) 及 §3.15 的历史背景。
+- **Incremental output / 增量输出**：same-session `read` uses boot-local cursors over the bounded stdout/stderr tails, with explicit lost and withheld source ranges and a `pending` flag for an incomplete line. The same window remains available after settlement until eviction, and `poll` or `wait` still delivers the final tool result. 见 [工具参数](TOOL_SYSTEM.md#code-execution)、[进程生命周期](PROCESS_MANAGEMENT.md#agent-shell-子进程-agent-shell-children) 及 §3.15 的历史背景。
+
+- **受控输入 / Controlled input** — 仅符合准入条件且有操作员值守的 Linux 配对 Gateway turn 发布 `stdin_profile: "jsonl_inspect"`、`write_stdin` 和 `close_stdin`。`src/builtin_tools/bash_jsonl.rs` 定义 wire 参数，`src/tools/scoped/dispatch.rs` 接入 `src/gateway/execution_engine/shell_effect.rs` 的实时授权，`src/sandbox/platforms/linux/bwrap/jsonl.rs` 启动固定 jq。The profile sends one approved data record at a time to the same supervised process ID and exposes only fixed type/count output. See [the scoped Bash contract](TOOL_SYSTEM.md#code-execution).
 
 #### Historical / 历史记录：Shell 接线重构与对照（2026-08）
 
@@ -1364,6 +1366,14 @@ The dictionary below preserves round-specific implementation evidence and earlie
 - **代码锚点**：`src/extension/`——`loader.rs`、`plugin_ops.rs`、`src/discovery/`、`manifest/`、`hooks/`、`marketplace/`、`capability.rs`、`src/extension/types/plugins.rs`
 - **职责**：管理 Wasm/Mcp/Static 三类插件的发现/加载/注册，多源优先级（Config > Workspace > Global > Bundled）、热重载、风险扫描、marketplace 安装。
 - **状态**：✅ 已实现。**关键事实**：'plugins' 在代码里属于 **`src/extension/`**（plugin 是 extension 的一种 kind），不是独立的 plugins 源码目录。**硬化（2026-06-17）**：① WASM hook 执行已连线——`loader.rs::execute_hook` 不再返回 "not yet implemented"，而是复用 WASM runtime 的 `call_tool`（hook = 导出函数），`execute_plugin_hook` 补齐 auto-load 与 `call_plugin_tool` 对称；② marketplace 完整性校验 `installer.rs::verify_plugin_integrity` 修复静默跳过——walk 错误 / `strip_prefix` 失败现在硬失败（此前 `filter_map(ok)` 会把不可读文件排除出哈希 → 篡改归档可绕过校验）。
+#### 当前实现 / Current implementation
+
+`AdapterRegistry` 为发现、暂存安装、设置校验和重载提供同一份声明。Claude Code 支持的贡献、Pi 所选 Markdown 技能和提示词、DSH 字面量 MCP 和技能均走既有注册和启用链路。导入问题通过 `import_diagnostics` 返回。`PluginInstanceKey` 按 canonical scope 与逻辑 ID 标识包，Gateway 的 `selector` 串起安装回执、管理与精确调用。在已授权项目中，裸 ID 先选整个项目包。WASM Tool 和 MCP Tool 分别用现有 Capability lease 与 MCP 客户端生命周期验证所属注册仍有效。
+
+Discovery, staged installation, settings validation and reload consume the same `AdapterRegistry` declarations. Claude Code contributions, selected Pi Markdown resources, and literal DSH MCP and skills use the existing activation and registration paths. `PluginInstanceKey` identifies a package in its canonical scope. Gateway receipts, management and exact calls share its `selector`. Unqualified requests in an authorized workspace select the whole project package. Existing Capability leases fence WASM registrations and the MCP client lifecycle fences retired MCP registrations.
+
+[格式、策略与 selector / Formats, policy and selectors](PLUGIN_SYSTEM.md) · [生产入口验收 / Production-entry QA](../../qa/plugins/run.sh)
+
 #### Historical / 历史记录：插件接线与兼容性实施记录（2026-06 至 2026-08）
 
 - **缺口已闭合（2026-06-19）**：此前插件注册的 hook 经 `sync_hooks_from_registry` 进 `HookExecutor` 时 `actions` 为空、`handler` 只写不读——**事件驱动的插件 hook 不会从真实 hook 事件触发**（旧描述误判为"需 executor 持有 loader 回调、跨模块循环依赖"）。**修复（连线优先 + 依赖倒置 P4）**：新增 `HookAction::Plugin{plugin_id,handler}` 变体；`sync_hooks_from_registry` 改发该 live action（替代空列表，`handler` 字段保留供 `validation.rs` 显示）；`executor.rs::execute_plugin` 经**既有全局访问器** `try_extension_manager()`（gateway/channel fire-site 已在用）调 `execute_plugin_hook` 派发 WASM 导出函数——**复用现成基础设施，零回调注入、零 Arc 所有权环**。派发集中在 `execute_action` 一处，自动覆盖 observer/interceptor/resolver 三态；observer 忽略输出，interceptor/resolver 可经行前缀协议读结构化返回。manager 未注册（单测）时优雅跳过。

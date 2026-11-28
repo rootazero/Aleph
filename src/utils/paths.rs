@@ -785,12 +785,32 @@ static PLUGIN_SKILL_DIRS: RwLock<Vec<PublishedPluginSkillDir>> = RwLock::new(Vec
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublishedPluginSkillDir {
     pub dir: PathBuf,
+    pub(crate) exact_file: bool,
     pub plugin_id: String,
     pub scope_key: crate::extension::visibility::ScopeKey,
     /// The owning plugin's install root (`record.root_dir`, the same record):
     /// what its path variables name to a skill's inline commands
     /// (`skill::preprocess::SkillShell`).
     pub plugin_root: PathBuf,
+}
+
+impl PublishedPluginSkillDir {
+    pub(crate) fn runtime_key(&self) -> String {
+        crate::extension::visibility::PluginInstanceKey::new(
+            self.scope_key.clone(),
+            self.plugin_id.clone(),
+        )
+        .runtime_key()
+    }
+
+    pub(crate) fn selected_file_is_current(&self) -> bool {
+        self.dir.is_file()
+            && std::fs::canonicalize(&self.dir).ok().is_some_and(|file| {
+                std::fs::canonicalize(&self.plugin_root)
+                    .ok()
+                    .is_some_and(|root| file == self.dir && file.starts_with(root))
+            })
+    }
 }
 
 /// Publish the installed plugins' skill base directories, each with the
@@ -1097,6 +1117,26 @@ fn push_if_new_skills_dir(dirs: &mut Vec<PathBuf>, dir: &std::path::Path, label:
     }
 }
 
+pub(crate) fn skill_manifest_files(root: &Path) -> Vec<PathBuf> {
+    if root.is_file() {
+        return vec![root.to_path_buf()];
+    }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with('.') || !entry.path().is_dir() {
+                return None;
+            }
+            let file = entry.path().join("SKILL.md");
+            file.is_file().then_some(file)
+        })
+        .collect()
+}
+
 pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<PathBuf>> {
     let mut dirs = Vec::new();
 
@@ -1151,8 +1191,17 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     //    the `skill_read` face of the one predicate.
     let visibility =
         crate::extension::visibility::VisibilityCtx::from_project_root(Some(start_dir.clone()));
+    let extension = crate::extension::try_extension_manager();
     for published in plugin_skill_dirs() {
-        if crate::extension::visibility::visible_to(&published.scope_key, &visibility) {
+        let visible = match extension {
+            Some(manager) => manager.plugin_visible(&published.runtime_key(), &visibility),
+            None => crate::extension::visibility::visible_to(&published.scope_key, &visibility),
+        };
+        if visible && published.exact_file {
+            if published.selected_file_is_current() && !contains_equivalent(&dirs, &published.dir) {
+                dirs.push(published.dir);
+            }
+        } else if visible {
             push_if_new_skills_dir(&mut dirs, &published.dir, "plugin skills dir");
         }
     }
@@ -1319,9 +1368,11 @@ mod tests {
         })
         .unwrap();
         let skills = scanner.discover_skill_dirs().unwrap();
-        assert!(skills
-            .iter()
-            .any(|skill| skill.path.starts_with(home.join(".agents"))));
+        assert!(
+            skills
+                .iter()
+                .any(|skill| skill.path.starts_with(home.join(".agents")))
+        );
         assert!(skills.iter().all(|skill| skill.path.starts_with(&home)));
         crate::config::Config::default()
             .save_to_file(get_config_dir().unwrap().join("config.toml"))
@@ -1827,16 +1878,20 @@ mod tests {
         );
         // Text-blind to comments — this defect is discussed by name, in this
         // very file and in build.rs, using the spelling it hunts.
-        assert!(link_args_naming_the_source_tree(
-            "// println!(\"cargo:rustc-link-arg={CARGO_MANIFEST_DIR}/x\");"
-        )
-        .is_empty());
+        assert!(
+            link_args_naming_the_source_tree(
+                "// println!(\"cargo:rustc-link-arg={CARGO_MANIFEST_DIR}/x\");"
+            )
+            .is_empty()
+        );
         // And a link-arg carrying no path at all is not an offender.
-        assert!(link_args_naming_the_source_tree(
-            "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");\n\
+        assert!(
+            link_args_naming_the_source_tree(
+                "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");\n\
              println!(\"cargo:rustc-link-arg=-lz\");"
-        )
-        .is_empty());
+            )
+            .is_empty()
+        );
     }
 
     /// The guard's predicate itself: it must see the spellings the line-level
@@ -2189,12 +2244,14 @@ mod tests {
         publish_plugin_skill_dirs(vec![
             PublishedPluginSkillDir {
                 dir: a_plugin_skills.clone(),
+                exact_file: false,
                 plugin_id: "plugin-a".into(),
                 scope_key: ScopeKey::project(proj_a.path()),
                 plugin_root: proj_a.path().join("plugin-a"),
             },
             PublishedPluginSkillDir {
                 dir: global_plugin_skills.clone(),
+                exact_file: false,
                 plugin_id: "plugin-g".into(),
                 scope_key: ScopeKey::Global,
                 plugin_root: proj_a.path().join("plugin-g"),
@@ -2498,6 +2555,7 @@ mod tests {
         std::fs::create_dir_all(&plugin_skills).unwrap();
         publish_plugin_skill_dirs(vec![PublishedPluginSkillDir {
             dir: plugin_skills.clone(),
+            exact_file: false,
             plugin_id: "alpha".into(),
             scope_key: ScopeKey::Global,
             plugin_root: plugin_skills.parent().unwrap().to_path_buf(),

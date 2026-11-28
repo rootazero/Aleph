@@ -7,6 +7,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::extension::manifest::inputs;
+
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
@@ -202,7 +204,11 @@ pub fn parse_cc_plugin_toml_content(
     let toml: CcPluginToml = toml::from_str(content).map_err(|e| {
         ExtensionError::invalid_manifest(&manifest_path, format!("TOML parse error: {e}"))
     })?;
+    manifest_from_toml(toml, plugin_dir)
+}
 
+fn manifest_from_toml(toml: CcPluginToml, plugin_dir: &Path) -> ExtensionResult<PluginManifest> {
+    let manifest_path = plugin_dir.join(CC_PLUGIN_TOML);
     // `name` is required
     let raw_name = toml
         .name
@@ -217,7 +223,8 @@ pub fn parse_cc_plugin_toml_content(
         .map_err(|reason| ExtensionError::invalid_plugin_name(&raw_name, reason))?;
 
     // Read before `toml.aleph` is moved out below.
-    let declares_servers = toml.mcp_servers.is_some() || plugin_dir.join(KIND_SIDECAR).is_file();
+    let declares_servers =
+        toml.mcp_servers.is_some() || inputs::is_file(plugin_dir.join(KIND_SIDECAR));
 
     // Determine kind and entry from [aleph] section
     let mut superset = AlephSuperset::default();
@@ -358,7 +365,7 @@ pub fn parse_cc_plugin_toml_content(
 /// * `dir` - Path to the plugin root directory
 pub fn parse_cc_plugin_toml_sync(dir: &Path) -> ExtensionResult<PluginManifest> {
     let toml_path = dir.join(CC_PLUGIN_TOML);
-    let content = std::fs::read_to_string(&toml_path)?;
+    let content = inputs::read_to_string(&toml_path)?;
     parse_cc_plugin_toml_content(&content, dir)
 }
 
@@ -388,34 +395,29 @@ pub struct ClaudeCodeTomlAdapter;
 
 impl ManifestAdapter for ClaudeCodeTomlAdapter {
     fn detect(&self, plugin_dir: &Path) -> bool {
-        plugin_dir.join(CC_PLUGIN_TOML).exists()
+        inputs::exists(plugin_dir.join(CC_PLUGIN_TOML))
     }
 
     fn parse(&self, plugin_dir: &Path) -> anyhow::Result<AdapterOutput> {
-        // Read the manifest file ONCE. Previously this called
-        // parse_cc_plugin_toml_sync (which reads + parses) and then
-        // re-read + re-parsed the same file below to extract capabilities
-        // from the raw TOML — every plugin directory was hit twice on
-        // boot. Read the content once and reuse it for both the typed
-        // manifest parse and the raw component-extraction parse.
         let toml_path = plugin_dir.join(CC_PLUGIN_TOML);
-        let content = std::fs::read_to_string(&toml_path)?;
-        let manifest = parse_cc_plugin_toml_content(&content, plugin_dir)
+        let content = inputs::read_to_string(&toml_path)?;
+        let mut raw: CcPluginToml =
+            toml::from_str(&content).map_err(|e| anyhow::anyhow!("TOML parse error: {e}"))?;
+        let skills = raw.skills.take();
+        let commands = raw.commands.take();
+        let agents = raw.agents.take();
+        let hooks = raw.hooks.take();
+        // The runtime kind also depends on the presence of this declaration.
+        let mcp_servers = raw.mcp_servers.clone();
+        let manifest = manifest_from_toml(raw, plugin_dir)
             .map_err(|e| anyhow::anyhow!("CC TOML parse error: {e}"))?;
-
         let plugin_id = manifest.id.clone();
         let mut capabilities = Vec::new();
-
-        // Reuse the already-read content for the raw-TyPath extraction;
-        // the structured manifest does not surface component paths in
-        // the shape component_source::resolve_* needs.
-        let raw: CcPluginToml =
-            toml::from_str(&content).map_err(|e| anyhow::anyhow!("TOML re-parse error: {e}"))?;
 
         // Component fields accept a path, an array of paths, or (for hooks and
         // mcp-servers) an inlined table — see `component_source`.
         capabilities.extend(component_source::resolve_dirs(
-            raw.skills.as_ref(),
+            skills.as_ref(),
             "skills",
             plugin_dir,
             &plugin_id,
@@ -423,7 +425,7 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
             parsers::parse_skills_dir,
         )?);
         capabilities.extend(component_source::resolve_dirs(
-            raw.commands.as_ref(),
+            commands.as_ref(),
             "commands",
             plugin_dir,
             &plugin_id,
@@ -431,7 +433,7 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
             parsers::parse_commands_dir,
         )?);
         capabilities.extend(component_source::resolve_dirs(
-            raw.agents.as_ref(),
+            agents.as_ref(),
             "agents",
             plugin_dir,
             &plugin_id,
@@ -439,12 +441,12 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
             parsers::parse_agents_dir,
         )?);
         capabilities.extend(component_source::resolve_hooks(
-            raw.hooks.as_ref(),
+            hooks.as_ref(),
             plugin_dir,
             &plugin_id,
         )?);
         capabilities.extend(component_source::resolve_mcp_servers(
-            raw.mcp_servers.as_ref(),
+            mcp_servers.as_ref(),
             plugin_dir,
             &plugin_id,
         )?);
@@ -473,7 +475,7 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
 
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),
-            name: Some(manifest.name),
+            name: Some(manifest.name.clone()),
             version: manifest.version.clone(),
             description: manifest.description.clone(),
             capabilities,
@@ -482,7 +484,9 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
                 origin: PluginOrigin::Global,
                 format: SourceFormat::ClaudeCode,
             },
-            permissions: manifest.permissions,
+            permissions: manifest.permissions.clone(),
+            runtime_manifest: Some(manifest),
+            diagnostics: Vec::new(),
         })
     }
 

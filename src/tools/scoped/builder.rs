@@ -21,6 +21,14 @@ use super::traits::ToolDefinitionRewriter;
 use super::ScopedToolService;
 
 impl ScopedToolService {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn with_paired_shell(
+        mut self,
+        route: Option<crate::gateway::execution_engine::shell_effect::PairedShellRoute>,
+    ) -> Self {
+        self.paired_shell = route;
+        self
+    }
     /// Create a new `ScopedToolService`.
     ///
     /// `allowed` — set of tool names visible through this service. Empty = allow all.
@@ -39,6 +47,8 @@ impl ScopedToolService {
             approval_requester: None,
             config_approval_requester: None,
             turn_context: None,
+            #[cfg(target_os = "linux")]
+            paired_shell: None,
             result_store: None,
             result_transport: Default::default(),
             schema_cache: arc_swap::ArcSwap::from_pointee(None),

@@ -12,6 +12,12 @@ use std::path::{Path, PathBuf};
 /// Plugin info for display
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub import_diagnostics: Vec<aleph_protocol::plugins::PluginImportDiagnostic>,
     pub name: String,
     pub version: Option<String>,
     pub description: Option<String>,
@@ -45,6 +51,31 @@ pub struct PluginInfo {
     /// Error message when the plugin failed to load (status == "error").
     #[serde(default)]
     pub error: Option<String>,
+}
+
+impl From<&PluginRecord> for PluginInfo {
+    fn from(record: &PluginRecord) -> Self {
+        Self {
+            name: record.id.clone(),
+            selector: Some(record.instance_key().selector()),
+            scope_kind: Some(record.scope_key.kind_label().to_owned()),
+            import_diagnostics: record.import_diagnostics.clone(),
+            version: record.version.clone(),
+            description: record.description.clone(),
+            enabled: record.status.is_active(),
+            path: record.root_dir.display().to_string(),
+            skills_count: record.skill_count,
+            commands_count: record.command_count,
+            agents_count: record.agent_count,
+            hooks_count: record.hook_count,
+            mcp_servers_count: record.mcp_server_count,
+            tools_count: record.tool_names.len(),
+            kind: record.kind.as_str().to_string(),
+            origin: record.origin.label().to_string(),
+            status: record.status.label().to_string(),
+            error: record.error.clone(),
+        }
+    }
 }
 
 /// Plugin origin - where the plugin was discovered from
@@ -428,6 +459,11 @@ pub struct PluginRecord {
     pub hook_count: usize,
     /// Service IDs registered by this plugin
     pub service_ids: Vec<String>,
+    /// An importer selected the exact Markdown files to expose as skills.
+    #[serde(default)]
+    pub(crate) selected_skill_files: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) import_diagnostics: Vec<aleph_protocol::plugins::PluginImportDiagnostic>,
     /// Number of skills declared by this plugin
     #[serde(default)]
     pub skill_count: usize,
@@ -443,6 +479,13 @@ pub struct PluginRecord {
 }
 
 impl PluginRecord {
+    pub(crate) fn instance_key(&self) -> crate::extension::visibility::PluginInstanceKey {
+        crate::extension::visibility::PluginInstanceKey::new(
+            self.scope_key.clone(),
+            self.id.clone(),
+        )
+    }
+
     /// Create a new plugin record with default values
     #[must_use]
     pub const fn new(id: String, name: String, kind: PluginKind, origin: PluginOrigin) -> Self {
@@ -461,6 +504,8 @@ impl PluginRecord {
             tool_names: Vec::new(),
             hook_count: 0,
             service_ids: Vec::new(),
+            selected_skill_files: false,
+            import_diagnostics: Vec::new(),
             skill_count: 0,
             command_count: 0,
             agent_count: 0,
@@ -520,11 +565,17 @@ impl PluginRecord {
             status: PluginStatus::Loaded,
             error: None,
             panel: None,
+            import_diagnostics: output.import_diagnostics(),
             root_dir,
             scope_key: crate::extension::visibility::ScopeKey::Global,
             tool_names,
             hook_count,
             service_ids,
+            selected_skill_files: matches!(
+                output.source.format,
+                crate::extension::SourceFormat::Pi
+                    | crate::extension::SourceFormat::DeepSeekHarness
+            ),
             skill_count,
             command_count,
             agent_count,
