@@ -8,6 +8,8 @@ pub const ERR_HELPER_CRASHED: i32 = -32005;
 pub const ERR_BRIDGE_DISABLED: i32 = -32006;
 /// The recognizer has no model for the requested (or resolved) language.
 pub const ERR_UNSUPPORTED_LANGUAGE: i32 = -32007;
+/// A native AX reference refusal with structured `AxReferenceErrorData`.
+pub const ERR_AX_REFERENCE: i32 = -32008;
 
 #[cfg(test)]
 mod tests {
@@ -22,5 +24,6 @@ mod tests {
         assert_eq!(ERR_HELPER_CRASHED, -32005);
         assert_eq!(ERR_BRIDGE_DISABLED, -32006);
         assert_eq!(ERR_UNSUPPORTED_LANGUAGE, -32007);
+        assert_eq!(ERR_AX_REFERENCE, -32008);
     }
 }

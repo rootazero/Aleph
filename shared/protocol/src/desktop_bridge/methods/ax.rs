@@ -1,10 +1,5 @@
-//! Accessibility tree query schemas for the desktop bridge.
-//!
-//! Exposes three read-only AX operations:
-//! - `ax.query_focused` — element currently holding keyboard focus
-//! - `ax.query_tree`    — full subtree rooted at a given process (or the
-//!   frontmost app if `pid` is omitted)
-//! - `ax.query_by_role` — collect all elements matching an AX role string
+//! Accessibility schemas for the desktop bridge, including tree queries,
+//! locator mutations, and snapshot-bound native actions.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -18,6 +13,8 @@ pub const METHOD_QUERY_TREE: &str = "ax.query_tree";
 pub const METHOD_QUERY_BY_ROLE: &str = "ax.query_by_role";
 pub const METHOD_SET_VALUE: &str = "ax.set_value";
 pub const METHOD_PERFORM_ACTION: &str = "ax.perform_action";
+pub const METHOD_SNAPSHOT_REFERENCES: &str = "ax.snapshot_references";
+pub const METHOD_ACT_ON_REFERENCE: &str = "ax.act_on_reference";
 pub const NOTIFY_MUTATION: &str = "ax.mutation";
 
 // ── Deadlines ────────────────────────────────────────────────────────────────
@@ -233,6 +230,100 @@ pub struct PerformActionParams {
     /// AX action name passed through verbatim, e.g. `"AXPress"`.
     pub action: String,
 }
+
+/// Request for an observation and its snapshot-bound native references.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AxSnapshotRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+    /// Exact platform window ID, checked against `pid` when both are supplied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<u64>,
+    pub max_depth: u32,
+    pub max_nodes: u32,
+    pub max_elements: usize,
+}
+
+/// Driver-private address scoped to the issuing instance and snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NativeAxReference {
+    pub lease: String,
+    pub index: u32,
+}
+
+/// A flat observation row. `reference` is present for native actionable nodes.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AxSnapshotRow {
+    pub element: AxElement,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<NativeAxReference>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AxReferenceSnapshot {
+    pub app_pid: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<u64>,
+    pub tree_available: bool,
+    pub elements: Vec<AxSnapshotRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focused: Option<AxElement>,
+    pub tree_truncated: bool,
+    pub truncated: bool,
+    pub nodes_walked: u32,
+    pub total_interactable: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AxReferenceAction {
+    pub reference: NativeAxReference,
+    pub mutation: AxMutation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AxMutation {
+    SetValue { value: String },
+    Perform { action: String },
+}
+
+/// Stable refusal codes carried by native drivers and the Bridge error envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AxReferenceError {
+    ReferenceUnsupported,
+    WindowScopeUnsupported,
+    StaleReference,
+    ElementDisabled,
+    ActionUnsupported,
+    ActionPending,
+    ActionOutcomeUnknown,
+}
+
+impl AxReferenceError {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::ReferenceUnsupported => "reference_unsupported",
+            Self::WindowScopeUnsupported => "window_scope_unsupported",
+            Self::StaleReference => "stale_reference",
+            Self::ElementDisabled => "element_disabled",
+            Self::ActionUnsupported => "action_unsupported",
+            Self::ActionPending => "action_pending",
+            Self::ActionOutcomeUnknown => "action_outcome_unknown",
+        }
+    }
+}
+
+/// Structured data for an `ERR_AX_REFERENCE` Bridge error.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+pub struct AxReferenceErrorData {
+    pub code: AxReferenceError,
+}
+
+/// Shared bounds on retained driver objects, independent of tree walk budgets.
+pub const MAX_AX_REFERENCE_SNAPSHOTS: usize = 32;
+pub const MAX_AX_REFERENCE_ROWS: usize = 500;
+pub const AX_REFERENCE_TTL_SECS: u64 = 90;
 
 /// Post-write verification outcome.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -451,6 +542,44 @@ mod tests {
         let back: AxElement = serde_json::from_str(&serde_json::to_string(&el).unwrap()).unwrap();
         assert_eq!(back.enabled, Some(false));
         assert_eq!(back.secure, Some(true));
+    }
+
+    #[test]
+    fn ax_reference_wire_roundtrip() {
+        let request = AxSnapshotRequest {
+            pid: Some(123),
+            window_id: Some(u64::MAX),
+            max_depth: 8,
+            max_nodes: 1_000,
+            max_elements: 200,
+        };
+        let encoded = serde_json::to_vec(&request).unwrap();
+        let decoded: AxSnapshotRequest = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded.window_id, request.window_id);
+
+        let reference = NativeAxReference {
+            lease: "test-lease".into(),
+            index: 7,
+        };
+        let mutations = [
+            AxMutation::SetValue {
+                value: "桌面 🖥".into(),
+            },
+            AxMutation::Perform {
+                action: "AXPress".into(),
+            },
+        ];
+        for mutation in mutations {
+            let action = AxReferenceAction {
+                reference: reference.clone(),
+                mutation,
+            };
+            let encoded = serde_json::to_vec(&action).unwrap();
+            let decoded: AxReferenceAction = serde_json::from_slice(&encoded).unwrap();
+            assert_eq!(decoded, action);
+            assert!(serde_json::from_slice::<SetValueParams>(&encoded).is_err());
+            assert!(serde_json::from_slice::<PerformActionParams>(&encoded).is_err());
+        }
     }
 
     #[test]

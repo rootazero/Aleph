@@ -31,9 +31,10 @@ use tokio_util::sync::CancellationToken;
 
 use aleph_protocol::desktop_bridge::envelope::{Message, Request, RpcError};
 use aleph_protocol::desktop_bridge::errors::{
-    ERR_BRIDGE_DISABLED, ERR_HELPER_CRASHED, ERR_NOT_IMPLEMENTED, ERR_PERMISSION_DENIED,
-    ERR_PLATFORM, ERR_TIMEOUT, ERR_UNSUPPORTED_LANGUAGE,
+    ERR_AX_REFERENCE, ERR_BRIDGE_DISABLED, ERR_HELPER_CRASHED, ERR_NOT_IMPLEMENTED,
+    ERR_PERMISSION_DENIED, ERR_PLATFORM, ERR_TIMEOUT, ERR_UNSUPPORTED_LANGUAGE,
 };
+use aleph_protocol::desktop_bridge::methods::ax::AxReferenceErrorData;
 use aleph_protocol::desktop_bridge::methods::media::{
     METHOD_AUDIO_RECORD, METHOD_AUDIO_RECORD_START, METHOD_CAMERA_CLIP, METHOD_VOICE_CAPTURE_START,
 };
@@ -70,6 +71,16 @@ pub fn map_bridge_error(e: RpcError) -> DesktopError {
             }
             DesktopError::BridgeFailed(format!("bridge error {}: {}", e.code, e.message))
         }
+        ERR_AX_REFERENCE => match e
+            .data
+            .and_then(|data| serde_json::from_value::<AxReferenceErrorData>(data).ok())
+        {
+            Some(data) => DesktopError::AxReference {
+                code: data.code,
+                message: e.message,
+            },
+            None => DesktopError::BridgeFailed("invalid AX reference error data".into()),
+        },
         ERR_NOT_IMPLEMENTED => DesktopError::NotImplemented(e.message),
         ERR_UNSUPPORTED_LANGUAGE => DesktopError::UnsupportedLanguage(e.message),
         ERR_PLATFORM => DesktopError::PlatformError(e.message),
