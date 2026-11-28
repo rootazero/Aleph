@@ -42,10 +42,11 @@ const MAX_SEGMENT_SECS: f32 = 30.0;
 /// `ScriptProcessorNode` buffer size (frames). 4096 ≈ 85 ms at 48 kHz — small
 /// enough for a tight pre-roll, large enough to avoid callback churn.
 const SCRIPT_BUF: u32 = 4096;
+const WORKLET_LOAD_TIMEOUT_MS: u32 = 1500;
 /// Streaming frames held while the backend stream is still opening (~200 ms
 /// each, so ≈5 s). Bounded because a stream that never opens must not grow a
 /// buffer forever; the oldest frame is dropped on overflow.
-const PENDING_FRAME_CAP: usize = 25;
+pub(super) const PENDING_FRAME_CAP: usize = 25;
 
 /// Rolling capture state, shared between the audio-thread callback (writer) and
 /// the VAD tick (which arms/disarms a segment).
@@ -69,6 +70,7 @@ struct Capture {
     /// the pre-roll ring (a cloud TLS handshake or a busy self-hosted server can
     /// take far longer than [`PREROLL_MS`]). Bounded by [`PENDING_FRAME_CAP`].
     pending: VecDeque<String>,
+    pending_lost: bool,
 }
 
 /// Sample rate every streaming ASR backend is fed at (matches `StreamConfig`).
@@ -135,7 +137,7 @@ enum CaptureTap {
 /// `AnalyserNode` (RMS level, polled on an interval) and a continuous PCM
 /// [`CaptureTap`] (pre-roll ring + the active segment + streaming frames).
 pub(crate) struct MicSession {
-    stream: web_sys::MediaStream,
+    tracks: Vec<web_sys::MediaStreamTrack>,
     ctx: web_sys::AudioContext,
     analyser: web_sys::AnalyserNode,
     tap: CaptureTap,
@@ -242,9 +244,25 @@ impl MicError {
     }
 }
 
+pub(super) struct CapturedUtterance {
+    samples: Vec<f32>,
+    sample_rate: u32,
+}
+
+impl CapturedUtterance {
+    pub fn encode_wav(mut self) -> String {
+        // whisper.cpp requires at least one second of samples.
+        let min_len = (self.sample_rate as f32 * 1.1) as usize;
+        if self.samples.len() < min_len {
+            self.samples.resize(min_len, 0.0);
+        }
+        wav::base64_encode(&wav::encode_wav_mono(&self.samples, self.sample_rate))
+    }
+}
+
 impl MicSession {
     /// Open the mic with system AEC on (spec decision: system AEC).
-    pub(crate) async fn open() -> Result<Rc<Self>, MicError> {
+    pub(crate) async fn open(current: impl Fn() -> bool) -> Result<Option<Rc<Self>>, MicError> {
         let window = web_sys::window().ok_or(MicError::Unsupported)?;
         // `mediaDevices` is undefined outside a secure context (and in some
         // webviews over plain http) — surface that distinctly from a denial.
@@ -270,10 +288,35 @@ impl MicSession {
             .dyn_into()
             .map_err(|_| MicError::Unsupported)?;
 
-        let ctx = web_sys::AudioContext::new().map_err(|_| MicError::AudioContext)?;
+        if !current() {
+            stop_tracks(&stream);
+            return Ok(None);
+        }
+        let ctx = web_sys::AudioContext::new().map_err(|_| {
+            stop_tracks(&stream);
+            MicError::AudioContext
+        })?;
+        match Self::connect_capture(&stream, &ctx).await {
+            Ok(mic) if current() => Ok(Some(Rc::new(mic))),
+            Ok(mic) => {
+                mic.close();
+                Ok(None)
+            }
+            Err(error) => {
+                stop_tracks(&stream);
+                let _ = ctx.close();
+                Err(error)
+            }
+        }
+    }
+
+    async fn connect_capture(
+        stream: &web_sys::MediaStream,
+        ctx: &web_sys::AudioContext,
+    ) -> Result<Self, MicError> {
         let sample_rate = ctx.sample_rate() as u32;
         let source = ctx
-            .create_media_stream_source(&stream)
+            .create_media_stream_source(stream)
             .map_err(|_| MicError::AudioContext)?;
         let analyser = ctx.create_analyser().map_err(|_| MicError::AudioContext)?;
         analyser.set_fft_size(1024);
@@ -292,6 +335,7 @@ impl MicSession {
             frame_accum: Vec::new(),
             on_frame: None,
             pending: VecDeque::new(),
+            pending_lost: false,
         }));
 
         // Flush a streaming frame once the accumulator holds ~200 ms of
@@ -302,26 +346,31 @@ impl MicSession {
         // Any failure — no audioWorklet on the context (older WKWebView),
         // module rejection, node construction — falls back to the deprecated
         // ScriptProcessorNode path, which still works everywhere.
-        let tap = match open_worklet_tap(&ctx, &source, &cap, sample_rate, frame_chunk).await {
+        let tap = match open_worklet_tap(ctx, &source, &cap, sample_rate, frame_chunk).await {
             Ok(tap) => tap,
             Err(e) => {
                 web_sys::console::debug_1(
                     &format!("voice capture: AudioWorklet unavailable ({e:?}), using ScriptProcessor fallback").into(),
                 );
-                open_script_tap(&ctx, &source, &cap, sample_rate, frame_chunk)?
+                open_script_tap(ctx, &source, &cap, sample_rate, frame_chunk)?
             }
         };
 
-        Ok(Rc::new(Self {
-            stream,
-            ctx,
+        let tracks = stream
+            .get_audio_tracks()
+            .iter()
+            .filter_map(|track| track.dyn_into::<web_sys::MediaStreamTrack>().ok())
+            .collect();
+        Ok(Self {
+            tracks,
+            ctx: ctx.clone(),
             analyser,
             tap,
             _source: source,
             rms_buf: RefCell::new(vec![0u8; 1024]),
             sample_rate,
             cap,
-        }))
+        })
     }
 
     /// Current input level as RMS in 0..1 (time-domain bytes centered at 128).
@@ -351,22 +400,13 @@ impl MicSession {
         self.cap.borrow_mut().segment = None;
     }
 
-    /// Take the captured segment and encode it as a base64 WAV for STT. Returns
-    /// `None` if no segment was armed or it was empty.
-    pub(crate) fn take_segment_wav(&self) -> Option<(String, String)> {
-        let mut seg = self.cap.borrow_mut().segment.take()?;
-        if seg.is_empty() {
-            return None;
-        }
-        // whisper.cpp asserts (hard-crashes) on buffers shorter than 1 s — the
-        // exact `[voice.local]` BYO scenario for a snappy "yes/ok" — so pad short
-        // segments with trailing silence to a safe 1.1 s.
-        let min_len = (self.sample_rate as f32 * 1.1) as usize;
-        if seg.len() < min_len {
-            seg.resize(min_len, 0.0);
-        }
-        let wav_bytes = wav::encode_wav_mono(&seg, self.sample_rate);
-        Some((wav::base64_encode(&wav_bytes), "audio/wav".to_string()))
+    /// Freeze the batch clip at the same boundary as the streaming input.
+    pub(super) fn take_utterance(&self) -> Option<CapturedUtterance> {
+        let samples = self.cap.borrow_mut().segment.take()?;
+        (!samples.is_empty()).then_some(CapturedUtterance {
+            samples,
+            sample_rate: self.sample_rate,
+        })
     }
 
     /// Install the upward sink for streaming s16le-16k base64 frames, then flush
@@ -402,6 +442,7 @@ impl MicSession {
     pub(crate) fn start_streaming(&self) {
         let mut c = self.cap.borrow_mut();
         c.streaming = true;
+        c.pending_lost = false;
         let pre: Vec<f32> = c.preroll.iter().copied().collect();
         c.frame_accum = pre;
     }
@@ -418,7 +459,13 @@ impl MicSession {
         c.streaming = false;
         c.frame_accum.clear();
         c.pending.clear();
+        c.pending_lost = false;
         c.on_frame = None;
+    }
+
+    /// Seal at the local utterance boundary, including the fractional last frame.
+    pub(super) fn seal_streaming(&self) -> bool {
+        seal_capture_stream(&self.cap, self.sample_rate)
     }
 
     pub(crate) fn close(&self) {
@@ -435,12 +482,21 @@ impl MicSession {
             }
         }
         let _ = self._source.disconnect();
-        for track in self.stream.get_tracks().iter() {
-            if let Ok(track) = track.dyn_into::<web_sys::MediaStreamTrack>() {
-                track.stop();
-            }
+        // Stop the exact handles returned by getUserMedia. Re-querying the
+        // stream during teardown can yield different track objects in WKWebView.
+        for track in &self.tracks {
+            track.stop();
         }
         let _ = self.ctx.close();
+    }
+}
+
+fn stop_tracks(stream: &web_sys::MediaStream) {
+    let tracks = stream.get_audio_tracks();
+    for index in 0..tracks.length() {
+        if let Ok(track) = tracks.get(index).dyn_into::<web_sys::MediaStreamTrack>() {
+            track.stop();
+        }
     }
 }
 
@@ -463,9 +519,8 @@ fn ingest_pcm(cap: &Rc<RefCell<Capture>>, data: &[f32], sample_rate: u32, frame_
     }
     let mc = c.max_segment;
     if let Some(seg) = c.segment.as_mut() {
-        if seg.len() < mc {
-            seg.extend_from_slice(data);
-        }
+        let remaining = mc.saturating_sub(seg.len());
+        seg.extend_from_slice(&data[..remaining.min(data.len())]);
     }
     // Streaming tap: accumulate device-rate samples, then emit fixed ~200 ms
     // frames resampled to 16 kHz s16le. Independent of the batch WAV segment
@@ -495,6 +550,7 @@ fn ingest_pcm(cap: &Rc<RefCell<Capture>>, data: &[f32], sample_rate: u32, frame_
         for f in frames {
             if c.pending.len() >= PENDING_FRAME_CAP {
                 c.pending.pop_front();
+                c.pending_lost = true;
             }
             c.pending.push_back(f);
         }
@@ -509,11 +565,32 @@ fn ingest_pcm(cap: &Rc<RefCell<Capture>>, data: &[f32], sample_rate: u32, frame_
     }
 }
 
-/// The AudioWorklet processor, registered from a blob URL. Copies input
-/// samples on the render thread into ~[`SCRIPT_BUF`]-sample batches and posts
-/// each batch to the main thread as a *transferred* `Float32Array` buffer
-/// (zero-copy hand-off). Outputs stay zeroed — the node is pinned to the
-/// destination only so the graph pulls it; it contributes silence.
+/// Detach the stream sink and emit any fractional frame once.
+fn seal_capture_stream(cap: &RefCell<Capture>, sample_rate: u32) -> bool {
+    let (tail, sink, lost) = {
+        let mut capture = cap.borrow_mut();
+        if !capture.streaming {
+            return false;
+        }
+        capture.streaming = false;
+        let tail = std::mem::take(&mut capture.frame_accum);
+        let sink = capture.on_frame.take();
+        let lost = std::mem::take(&mut capture.pending_lost)
+            || !capture.pending.is_empty()
+            || (sink.is_none() && !tail.is_empty());
+        capture.pending.clear();
+        (tail, sink, lost)
+    };
+    if let Some(sink) = sink {
+        let bytes = f32_to_s16le(&downsample_to_16k(&tail, sample_rate));
+        if !bytes.is_empty() {
+            sink(wav::base64_encode(&bytes));
+        }
+    }
+    lost
+}
+
+// The worklet transfers 4096-sample batches and contributes silence to its output.
 const CAPTURE_WORKLET_JS: &str = r"
 class AlephCapture extends AudioWorkletProcessor {
   constructor() { super(); this.buf = new Float32Array(4096); this.n = 0; }
@@ -559,7 +636,20 @@ async fn open_worklet_tap(
     bag.set_type("application/javascript");
     let blob = web_sys::Blob::new_with_str_sequence_and_options(parts.as_ref(), &bag)?;
     let url = web_sys::Url::create_object_url_with_blob(&blob)?;
-    let loaded = JsFuture::from(worklet.add_module(&url)?).await;
+    let loaded = match worklet.add_module(&url) {
+        Ok(promise) => match futures::future::select(
+            JsFuture::from(promise),
+            gloo_timers::future::TimeoutFuture::new(WORKLET_LOAD_TIMEOUT_MS),
+        )
+        .await
+        {
+            futures::future::Either::Left((result, _)) => result.map(|_| ()),
+            futures::future::Either::Right(_) => {
+                Err(JsValue::from_str("AudioWorklet module timed out"))
+            }
+        },
+        Err(error) => Err(error),
+    };
     let _ = web_sys::Url::revoke_object_url(&url);
     loaded?;
 
@@ -572,14 +662,14 @@ async fn open_worklet_tap(
         };
         ingest_pcm(&cap_w, &arr.to_vec(), sample_rate, frame_chunk);
     });
-    node.port()?
-        .set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-
-    // Pin into the graph: source → worklet → destination. The destination hop
-    // is what makes the graph pull the worklet (same requirement as the old
-    // ScriptProcessor); its zeroed output contributes silence.
-    source.connect_with_audio_node(&node)?;
+    let port = node.port()?;
+    // The destination pulls the worklet. Its output contributes silence.
     node.connect_with_audio_node(&ctx.destination())?;
+    if let Err(error) = source.connect_with_audio_node(&node) {
+        let _ = node.disconnect();
+        return Err(error);
+    }
+    port.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
 
     Ok(CaptureTap::Worklet {
         node,
@@ -662,12 +752,41 @@ enum Audio {
 /// fallback (no output graph, decode failure, or a remote URL).
 enum Playing {
     /// Buffer source on the output context — `stop()` to interrupt.
-    Buffer(web_sys::AudioBufferSourceNode),
+    Buffer {
+        node: web_sys::AudioBufferSourceNode,
+        _on_ended: Closure<dyn FnMut()>,
+    },
     /// Detached `<audio>` element; `url` is its object URL to revoke on teardown.
     Element {
         el: web_sys::HtmlAudioElement,
         url: Option<String>,
+        _on_ended: Closure<dyn FnMut()>,
     },
+}
+
+impl Playing {
+    fn release(self, interrupt: bool) {
+        match self {
+            Self::Buffer { ref node, .. } => {
+                let sched: &web_sys::AudioScheduledSourceNode = node.unchecked_ref();
+                sched.set_onended(None);
+                if interrupt {
+                    let _ = sched.stop();
+                }
+                let _ = node.disconnect();
+            }
+            Self::Element {
+                ref el, ref url, ..
+            } => {
+                el.set_onended(None);
+                let _ = el.pause();
+                el.set_src("");
+                if let Some(url) = url {
+                    let _ = web_sys::Url::revoke_object_url(url);
+                }
+            }
+        }
+    }
 }
 
 /// Output graph for playback: an `AudioContext` whose analyser sits between the
@@ -697,12 +816,16 @@ pub(crate) struct TtsPlayer {
     on_drained: Rc<dyn Fn()>,
     on_sentence: Rc<dyn Fn(String)>,
     started_any: Rc<RefCell<bool>>,
+    connection_epoch: u64,
+    context_is_current: Box<dyn Fn() -> bool>,
     graph: Option<OutGraph>,
     level_buf: RefCell<Vec<u8>>,
 }
 
 impl TtsPlayer {
     pub(crate) fn new(
+        connection_epoch: u64,
+        context_is_current: impl Fn() -> bool + 'static,
         on_first_audio: impl Fn() + 'static,
         on_drained: impl Fn() + 'static,
         on_sentence: impl Fn(String) + 'static,
@@ -728,6 +851,8 @@ impl TtsPlayer {
             on_drained: Rc::new(on_drained),
             on_sentence: Rc::new(on_sentence),
             started_any: Rc::new(RefCell::new(false)),
+            connection_epoch,
+            context_is_current: Box::new(context_is_current),
             graph,
             level_buf: RefCell::new(vec![0u8; 1024]),
         })
@@ -756,23 +881,7 @@ impl TtsPlayer {
         *self.epoch.borrow_mut() += 1;
         self.queue.borrow_mut().clear();
         if let Some(playing) = self.current.borrow_mut().take() {
-            match playing {
-                Playing::Buffer(node) => {
-                    // set_onended/stop live on the parent AudioScheduledSourceNode
-                    // (the AudioBufferSourceNode copies are deprecated in web-sys).
-                    let sched: &web_sys::AudioScheduledSourceNode = node.unchecked_ref();
-                    sched.set_onended(None);
-                    let _ = sched.stop();
-                }
-                Playing::Element { el, url } => {
-                    el.pause().ok();
-                    el.set_onended(None);
-                    el.set_src("");
-                    if let Some(url) = url {
-                        let _ = web_sys::Url::revoke_object_url(&url);
-                    }
-                }
-            }
+            playing.release(true);
         }
         *self.playing.borrow_mut() = false;
     }
@@ -816,8 +925,36 @@ impl TtsPlayer {
         }
     }
 
+    fn on_clip_ended(self: &Rc<Self>, dash: DashboardState, epoch: u64) -> Closure<dyn FnMut()> {
+        let player = Rc::downgrade(self);
+        Closure::new(move || {
+            let player = player.clone();
+            // Drop the owned closure after its JS callback has returned.
+            spawn_local(async move {
+                if let Some(player) = player.upgrade() {
+                    player.finish_clip(dash, epoch);
+                }
+            });
+        })
+    }
+
+    fn finish_clip(self: &Rc<Self>, dash: DashboardState, epoch: u64) {
+        if !self.is_current(epoch) {
+            return;
+        }
+        if let Some(clip) = self.current.borrow_mut().take() {
+            clip.release(false);
+        }
+        *self.playing.borrow_mut() = false;
+        self.pump(dash);
+    }
+
+    fn is_current(&self, playback_epoch: u64) -> bool {
+        *self.epoch.borrow() == playback_epoch && (self.context_is_current)()
+    }
+
     fn pump(self: &Rc<Self>, dash: DashboardState) {
-        if *self.playing.borrow() {
+        if *self.playing.borrow() || !(self.context_is_current)() {
             return;
         }
         // Pop in its own statement so the queue borrow is released before the
@@ -840,12 +977,11 @@ impl TtsPlayer {
             // openclaw's lesson is provider *fallback*, never a blocking retry.
             // Robustness comes instead from coarser chunking upstream (the
             // splitter merges short sentences → fewer, larger requests).
-            let audio = synthesize(&dash, &sentence).await;
-            // A barge-in / reset / new turn bumped the epoch while we were
-            // synthesizing — drop this clip. Mutating playing/current now would
-            // corrupt the run that superseded us (the stuck-at-thinking and
-            // stale-playback bug).
-            if *this.epoch.borrow() != my_epoch {
+            if !this.is_current(my_epoch) {
+                return;
+            }
+            let audio = synthesize(&dash, this.connection_epoch, &sentence).await;
+            if !this.is_current(my_epoch) {
                 return;
             }
             // Leave "thinking" the instant the first chunk is ready to DELIVER,
@@ -936,7 +1072,7 @@ impl TtsPlayer {
         // do NOT arm the source — it would play over the next run and clobber
         // `current`. Report handled (true) so the caller skips the element
         // fallback instead of playing the stale clip there.
-        if *self.epoch.borrow() != my_epoch {
+        if !self.is_current(my_epoch) {
             return true;
         }
         let Ok(node) = g.ctx.create_buffer_source() else {
@@ -946,33 +1082,24 @@ impl TtsPlayer {
         if node.connect_with_audio_node(&g.analyser).is_err() {
             return false;
         }
-        let this = Rc::clone(self);
-        // Known small leak: `once_into_js` frees itself only when invoked — if
-        // stop_all() stops the source before `ended` fires, one closure leaks per
-        // interrupted sentence. Acceptable for v1.
-        let on_ended = Closure::once_into_js(move || {
-            // Ignore the tail of a run a barge-in/reset already replaced.
-            if *this.epoch.borrow() != my_epoch {
-                return;
-            }
-            *this.playing.borrow_mut() = false;
-            *this.current.borrow_mut() = None;
-            this.pump(dash);
-        });
-        // set_onended/start live on the parent AudioScheduledSourceNode — the
-        // AudioBufferSourceNode copies are deprecated in web-sys.
+        let on_ended = self.on_clip_ended(dash, my_epoch);
         let sched: &web_sys::AudioScheduledSourceNode = node.unchecked_ref();
-        sched.set_onended(Some(on_ended.unchecked_ref()));
+        sched.set_onended(Some(on_ended.as_ref().unchecked_ref()));
         // Start ~50ms ahead instead of "now": a context that was just resume()d
         // can still be ramping its output, and starting a buffer at `currentTime`
         // then drops the leading samples (WKWebView especially) — the reply loses
         // its opening syllables. A small lead-in lets the context settle so the
         // first words are fully audible. 50ms is imperceptible as latency.
         let when = g.ctx.current_time() + 0.05;
+        let clip = Playing::Buffer {
+            node: node.clone(),
+            _on_ended: on_ended,
+        };
         if sched.start_with_when(when).is_err() {
+            clip.release(false);
             return false;
         }
-        *self.current.borrow_mut() = Some(Playing::Buffer(node));
+        *self.current.borrow_mut() = Some(clip);
         true
     }
 
@@ -994,6 +1121,12 @@ impl TtsPlayer {
             return;
         };
         let url = revoke.then(|| src.clone());
+        if !self.is_current(my_epoch) {
+            if let Some(url) = url {
+                let _ = web_sys::Url::revoke_object_url(&url);
+            }
+            return;
+        }
         let Ok(audio_el) = web_sys::HtmlAudioElement::new_with_src(&src) else {
             if let Some(u) = url {
                 let _ = web_sys::Url::revoke_object_url(&u);
@@ -1002,63 +1135,40 @@ impl TtsPlayer {
             self.pump(dash);
             return;
         };
-        let this = Rc::clone(self);
-        let ended_url = url.clone();
-        let on_ended = Closure::once_into_js(move || {
-            // The URL belongs to this clip — revoke unconditionally.
-            if let Some(u) = ended_url {
-                let _ = web_sys::Url::revoke_object_url(&u);
-            }
-            // But do not touch the pump state of a run that replaced us.
-            if *this.epoch.borrow() != my_epoch {
-                return;
-            }
-            *this.playing.borrow_mut() = false;
-            *this.current.borrow_mut() = None;
-            this.pump(dash);
+        let on_ended = self.on_clip_ended(dash, my_epoch);
+        audio_el.set_onended(Some(on_ended.as_ref().unchecked_ref()));
+        let playback = audio_el.play();
+        *self.current.borrow_mut() = Some(Playing::Element {
+            el: audio_el,
+            url,
+            _on_ended: on_ended,
         });
-        audio_el.set_onended(Some(on_ended.unchecked_ref()));
-        // A rejected play() (autoplay policy, decode failure) means `ended`
-        // never fires — without clearing `playing` here the pump wedges and
-        // every later sentence of the reply is silently dropped.
         let this = Rc::clone(self);
-        match audio_el.play() {
-            Ok(promise) => {
-                spawn_local(async move {
-                    if let Err(e) = JsFuture::from(promise).await {
-                        web_sys::console::warn_1(
-                            &format!("voice element playback rejected: {e:?}").into(),
-                        );
-                        if *this.epoch.borrow() != my_epoch {
-                            return;
-                        }
-                        // Reclaim the clip's blob URL — `ended` will never fire.
-                        if let Some(Playing::Element { url: Some(u), .. }) =
-                            this.current.borrow_mut().take()
-                        {
-                            let _ = web_sys::Url::revoke_object_url(&u);
-                        }
-                        *this.playing.borrow_mut() = false;
-                        this.pump(dash);
-                    }
-                });
-            }
-            Err(e) => {
-                web_sys::console::warn_1(&format!("voice element play() failed: {e:?}").into());
-                *self.playing.borrow_mut() = false;
-                *self.current.borrow_mut() = None;
-                self.pump(dash);
-                return;
+        match playback {
+            Ok(promise) => spawn_local(async move {
+                if let Err(error) = JsFuture::from(promise).await {
+                    web_sys::console::warn_1(
+                        &format!("voice element playback rejected: {error:?}").into(),
+                    );
+                    this.finish_clip(dash, my_epoch);
+                }
+            }),
+            Err(error) => {
+                web_sys::console::warn_1(&format!("voice element play() failed: {error:?}").into());
+                self.finish_clip(dash, my_epoch);
             }
         }
-        *self.current.borrow_mut() = Some(Playing::Element { el: audio_el, url });
     }
 }
 
 /// voice.synthesize -> decoded audio. None on failure.
-async fn synthesize(dash: &DashboardState, text: &str) -> Option<Audio> {
+async fn synthesize(dash: &DashboardState, epoch: u64, text: &str) -> Option<Audio> {
     let resp = dash
-        .rpc_call("voice.synthesize", serde_json::json!({ "text": text }))
+        .rpc_call_at_epoch(
+            epoch,
+            "voice.synthesize",
+            serde_json::json!({ "text": text }),
+        )
         .await
         .ok()?;
     let mime = resp
@@ -1091,6 +1201,7 @@ mod frame_tests {
             frame_accum: Vec::new(),
             on_frame: None,
             pending: VecDeque::new(),
+            pending_lost: false,
         }))
     }
 
@@ -1126,10 +1237,38 @@ mod frame_tests {
         let all = seen.borrow();
         assert_eq!(all.len(), n, "one frame per full chunk");
         assert_eq!(pending.len(), PENDING_FRAME_CAP, "backlog stays bounded");
+        assert!(
+            held.borrow().pending_lost,
+            "overflow makes the stream ineligible"
+        );
         assert_eq!(
             pending,
             all[all.len() - PENDING_FRAME_CAP..],
             "backlog is the tail of the live sequence, in order"
+        );
+    }
+
+    #[test]
+    fn capture_clamps_wav_and_seals_the_fractional_stream_frame_once() {
+        let capture = streaming_capture();
+        let delivered = Rc::new(RefCell::new(Vec::new()));
+        {
+            let mut capture = capture.borrow_mut();
+            capture.max_segment = 10;
+            capture.segment = Some(vec![0.5; 8]);
+            let delivered = Rc::clone(&delivered);
+            capture.on_frame = Some(Rc::new(move |frame| delivered.borrow_mut().push(frame)));
+        }
+        ingest_pcm(&capture, &[0.25; 5], 16_000, 3_200);
+        assert_eq!(
+            capture.borrow().segment.as_deref().unwrap(),
+            &[0.5; 8].into_iter().chain([0.25; 2]).collect::<Vec<_>>()
+        );
+        assert!(!seal_capture_stream(&capture, 16_000));
+        assert!(!seal_capture_stream(&capture, 16_000));
+        assert_eq!(
+            &*delivered.borrow(),
+            &[wav::base64_encode(&f32_to_s16le(&[0.25; 5]))]
         );
     }
 

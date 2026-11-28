@@ -13,6 +13,10 @@ use std::collections::{HashMap, HashSet};
 use crate::views::chat::agent_identity::agent_color_for_id;
 use crate::views::chat::state::ChatState;
 
+mod voice_receipt;
+use voice_receipt::VoiceReceipts;
+pub(crate) use voice_receipt::{VoiceReceipt, VoiceRunEnd};
+
 /// Stable client-side conversation identifier. u64 newtype, `Copy`/`Hash`, usable as a `HashMap` key.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ConvId(pub u64);
@@ -46,6 +50,7 @@ pub struct SessionMap {
     pub active: RwSignal<Option<ConvId>>,
     /// `run_id -> ConvId` routing table (Task 2).
     route: RwSignal<HashMap<String, ConvId>>,
+    voice_receipts: StoredValue<VoiceReceipts>,
     /// Per-conversation in-flight run refcount.
     ///
     /// **No longer answers "is this session running"** — [`Self::server_running`]
@@ -102,6 +107,7 @@ impl SessionMap {
             order: RwSignal::new(Vec::new()),
             active: RwSignal::new(None),
             route: RwSignal::new(HashMap::new()),
+            voice_receipts: StoredValue::new(VoiceReceipts::default()),
             running: RwSignal::new(HashMap::new()),
             server_running: RwSignal::new(HashSet::new()),
             server_seq: RwSignal::new(0),

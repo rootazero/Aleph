@@ -1001,7 +1001,7 @@ pub fn subscribe_run_events(
     // (not `expect_context`) because a mount without the directory must still
     // stream normally; it simply never renders a peer echo.
     let user_dir = use_context::<UserDirectoryState>();
-    dashboard.subscribe_events(move |event: GatewayEvent| {
+    let project = Arc::new(move |event: GatewayEvent| {
         if !event.topic.starts_with("run.") {
             return;
         }
@@ -1447,6 +1447,12 @@ pub fn subscribe_run_events(
             }
             _ => {} // Ignore unknown event types
         }
+    });
+    sessions.install_voice_run_projector(project.clone());
+    dashboard.subscribe_events(move |event| {
+        if !sessions.defer_voice_run_event(dash.current_connection_epoch(), &event) {
+            project(event);
+        }
     })
 }
 
@@ -1457,6 +1463,57 @@ mod projection_tests {
     use crate::views::chat::state::{ChatPhase, ChatState};
     use leptos::prelude::Owner;
     use serde_json::json;
+
+    #[test]
+    fn late_voice_receipt_preserves_conversation_and_terminal_projection() {
+        use crate::state::sessions::VoiceRunEnd;
+        let owner = Owner::new();
+        owner.with(|| {
+            let dash = DashboardState::new();
+            dash.is_connected.set(true);
+            dash.connection_epoch.set(7);
+            let chat = ChatState::new();
+            let sessions = SessionMap::new();
+            let a = sessions.start_new(chat, "main", "A");
+            let receipt = sessions.begin_voice_receipt(7, a, None).unwrap();
+            let b = sessions.start_new(chat, "main", "B");
+            let subscription = subscribe_run_events(
+                &dash, sessions, chat, WorkspaceState::new(), CanvasState::new(),
+                || panic!("no trace event in this fixture"),
+            );
+            let emit = |kind: &str, data| dash.dispatch_event(GatewayEvent {
+                topic: format!("run.{kind}"), data,
+            });
+            emit("run_queued", json!({"run_id": "a-run", "session_key": "key-a"}));
+            emit("run_error", json!({"run_id": "a-run", "session_key": "key-a", "error": "rejected", "error_code": "BUSY"}));
+            assert!(chat.session_key.get_untracked().is_none());
+            assert_eq!(sessions.running_count_for(b), 0);
+            assert_eq!(sessions.route_lookup("a-run"), None);
+            assert_eq!(sessions.finish_voice_receipt(Some(7), receipt, chat, "a-run", "key-a"), Ok(Some(VoiceRunEnd::Failed)));
+            assert_eq!(sessions.route_lookup("a-run"), None);
+            assert_eq!(sessions.running_count_for(a), 0);
+            assert!(chat.session_key.get_untracked().is_none());
+            let chat_a = sessions.chat_for(a, chat).unwrap();
+            assert_eq!(chat_a.session_key.get_untracked().as_deref(), Some("key-a"));
+            assert!(chat_a.error_message.get_untracked().is_some());
+            chat_a.error_message.set(None);
+            emit("run_error", json!({"run_id": "a-run", "session_key": "key-a", "error": "rejected"}));
+            assert!(chat_a.error_message.get_untracked().is_none());
+
+            let receipt = sessions.begin_voice_receipt(7, a, Some("key-a".into())).unwrap();
+            emit("run_error", json!({"run_id": "first-error", "session_key": "key-a", "error": "pre-admission rejection"}));
+            assert_eq!(sessions.finish_voice_receipt(Some(7), receipt, chat, "first-error", "key-a"), Ok(Some(VoiceRunEnd::Failed)));
+            assert_eq!(sessions.running_count_for(a), 0);
+            assert!(chat_a.error_message.get_untracked().is_some());
+
+            let receipt = sessions.begin_voice_receipt(7, a, Some("key-a".into())).unwrap();
+            emit("run_error", json!({"run_id": "old-epoch", "session_key": "key-a", "error": "stale"}));
+            assert_eq!(sessions.finish_voice_receipt(Some(8), receipt, chat, "old-epoch", "key-a"), Err(()));
+            assert_eq!(sessions.route_lookup("old-epoch"), None);
+            dash.unsubscribe_events(subscription);
+        });
+        owner.cleanup();
+    }
 
     /// The case the frame exists for: another member of the room typed, and
     /// this viewer is not them.
