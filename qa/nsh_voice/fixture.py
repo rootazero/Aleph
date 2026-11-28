@@ -7,6 +7,7 @@ import math
 import secrets
 import struct
 import threading
+import time
 import wave
 
 from nsh_panel_provider import response as chat_response
@@ -28,7 +29,7 @@ def write_clip(path, profile):
         out.writeframes(bytes(RATE) + tone + bytes(4 * RATE))
 
 
-def chat_events(answer):
+def chat_events(answer, first_sentence=None):
     text = answer["content"][0]["text"]
     events = [
         ("message_start", {"message": answer | {"content": [], "stop_reason": None}}),
@@ -38,16 +39,54 @@ def chat_events(answer):
         ("message_delta", {"delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 8}}),
         ("message_stop", {}),
     ]
-    return "".join(f"event: {kind}\ndata: {json.dumps(body | {'type': kind})}\n\n" for kind, body in events).encode()
+    if first_sentence:
+        events.insert(2, ("content_block_delta", {"index": 0, "delta": {"type": "text_delta", "text": first_sentence}}))
+    return [f"event: {kind}\ndata: {json.dumps(body | {'type': kind})}\n\n".encode() for kind, body in events]
 
 
 class Provider(ThreadingHTTPServer):
-    def __init__(self, audio, delayed=None, scratch=None):
+    QUEUE_MARKERS = ("SIBLING", "QUEUED_SUCCESSOR", "QUEUED", "RUNNING_SUCCESSOR", "RUNNING")
+
+    def __init__(self, audio, delayed=None, scratch=None, progressive=False, empty_transcript=False,
+                 queue_control=None):
         self.audio, self.delayed, self.scratch = audio, delayed, scratch
+        self.progressive = progressive
+        self.empty_transcript = empty_transcript
+        self.queue_control = queue_control
+        self.queue_markers = []
         self.token = secrets.token_hex(32)
         self.attempts, self.lock, self.done = [], threading.Lock(), threading.Event()
         self.overflow = False
         super().__init__(("127.0.0.1", 0), Handler)
+        if queue_control is not None:
+            (queue_control / "status.json").write_text('{"markers": []}\n', encoding="utf-8")
+
+    def admit_queue_request(self, body):
+        """Attribute only the latest user turn, never a marker retained in Chat history."""
+        if self.queue_control is None:
+            return True
+        # Core may wrap the latest turn in a structured content envelope. The
+        # last fixed marker in the complete request still identifies the new
+        # input; selecting the first marker would misattribute retained history.
+        encoded = json.dumps(body).encode()
+        occurrences = [(encoded.rfind(f"VOICE_QA_{name}".encode()), name) for name in self.QUEUE_MARKERS]
+        occurrences = [(position, name) for position, name in occurrences if position >= 0]
+        marker = max(occurrences)[1] if occurrences else None
+        if marker is None:
+            return True
+        with self.lock:
+            self.queue_markers.append(marker)
+            temporary = self.queue_control / f"status-{threading.get_ident()}.tmp"
+            temporary.write_text(json.dumps({"markers": self.queue_markers}) + "\n", encoding="utf-8")
+            temporary.replace(self.queue_control / "status.json")
+        if marker not in ("SIBLING", "RUNNING"):
+            return True
+        deadline = time.monotonic() + 15
+        release = self.queue_control / f"release-{marker}"
+        while not release.exists() and time.monotonic() < deadline:
+            if self.done.wait(0.05):
+                return False
+        return release.exists()
 
     def get_request(self):
         sock, address = super().get_request()
@@ -93,21 +132,29 @@ class Handler(BaseHTTPRequestHandler):
         if len(raw) != size:
             return
         mime = "application/json"
+        cutoff = None
         try:
             if kind == "stt":
                 if not self.headers.get("Content-Type", "").startswith("multipart/form-data;") or b"RIFF" not in raw:
                     raise ValueError
-                payload = json.dumps({"text": TRANSCRIPT}).encode()
+                payload = json.dumps({"text": "" if self.server.empty_transcript else TRANSCRIPT}).encode()
             elif kind == "tts":
                 if not isinstance(json.loads(raw).get("input"), str):
                     raise ValueError
                 mime, payload = "audio/mpeg", self.server.audio
             else:
                 body = json.loads(raw)
+                if not self.server.admit_queue_request(body):
+                    self.send_error(503)
+                    return
                 # Reuse the S9 provider's deterministic reply without its artifact-tool branch.
                 answer = chat_response({"model": body.get("model", "phase9-qa")})
                 if body.get("stream"):
-                    mime, payload = "text/event-stream", chat_events(answer)
+                    first = "The first reply is ready. " if self.server.progressive else None
+                    chunks = chat_events(answer, first)
+                    mime, payload = "text/event-stream", b"".join(chunks)
+                    if first:
+                        cutoff = sum(map(len, chunks[:3]))
                 else:
                     payload = json.dumps(answer).encode()
         except (AttributeError, ValueError):
@@ -123,7 +170,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", mime)
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
-            self.wfile.write(payload)
+            if cutoff is not None:
+                self.wfile.write(payload[:cutoff])
+                self.wfile.flush()
+                if self.server.done.wait(2):
+                    return
+                self.wfile.write(payload[cutoff:])
+            else:
+                self.wfile.write(payload)
         except (ConnectionError, TimeoutError):
             return
         with self.server.lock:
