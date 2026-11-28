@@ -60,6 +60,10 @@ impl Budget {
         }
     }
 
+    pub fn remaining(&self) -> Duration {
+        self.deadline.saturating_duration_since(Instant::now())
+    }
+
     /// Has the budget run out?
     #[must_use]
     pub fn spent(&self) -> bool {

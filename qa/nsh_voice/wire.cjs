@@ -56,6 +56,9 @@ function decode(payload, direction, socket, at = performance.now(), classic = fa
       loopbackOperator: r?.authorized === true && r?.role === 'operator' && r?.needs_token === false &&
         r?.device_token == null && r?.device_id == null && r?.user_id == null,
       streamingDisabled: r?.stream_id === null,
+      streamId: digest(direction === 'sent' ? p?.stream_id : r?.stream_id ?? body?.stream_id),
+      audioAdmission: r?.accepted,
+      caption: typeof body?.delta?.committed === 'string' && body.delta.committed.length > 0,
     } : {}),
   };
 }
@@ -115,4 +118,4 @@ function stats(samples) {
   return { n: values.length, p50_ms: p(0.5), p95_ms: p(0.95) };
 }
 
-module.exports = { TRANSCRIBE, SYNTHESIZE, CANCEL, FORBIDDEN, MAX_PCM, decode, observe, requests, replies, runEvents, events, traffic, stats };
+module.exports = { TRANSCRIBE, SYNTHESIZE, CANCEL, FORBIDDEN, MAX_PCM, digest, decode, observe, requests, replies, runEvents, events, traffic, stats };

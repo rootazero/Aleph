@@ -18,6 +18,7 @@
 //! and needs no extra dependency.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use aleph_desktop::platform::EscapeAbort;
 use aleph_desktop::Result;
@@ -31,6 +32,8 @@ pub struct LinuxEscapeListener {
     /// Absolute path of the abort sentinel; `None` when `$HOME` is unset, in
     /// which case the listener degrades to a no-op (never aborts).
     sentinel: Option<PathBuf>,
+    armed: AtomicBool,
+    generation: AtomicU64,
 }
 
 impl LinuxEscapeListener {
@@ -39,6 +42,8 @@ impl LinuxEscapeListener {
     pub fn new() -> Self {
         Self {
             sentinel: resolve_sentinel_path(),
+            armed: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
         }
     }
 
@@ -46,7 +51,11 @@ impl LinuxEscapeListener {
     /// of resolving `$HOME`.
     #[cfg(test)]
     const fn for_test(sentinel: Option<PathBuf>) -> Self {
-        Self { sentinel }
+        Self {
+            sentinel,
+            armed: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
+        }
     }
 
     /// Remove the sentinel file if present; a missing file is not an error.
@@ -81,7 +90,8 @@ impl EscapeAbort for LinuxEscapeListener {
         if let Some(path) = &self.sentinel {
             // Clear any stale sentinel left over from a previous run so a
             // fresh session does not start out already "aborted".
-            self.remove_sentinel();
+            self.reset();
+            self.armed.store(true, Ordering::SeqCst);
             debug!(
                 path = %path.display(),
                 "Linux escape listener armed — `touch` this file to abort desktop control"
@@ -93,7 +103,8 @@ impl EscapeAbort for LinuxEscapeListener {
     }
 
     fn stop(&self) {
-        self.remove_sentinel();
+        self.armed.store(false, Ordering::SeqCst);
+        self.reset();
     }
 
     fn is_aborted(&self) -> bool {
@@ -101,7 +112,14 @@ impl EscapeAbort for LinuxEscapeListener {
     }
 
     fn reset(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
         self.remove_sentinel();
+    }
+
+    fn abort_generation(&self) -> Option<u64> {
+        self.armed
+            .load(Ordering::SeqCst)
+            .then(|| self.generation.load(Ordering::SeqCst))
     }
 }
 

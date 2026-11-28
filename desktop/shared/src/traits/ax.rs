@@ -7,8 +7,9 @@
 use async_trait::async_trait;
 
 use aleph_protocol::desktop_bridge::methods::ax::{
-    AxActionResult, AxElement, PerformActionParams, QueryByRoleParams, QueryFocusedParams,
-    QueryListResult, QueryResult, QueryTreeParams, SetValueParams,
+    AxActionResult, AxElement, AxReferenceAction, AxReferenceError, AxReferenceSnapshot,
+    AxSnapshotRequest, PerformActionParams, QueryByRoleParams, QueryFocusedParams, QueryListResult,
+    QueryResult, QueryTreeParams, SetValueParams,
 };
 
 use crate::error::Result;
@@ -65,6 +66,27 @@ pub trait AccessibilityCapability: Send + Sync {
     /// budget bounds the *search*, so a truncated result means there may be
     /// further matches beyond the ones returned.
     async fn query_by_role(&self, params: QueryByRoleParams) -> Result<QueryListResult>;
+
+    /// Observe a bounded scope and lease the returned native actionable elements.
+    async fn snapshot_references(
+        &self,
+        _request: AxSnapshotRequest,
+    ) -> Result<AxReferenceSnapshot> {
+        Err(crate::DesktopError::AxReference {
+            code: AxReferenceError::ReferenceUnsupported,
+            message: "The desktop driver does not support native AX references".into(),
+        })
+    }
+
+    /// Revalidate and mutate the same live object leased by `snapshot_references`.
+    /// Once an action is handed off, resolve this future only after the native
+    /// request has settled or the driver has made further dispatch impossible.
+    async fn act_on_reference(&self, _request: AxReferenceAction) -> Result<AxActionResult> {
+        Err(crate::DesktopError::AxReference {
+            code: AxReferenceError::ReferenceUnsupported,
+            message: "The desktop driver does not support native AX references".into(),
+        })
+    }
 
     /// Write `params.value` into the located element's `AXValue` attribute
     /// and read it back for verification. Platforms without a semantic

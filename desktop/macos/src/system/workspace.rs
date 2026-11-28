@@ -69,23 +69,28 @@ pub fn list_running_apps() -> Result<Vec<AppInfo>> {
 
 /// Read evidence from the same native app object; do not join independent
 /// app-list and PID observations.
-pub(super) fn desktop_process_identity(requested_pid: i32) -> Option<DesktopProcessIdentity> {
-    if requested_pid <= 0 {
-        return None;
+pub(super) fn desktop_process_identity(
+    requested_pid: i32,
+) -> aleph_desktop::Result<Option<DesktopProcessIdentity>> {
+    let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(requested_pid)
+    else {
+        return Ok(None);
+    };
+    if app.isTerminated() {
+        return Ok(None);
     }
-    let app = NSRunningApplication::runningApplicationWithProcessIdentifier(requested_pid)?;
     let pid = app.processIdentifier();
     let bundle_id = app.bundleIdentifier().map(|id| id.to_string());
     let launch_time = app
         .launchDate()
         .map(|date| date.timeIntervalSinceReferenceDate());
-    identity_from_evidence(
-        requested_pid,
-        pid,
-        bundle_id,
-        launch_time,
-        app.isTerminated(),
-    )
+    identity_from_evidence(requested_pid, pid, bundle_id, launch_time, false)
+        .map(Some)
+        .ok_or_else(|| {
+            aleph_desktop::DesktopError::NotAvailable(
+                "Native identity evidence is unavailable for the running process".into(),
+            )
+        })
 }
 
 fn identity_from_evidence(

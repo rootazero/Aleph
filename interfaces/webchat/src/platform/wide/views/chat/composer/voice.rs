@@ -731,7 +731,7 @@ pub(super) fn VoiceInputButton(
                 );
             }
             PointerUpAction::OpenVoiceMode => {
-                voice_mode.open.set(true);
+                voice_mode.set_open(true);
             }
             PointerUpAction::Ignored => {}
         }
@@ -763,7 +763,7 @@ pub(super) fn VoiceInputButton(
                 );
             }
             PointerUpAction::OpenVoiceMode => {
-                voice_mode.open.set(true);
+                voice_mode.set_open(true);
             }
             PointerUpAction::Ignored => {}
         }

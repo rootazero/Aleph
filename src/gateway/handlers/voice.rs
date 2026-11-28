@@ -445,11 +445,8 @@ pub async fn handle_stream_start(
 /// megabytes per call into the relay.
 const MAX_PCM_FRAME_BYTES: usize = 64 * 1024;
 
-/// `voice.stream.audio` — params `{ stream_id: String, pcm_base64: String }` → `{}`.
-///
-/// Pushes one s16le PCM frame into the backend session. An unknown or already
-/// closed `stream_id` is a silent no-op (the stream may have just stopped) —
-/// never an error.
+/// `voice.stream.audio` accepts optional `ack: true` for relay admission.
+/// Empty frames and unknown or foreign streams retain the empty response.
 pub async fn handle_stream_audio(
     request: JsonRpcRequest,
     registry: Arc<StreamRegistry>,
@@ -458,6 +455,8 @@ pub async fn handle_stream_audio(
     struct Params {
         stream_id: String,
         pcm_base64: String,
+        #[serde(default)]
+        ack: bool,
     }
     let params: Params = match parse_params(&request) {
         Ok(p) => p,
@@ -495,22 +494,22 @@ pub async fn handle_stream_audio(
     if !registry.caller_may_act_on_known_id(&params.stream_id).await {
         return JsonRpcResponse::success(request.id, serde_json::json!({}));
     }
-    if let Some(tx) = registry.audio_sender(&params.stream_id).await {
-        // `try_send`, never `send().await`: this is realtime audio. A backend
-        // that stops draining (wedged ASR server, TCP backpressure) would
-        // otherwise park this RPC — and pile up every later frame behind it —
-        // while the channel already holds seconds of stale audio. Dropping the
-        // newest frame is the correct realtime degradation: the utterance loses
-        // a slice, the session survives. A closed channel stays a silent no-op
-        // (the Panel is about to stop the stream anyway).
-        if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) = tx.try_send(bytes) {
-            tracing::debug!(
-                stream_id = %params.stream_id,
-                "voice stream backend is not draining — dropped a PCM frame"
-            );
-        }
+    let Some(tx) = registry.audio_sender(&params.stream_id).await else {
+        return JsonRpcResponse::success(request.id, serde_json::json!({}));
+    };
+    let result = tx.try_send(bytes);
+    if matches!(result, Err(tokio::sync::mpsc::error::TrySendError::Full(_))) {
+        tracing::debug!(
+            stream_id = %params.stream_id,
+            "voice stream backend is not draining — dropped a PCM frame"
+        );
     }
-    JsonRpcResponse::success(request.id, serde_json::json!({}))
+    let reply = if params.ack {
+        serde_json::json!({ "accepted": result.is_ok() })
+    } else {
+        serde_json::json!({})
+    };
+    JsonRpcResponse::success(request.id, reply)
 }
 
 /// `voice.stream.stop` — params `{ stream_id: String }` → `{}`.
@@ -634,6 +633,46 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "nothing may be forwarded to the backend"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_audio_ack_reports_admission_without_changing_legacy_replies() {
+        let registry = Arc::new(StreamRegistry::default());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let id = registry.insert(tx).await;
+        let request = |id: &str, ack: bool| {
+            JsonRpcRequest::with_id(
+                "voice.stream.audio",
+                Some(serde_json::json!({
+                    "stream_id": id,
+                    "pcm_base64": BASE64.encode([1, 2]),
+                    "ack": ack,
+                })),
+                serde_json::json!(1),
+            )
+        };
+        let send = |id: &str, ack: bool| handle_stream_audio(request(id, ack), registry.clone());
+
+        assert_eq!(
+            send(&id, true).await.result,
+            Some(serde_json::json!({"accepted": true}))
+        );
+        assert_eq!(
+            send(&id, true).await.result,
+            Some(serde_json::json!({"accepted": false}))
+        );
+        assert_eq!(send(&id, false).await.result, Some(serde_json::json!({})));
+        assert_eq!(rx.try_recv().unwrap(), vec![1, 2]);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            send("unknown", true).await.result,
+            Some(serde_json::json!({}))
+        );
+        drop(rx);
+        assert_eq!(
+            send(&id, true).await.result,
+            Some(serde_json::json!({"accepted": false}))
         );
     }
 

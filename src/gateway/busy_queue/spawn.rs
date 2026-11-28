@@ -55,7 +55,7 @@ tokio::task_local! {
     static PAIRED_SHELL_RUN: Option<PairedShellRun>;
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn paired_shell_owners_for_run(
     request: &RunRequest,
 ) -> Option<(PairedShellOrigin, PanelShellOwners)> {
@@ -161,6 +161,7 @@ pub async fn spawn_queued_chat_run<P, R, E>(
     locale: Locale,
     label: &'static str,
     manager: &AgentRunManager,
+    owners: Option<PanelShellOwners>,
 ) where
     P: crate::thinker::ProviderRegistry + 'static,
     R: crate::executor::ToolRegistry + 'static,
@@ -169,8 +170,9 @@ pub async fn spawn_queued_chat_run<P, R, E>(
     // Keep arrival order: take the ticket before waiting on the manager's run map.
     let ticket = register_queue_ticket(&request, cfg.max_per_session);
     let managed = manager.bind_queued_chat_run(&request).await;
+    let paired_run = owners.and_then(|owners| PairedShellRun::capture(&request, owners));
     spawn_registered_run(
-        engine, request, agent, emitter, cfg, locale, label, ticket, managed, None,
+        engine, request, agent, emitter, cfg, locale, label, ticket, managed, paired_run,
     );
 }
 

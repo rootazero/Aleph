@@ -118,6 +118,12 @@ async fn assert_shell_origin(_native: bool) {
             let account_store = account_store.clone();
             async move {
                 let captured = current_paired_shell_origin();
+                if matches!(req.id.as_ref().and_then(Value::as_str), Some("attached" | "legacy")) {
+                    crate::gateway::execution_engine::assert_exact_chat_worker_origin(
+                        captured.is_some(),
+                    )
+                    .await;
+                }
                 let bound = match captured {
                     Some(binding) => {
                         *saved_origin.lock().unwrap() = Some(binding.clone());

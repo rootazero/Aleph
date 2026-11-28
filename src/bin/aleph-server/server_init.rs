@@ -538,6 +538,7 @@ where
             locale,
             "Chat run",
             &run_manager,
+            shell_owners,
         )
         .await;
     } else {

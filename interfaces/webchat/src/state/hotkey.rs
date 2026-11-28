@@ -98,7 +98,7 @@ pub fn install(state: HotkeyState) {
         let is_pc_combo = ev.ctrl_key() && ev.alt_key() && ev.key().eq_ignore_ascii_case("v");
         if is_mac_combo || is_pc_combo {
             ev.prevent_default();
-            state.voice.open.update(|o| *o = !*o);
+            state.voice.set_open(!state.voice.open.get_untracked());
             return;
         }
 
@@ -107,7 +107,7 @@ pub fn install(state: HotkeyState) {
         // below and in `app.rs` don't also fire on the same press.
         if ev.key() == "Escape" && state.voice.open.get_untracked() {
             ev.prevent_default();
-            state.voice.open.set(false);
+            state.voice.set_open(false);
             return;
         }
 

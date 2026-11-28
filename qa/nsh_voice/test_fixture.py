@@ -85,6 +85,22 @@ class TestVoiceFixture(unittest.TestCase):
             self.assertNotIn('private fixture', json.dumps(provider.attempts))
             self.assertNotIn(provider.token, json.dumps(provider.attempts))
 
+    def test_queue_marker_comes_from_latest_turn_not_retained_history(self):
+        with tempfile.TemporaryDirectory() as tmp, Provider(b'synthetic', queue_control=Path(tmp)) as provider:
+            body = {'messages': [
+                {'role': 'user', 'content': 'VOICE_QA_SIBLING'},
+                {'role': 'assistant', 'content': 'VOICE_QA_RUNNING'},
+                {'role': 'user', 'content': 'VOICE_QA_QUEUED_SUCCESSOR'},
+            ]}
+            self.assertTrue(provider.admit_queue_request(body))
+            self.assertEqual(provider.queue_markers, ['QUEUED_SUCCESSOR'])
+            self.assertEqual(json.loads((Path(tmp) / 'status.json').read_text()),
+                             {'markers': ['QUEUED_SUCCESSOR']})
+            (Path(tmp) / 'release-RUNNING').touch()
+            body['messages'][-1]['content'] = 'VOICE_QA_SIBLING then VOICE_QA_RUNNING'
+            self.assertTrue(provider.admit_queue_request(body))
+            self.assertEqual(provider.queue_markers, ['QUEUED_SUCCESSOR', 'RUNNING'])
+
     def test_delayed_provider_marks_actual_inflight_request_before_reply(self):
         with tempfile.TemporaryDirectory() as tmp, Provider(b'synthetic', 'tts', Path(tmp)) as provider:
             worker = threading.Thread(target=provider.serve_forever, daemon=True)

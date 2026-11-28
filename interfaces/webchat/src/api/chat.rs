@@ -1,6 +1,6 @@
 //! Chat API — wraps chat.send / chat.abort / chat.history / chat.clear RPC methods.
 
-use crate::context::DashboardState;
+use crate::context::{DashboardState, RpcFailure};
 use aleph_protocol::queue::PendingRun;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -253,6 +253,7 @@ pub fn parse_history_last_run(result: &Value) -> Option<aleph_protocol::LastRunS
 pub struct ChatApi;
 
 impl ChatApi {
+    pub(crate) const SEND_METHOD: &str = "chat.send";
     /// Model choices available to the current member, not the admin catalog.
     pub async fn models(
         state: &DashboardState,
@@ -302,6 +303,78 @@ impl ChatApi {
         dials: &shared_ui_logic::state::SendDials,
         voice_input: bool,
     ) -> Result<ChatSendResponse, String> {
+        let params = Self::send_params(
+            message,
+            session_key,
+            attachments,
+            agent_id,
+            project_root,
+            project_id,
+            model_override,
+            dials,
+            voice_input,
+        )?;
+        Self::decode_send(state.rpc_call(Self::SEND_METHOD, params).await?)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn send_voice_at_epoch(
+        state: &DashboardState,
+        epoch: u64,
+        message: &str,
+        session_key: Option<&str>,
+        agent_id: Option<&str>,
+        project_root: Option<&str>,
+        project_id: Option<&str>,
+        model_override: Option<&crate::api::providers::ModelOverride>,
+        dials: &shared_ui_logic::state::SendDials,
+    ) -> Result<ChatSendResponse, RpcFailure> {
+        let mut params = Self::send_params(
+            message,
+            session_key,
+            Vec::new(),
+            agent_id,
+            project_root,
+            project_id,
+            model_override,
+            dials,
+            true,
+        )
+        .map_err(RpcFailure::local)?;
+        params["run_only"] = Value::Bool(true);
+        let result = state
+            .rpc_call_at_epoch_with_code(epoch, Self::SEND_METHOD, params)
+            .await?;
+        Self::decode_send(result).map_err(RpcFailure::local)
+    }
+
+    pub(crate) async fn abort_voice_at_epoch(
+        state: &DashboardState,
+        epoch: u64,
+        run_id: &str,
+    ) -> Result<(), RpcFailure> {
+        state
+            .rpc_call_at_epoch_with_code(
+                epoch,
+                "chat.abort",
+                serde_json::json!({"run_id": run_id, "run_only": true}),
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn send_params(
+        message: &str,
+        session_key: Option<&str>,
+        attachments: Vec<ChatAttachment>,
+        agent_id: Option<&str>,
+        project_root: Option<&str>,
+        project_id: Option<&str>,
+        model_override: Option<&crate::api::providers::ModelOverride>,
+        dials: &shared_ui_logic::state::SendDials,
+        voice_input: bool,
+    ) -> Result<Value, String> {
         let total_base64: usize = attachments.iter().map(|a| a.data_base64.len()).sum();
         if total_base64 > ATTACHMENT_TOTAL_CAP {
             return Err(format!(
@@ -320,7 +393,7 @@ impl ChatApi {
             })
             .collect();
 
-        let params = serde_json::json!({
+        Ok(serde_json::json!({
             "message": message,
             "session_key": session_key,
             "channel": "gui:chat",
@@ -342,8 +415,10 @@ impl ChatApi {
             "thinking": dials.thinking,
             "memory": dials.memory,
             "voice_input": voice_input,
-        });
-        let result = state.rpc_call("chat.send", params).await?;
+        }))
+    }
+
+    fn decode_send(result: Value) -> Result<ChatSendResponse, String> {
         let resp: ChatSendResponse = serde_json::from_value(result).map_err(|e| e.to_string())?;
         // The single producer of "runs this Panel started" (see `OWN_RUNS`).
         // Recorded here rather than at the send sites so a new one cannot be

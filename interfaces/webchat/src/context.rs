@@ -224,7 +224,7 @@ pub struct RpcFailure {
 impl RpcFailure {
     /// A failure this client minted itself — never carries a code, by
     /// construction, so it can never impersonate a server verdict.
-    fn local(message: impl Into<String>) -> Self {
+    pub(crate) fn local(message: impl Into<String>) -> Self {
         Self {
             code: None,
             message: message.into(),
@@ -1589,7 +1589,29 @@ impl DashboardState {
         Err(last.into_message())
     }
 
-    fn current_connection_epoch(&self) -> Option<u64> {
+    pub(crate) async fn subscribe_topic_at_epoch(
+        &self,
+        epoch: u64,
+        pattern: &str,
+    ) -> Result<(), String> {
+        let ledger = self.subscribed_topics.with_value(std::clone::Clone::clone);
+        let result = subscribe_recorded(
+            &ledger,
+            (pattern.to_owned(), Vec::new()),
+            epoch,
+            || self.current_connection_epoch(),
+            self.rpc_call_at_epoch_with_code(
+                epoch,
+                "events.subscribe",
+                topics_request(pattern, &[]),
+            ),
+        )
+        .await;
+        log_subscribe_diagnostic(pattern, &result);
+        result.map_err(SubscribeError::into_message)
+    }
+
+    pub(crate) fn current_connection_epoch(&self) -> Option<u64> {
         self.is_connected
             .try_get_untracked()
             .unwrap_or(false)
@@ -1913,12 +1935,21 @@ impl DashboardState {
         method: &str,
         params: Value,
     ) -> Result<Value, String> {
-        if self.current_connection_epoch() != Some(epoch) {
-            return Err("Gateway connection changed".into());
-        }
-        self.send_rpc(method, params)
+        self.rpc_call_at_epoch_with_code(epoch, method, params)
             .await
-            .map_err(|error| error.message)
+            .map_err(|failure| failure.message)
+    }
+
+    pub(crate) async fn rpc_call_at_epoch_with_code(
+        &self,
+        epoch: u64,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, RpcFailure> {
+        if self.current_connection_epoch() != Some(epoch) {
+            return Err(RpcFailure::local("Gateway connection changed"));
+        }
+        self.send_rpc(method, params).await
     }
 
     #[cfg(feature = "panel-modular")]
@@ -2118,7 +2149,11 @@ impl DashboardState {
         // the request and then never replies without closing the socket,
         // converting an infinite spinner into a surfaced, retryable error.
         use futures::future::{select, Either};
-        match select(response_rx, TimeoutFuture::new(30_000)).await {
+        #[cfg(all(test, not(target_arch = "wasm32")))]
+        let timeout = std::future::pending::<()>();
+        #[cfg(not(all(test, not(target_arch = "wasm32"))))]
+        let timeout = TimeoutFuture::new(30_000);
+        match select(response_rx, timeout).await {
             Either::Left((res, _)) => {
                 res.map_err(|e| RpcFailure::local(format!("Response channel closed: {e}")))?
             }
@@ -3335,6 +3370,80 @@ pub(crate) mod tests {
     };
     use leptos::prelude::{GetUntracked, GetValue, Set, Update};
     use std::collections::BTreeSet;
+
+    #[test]
+    fn voice_rpc_params_and_epoch_use_the_actual_queue() {
+        use crate::api::chat::ChatApi;
+        use futures::{FutureExt, StreamExt};
+        use leptos::prelude::SetValue;
+        let owner = leptos::prelude::Owner::new();
+        owner.with(|| {
+            let state = super::DashboardState::new();
+            let (tx, mut rx) = futures::channel::mpsc::unbounded();
+            state.rpc_tx.set_value(Some(tx));
+            state.is_connected.set(true);
+            state.connection_epoch.set(9);
+            let dials = shared_ui_logic::state::SendDials {
+                exec_tier: Some("safe".into()),
+                thinking: Some("low".into()),
+                ..Default::default()
+            };
+            assert_eq!(
+                ChatApi::send_voice_at_epoch(
+                    &state, 8, "hello", None, None, None, None, None, &dials
+                )
+                .now_or_never()
+                .unwrap()
+                .unwrap_err()
+                .message,
+                "Gateway connection changed",
+            );
+            assert!(rx.try_recv().is_err());
+            let send = ChatApi::send_voice_at_epoch(
+                &state,
+                9,
+                "hello",
+                Some("session"),
+                Some("agent"),
+                None,
+                Some("project"),
+                None,
+                &dials,
+            );
+            let abort = ChatApi::abort_voice_at_epoch(&state, 9, "run");
+            futures::executor::block_on(async {
+                let (reply, ()) = futures::join!(send, async {
+                    let req = rx.next().await.unwrap();
+                    assert_eq!(req.method, ChatApi::SEND_METHOD);
+                    assert_eq!(req.params["voice_input"], true);
+                    assert_eq!(req.params["run_only"], true);
+                    assert_eq!(req.params["project_id"], "project");
+                    assert_eq!(req.params["session_key"], "session");
+                    assert_eq!(req.params["agent_id"], "agent");
+                    assert_eq!(req.params["exec_tier"], "safe");
+                    assert_eq!(req.params["thinking"], "low");
+                    req.response_tx
+                        .send(Err(super::RpcFailure {
+                            code: Some(-32602),
+                            message: "test refusal".into(),
+                        }))
+                        .unwrap();
+                });
+                assert_eq!(reply.unwrap_err().code, Some(-32602));
+                let (reply, ()) = futures::join!(abort, async {
+                    let req = rx.next().await.unwrap();
+                    assert_eq!(req.method, "chat.abort");
+                    assert_eq!(
+                        req.params,
+                        serde_json::json!({"run_id": "run", "run_only": true})
+                    );
+                    req.response_tx.send(Ok(serde_json::Value::Null)).unwrap();
+                });
+                reply.unwrap();
+            });
+        });
+        owner.cleanup();
+    }
 
     #[test]
     fn recorded_gateway_queue_wire_reaches_production_chat_projection() {

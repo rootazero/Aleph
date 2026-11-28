@@ -502,6 +502,7 @@ mod tests {
     fn call_tool_params_use_camel_case_on_the_wire() {
         let params = PluginCallToolParams {
             plugin_id: "diagnostics".into(),
+            selector: None,
             handler: "system_health".into(),
             args: serde_json::json!({"verbose": true}),
         };

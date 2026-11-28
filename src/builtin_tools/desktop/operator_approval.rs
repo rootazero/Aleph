@@ -175,22 +175,45 @@ impl ApprovedDesktopAction {
     }
 }
 
+struct InvocationScope {
+    approval: RefCell<Option<Box<DesktopApprovalInvocation>>>,
+    cancel: CancellationToken,
+    deadline: tokio::time::Instant,
+}
+
 tokio::task_local! {
-    static INVOCATION: RefCell<Option<Box<DesktopApprovalInvocation>>>;
+    static INVOCATION: InvocationScope;
 }
 
 pub(crate) async fn scope_desktop_approval<F: Future>(
-    invocation: Option<Box<DesktopApprovalInvocation>>,
+    approval: Option<Box<DesktopApprovalInvocation>>,
+    cancel: CancellationToken,
+    deadline: tokio::time::Instant,
     handler: F,
 ) -> F::Output {
-    INVOCATION.scope(RefCell::new(invocation), handler).await
+    INVOCATION
+        .scope(
+            InvocationScope {
+                approval: RefCell::new(approval),
+                cancel,
+                deadline,
+            },
+            handler,
+        )
+        .await
+}
+
+pub(super) fn current_dispatch_deadline() -> Option<(CancellationToken, tokio::time::Instant)> {
+    INVOCATION
+        .try_with(|scope| (scope.cancel.clone(), scope.deadline))
+        .ok()
 }
 
 /// Only the outer desktop invocation can claim the context. Its child actions
 /// (batch or script) cannot rediscover it while that invocation is held open.
 pub(crate) fn take_desktop_approval() -> Option<Box<DesktopApprovalInvocation>> {
     INVOCATION
-        .try_with(|invocation| invocation.borrow_mut().take())
+        .try_with(|scope| scope.approval.borrow_mut().take())
         .ok()
         .flatten()
 }

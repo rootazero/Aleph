@@ -5,17 +5,21 @@
 //! helper — the Rust side only marshals JSON in and out.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tracing::debug;
 
+use aleph_desktop::bridge::client::{map_bridge_method_error, rpc_timeout_for, BridgeRemoteReply};
 use aleph_desktop::traits::AccessibilityCapability;
-use aleph_desktop::{DesktopError, Result, SwiftBridge};
+use aleph_desktop::{CancellationToken, DesktopError, Result, SwiftBridge};
+use aleph_protocol::desktop_bridge::errors::{ERR_AX_REFERENCE, ERR_PERMISSION_DENIED};
 use aleph_protocol::desktop_bridge::methods::ax::{
-    clamp_max_nodes, AxActionResult, AxElement, PerformActionParams, QueryByRoleParams,
+    clamp_max_nodes, AxActionResult, AxElement, AxMutation, AxReferenceAction, AxReferenceError,
+    AxReferenceSnapshot, AxSnapshotRequest, PerformActionParams, QueryByRoleParams,
     QueryFocusedParams, QueryListResult, QueryResult, QueryTreeParams, SetValueParams,
-    METHOD_PERFORM_ACTION, METHOD_QUERY_BY_ROLE, METHOD_QUERY_FOCUSED, METHOD_QUERY_TREE,
-    METHOD_SET_VALUE,
+    METHOD_ACT_ON_REFERENCE, METHOD_PERFORM_ACTION, METHOD_QUERY_BY_ROLE, METHOD_QUERY_FOCUSED,
+    METHOD_QUERY_TREE, METHOD_SET_VALUE, METHOD_SNAPSHOT_REFERENCES,
 };
 
 /// `AccessibilityCapability` implementation backed by the Swift helper.
@@ -27,6 +31,77 @@ impl BridgeAccessibility {
     /// Build a new `BridgeAccessibility` that issues RPC calls via `bridge`.
     pub const fn new(bridge: Arc<SwiftBridge>) -> Self {
         Self { bridge }
+    }
+
+    async fn act_on_reference_with_timeout(
+        &self,
+        action: AxReferenceAction,
+        timeout: Duration,
+    ) -> Result<AxActionResult> {
+        let bridge = Arc::clone(&self.bridge);
+        // The worker owns the receiver once admitted. Dropping the caller does
+        // not drop the bound dispatch or make its pending AX effect disappear.
+        tokio::spawn(async move {
+            let is_set_value = matches!(&action.mutation, AxMutation::SetValue { .. });
+            let mut definitive = None;
+            let transport = bridge
+                .call_bound(
+                    METHOD_ACT_ON_REFERENCE,
+                    action,
+                    timeout,
+                    &CancellationToken::new(),
+                    |reply| {
+                        definitive = definitive_ax_reply(reply, is_set_value);
+                        definitive.is_some()
+                    },
+                )
+                .await;
+            match transport {
+                Ok(_) => definitive.unwrap_or_else(|| Err(unsettled_ax_outcome())),
+                Err(err @ (DesktopError::BridgeBackoff(_) | DesktopError::BridgeDisabled(_))) => {
+                    Err(err)
+                }
+                Err(_) => Err(unsettled_ax_outcome()),
+            }
+        })
+        .await
+        .map_err(|_| unsettled_ax_outcome())?
+    }
+}
+
+fn unsettled_ax_outcome() -> DesktopError {
+    DesktopError::AxReference {
+        code: AxReferenceError::NativeActionUnsettled,
+        message: "The application may still be processing the AX mutation.".into(),
+    }
+}
+
+fn definitive_ax_reply(
+    reply: &BridgeRemoteReply,
+    is_set_value: bool,
+) -> Option<Result<AxActionResult>> {
+    match reply {
+        Ok(value) => {
+            let action: AxActionResult = serde_json::from_value(value.clone()).ok()?;
+            let valid_verification = match (&action.verification, is_set_value) {
+                (Some(verification), true) => {
+                    matches!(verification.state.as_str(), "verified" | "unverified")
+                }
+                (None, false) => true,
+                _ => false,
+            };
+            (action.performed && action.path == "accessibility" && valid_verification)
+                .then_some(Ok(action))
+        }
+        Err(error) => {
+            let mapped = map_bridge_method_error(METHOD_ACT_ON_REFERENCE, error.clone());
+            match (error.code, &mapped) {
+                (ERR_AX_REFERENCE, DesktopError::AxReference { .. })
+                | (ERR_PERMISSION_DENIED, DesktopError::PermissionDenied { .. })
+                | (-32601 | -32602, _) => Some(Err(mapped)),
+                _ => None,
+            }
+        }
     }
 }
 
@@ -81,6 +156,19 @@ impl AccessibilityCapability for BridgeAccessibility {
             .map_err(|e| bridge_err(METHOD_QUERY_BY_ROLE, e))
     }
 
+    async fn snapshot_references(
+        &self,
+        mut params: AxSnapshotRequest,
+    ) -> Result<AxReferenceSnapshot> {
+        params.max_nodes = clamp_max_nodes(params.max_nodes);
+        self.bridge.call(METHOD_SNAPSHOT_REFERENCES, params).await
+    }
+
+    async fn act_on_reference(&self, action: AxReferenceAction) -> Result<AxActionResult> {
+        self.act_on_reference_with_timeout(action, rpc_timeout_for(METHOD_ACT_ON_REFERENCE))
+            .await
+    }
+
     async fn set_value(&self, params: SetValueParams) -> Result<AxActionResult> {
         debug!("Proxying ax.set_value to Swift helper");
         self.bridge
@@ -97,3 +185,6 @@ impl AccessibilityCapability for BridgeAccessibility {
             .map_err(|e| bridge_err(METHOD_PERFORM_ACTION, e))
     }
 }
+
+#[cfg(test)]
+mod tests;

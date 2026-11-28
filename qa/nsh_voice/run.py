@@ -3,6 +3,7 @@
 import argparse
 import base64
 from collections import Counter
+from contextlib import contextmanager
 import hashlib
 import importlib.util
 import json
@@ -29,11 +30,21 @@ SPEC = importlib.util.spec_from_file_location("nsh_s2_fixture", HERE.parent / "n
 s2 = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(s2)
 
-CASES = ("success", "permission", "config-only", "limit", "cancel-stt", "cancel-chat", "disconnect")
+CLASSIC_STREAM = ("stream-healthy", "stream-empty", "stream-late-ack")
+CLASSIC_ONLY = (*CLASSIC_STREAM, "close-capture", "close-send", "close-playback", "barge-in", "disconnect-send", "batch-empty",
+                "exact-queue")
+CASES = ("success", "permission", "config-only", "limit", "cancel-stt", "cancel-chat", "disconnect", *CLASSIC_ONLY)
 EXPECTED = {
     "permission": {}, "config-only": {}, "cancel-stt": {"stt": 1},
     "disconnect": {"stt": 1}, "cancel-chat": {"stt": 1, "chat": 1},
     "limit": {"stt": 1, "chat": 1, "tts": 1},
+    "stream-healthy": {"chat": 1, "tts": 2},
+    "stream-empty": {"stt": 1, "chat": 1, "tts": 1},
+    "stream-late-ack": {"stt": 1, "chat": 1, "tts": 1},
+    "close-capture": {}, "close-send": {"stt": 1, "chat": 1}, "batch-empty": {"stt": 1},
+    "disconnect-send": {"stt": 1, "chat": 1}, "close-playback": {"stt": 1, "chat": 1, "tts": 1},
+    "barge-in": {"stt": 1, "chat": 1, "tts": 1},
+    "exact-queue": {"chat": 4},
 }
 
 
@@ -51,7 +62,7 @@ def environment(root):
     }
 
 
-def write_config(aleph, port, panel, provider, configured_stt):
+def write_config(aleph, port, panel, provider, configured_stt, stream_port=None):
     s2.write_config(aleph, port, panel)
     base = f"http://127.0.0.1:{provider.server_port}"
     stt = 'default_transcription_provider = "qa-stt"\n' if configured_stt else ""
@@ -75,8 +86,10 @@ base_url = "{base}"
 api_key = "{provider.token}"
 models = ["tts-1"]
 [voice.streaming]
-enabled = false
+enabled = {str(stream_port is not None).lower()}
 ''')
+        if stream_port is not None:
+            config.write(f'provider = "deepgram"\nbase_url = "http://127.0.0.1:{stream_port}"\n')
         if configured_stt:
             config.write(f'''[generation.transcription_providers.qa-stt]
 provider_type = "openai_whisper"
@@ -124,6 +137,30 @@ def browser_run(argv, root, env):
                 child.wait(timeout=5)
 
 
+@contextmanager
+def streaming_provider(args, root, env):
+    if args.case not in CLASSIC_STREAM:
+        yield None
+        return
+    ready = root / "streaming-provider.port"
+    with subprocess.Popen([args.node, str(HERE / "stream.cjs"), str(ready), args.case], cwd=root,
+                          env=env | {"NODE_PATH": str(args.node_modules)}, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL) as child:
+        try:
+            deadline = time.monotonic() + 5
+            while not ready.is_file() and child.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            s2.require(child.poll() is None and ready.is_file(), "streaming provider unavailable")
+            yield int(ready.read_text(encoding="ascii"))
+        finally:
+            if child.poll() is None:
+                child.terminate()
+                try:
+                    child.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+
+
 def execute(args, root, report):
     env = environment(root)
     aleph = Path(env["ALEPH_HOME"])
@@ -138,14 +175,21 @@ def execute(args, root, report):
     report["media"] = {"profile": args.clip, "input_sha256": s2.sha256(clip), "input_samples": samples,
                        "sample_rate_hz": RATE, "input_bytes": clip.stat().st_size,
                        "synthetic_reply_sha256": s2.sha256(audio), "synthetic_reply_bytes": audio.stat().st_size}
-    delayed = {"cancel-stt": "stt", "disconnect": "stt", "cancel-chat": "chat"}.get(args.case)
+    delayed = {"cancel-stt": "stt", "disconnect": "stt", "cancel-chat": "chat",
+               "close-send": "chat", "disconnect-send": "chat"}.get(args.case)
     reply_audio = audio.read_bytes()
     reply_fingerprint = hashlib.sha256(base64.b64encode(reply_audio)).hexdigest()
-    with Provider(reply_audio, delayed, root) as provider, (root / "gateway.log").open("wb") as log:
+    queue_control = root / "queue-control" if args.case == "exact-queue" else None
+    if queue_control is not None:
+        queue_control.mkdir(mode=0o700)
+    with (streaming_provider(args, root, env) as stream_port,
+          Provider(reply_audio, delayed, root, progressive=args.case == "stream-healthy",
+                   empty_transcript=args.case == "batch-empty", queue_control=queue_control) as provider,
+          (root / "gateway.log").open("wb") as log):
         if provider.server_port == 18790:
             raise RuntimeError("fixture claimed the default port")
         port = s2.fixture_port()  # Provider already bound, so the OS cannot select its port.
-        write_config(aleph, port, args.panel_web, provider, args.case != "config-only")
+        write_config(aleph, port, args.panel_web, provider, args.case != "config-only", stream_port)
         thread = threading.Thread(target=provider.serve_forever, daemon=True)
         thread.start()
         try:
@@ -169,12 +213,21 @@ def execute(args, root, report):
                                      "mount": args.mount, "reply_fingerprint": reply_fingerprint,
                                      "locale": args.locale, "case": args.case, "warm": args.warm,
                                      "provider_inflight": str(root / f"in-flight-{delayed}") if delayed else None,
-                                     "observation": str(observation)})
-                code = browser_run([args.node, str(HERE / "web.cjs"), str(request)], root,
-                                   env | {"NODE_PATH": str(args.node_modules), "PLAYWRIGHT_BROWSERS_PATH": args.browser_cache})
-                if observation.is_file():
-                    report["browser"] = json.loads(observation.read_text(encoding="utf-8"))
-                s2.require(code == 0 and report.get("browser", {}).get("passed") is True, "browser stage failed")
+                                     "observation": str(observation), "queue_control": str(queue_control) if queue_control else None,
+                                     "exact_observation": str(root / "exact.json")})
+                if args.case == "exact-queue":
+                    code = browser_run([args.node, str(HERE / "exact.cjs"), str(request)], root,
+                                       env | {"NODE_PATH": str(args.node_modules)})
+                    exact_path = root / "exact.json"
+                    if exact_path.is_file():
+                        report["exact"] = json.loads(exact_path.read_text(encoding="utf-8"))
+                    s2.require(code == 0 and report.get("exact", {}).get("passed") is True, "exact queue stage failed")
+                else:
+                    code = browser_run([args.node, str(HERE / "web.cjs"), str(request)], root,
+                                       env | {"NODE_PATH": str(args.node_modules), "PLAYWRIGHT_BROWSERS_PATH": args.browser_cache})
+                    if observation.is_file():
+                        report["browser"] = json.loads(observation.read_text(encoding="utf-8"))
+                    s2.require(code == 0 and report.get("browser", {}).get("passed") is True, "browser stage failed")
             finally:
                 if gateway.child is not None:
                     report["gateway_alive_before_shutdown"] = gateway.child.poll() is None
@@ -226,8 +279,11 @@ def main():
     args.browser_cache = browser_cache()
     if sys.platform == "win32" and sys.version_info < (3, 13):
         parser.error("Windows requires Python 3.13+ for private directory ACLs")
-    if args.mount == "classic" and (args.case != "success" or args.locale != "en-US"):
-        parser.error("Classic comparison requires --case success and --locale en-US")
+    if args.mount == "classic" and (args.case not in {"success", "permission", "cancel-stt", "cancel-chat", *CLASSIC_ONLY}
+                                    or args.locale != "en-US"):
+        parser.error("Classic requires --locale en-US and a Classic voice case")
+    if args.mount == "tsx" and args.case in CLASSIC_ONLY:
+        parser.error("The selected case exercises the Classic mount")
     if (args.warm and args.case != "success") or (args.case == "limit") != (args.clip == "limit"):
         parser.error("--warm is for success only; --case limit requires --clip limit and vice versa")
     for name in ("server", "panel_web", "nsh", "output", "node_modules", "chrome"):
@@ -256,7 +312,7 @@ def main():
                                            "end_of_speech_to_first_audible_audio", "peak_buffering", "actual_copies"]}
     try:
         report["harness_revision"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
-        harness_sources = [HERE / name for name in ("run.py", "fixture.py", "web.cjs", "wire.cjs", "classic.cjs")]
+        harness_sources = [HERE / name for name in ("run.py", "fixture.py", "web.cjs", "wire.cjs", "classic.cjs", "stream.cjs")]
         harness_sources.extend([HERE.parent / "nsh_panel_provider.py", Path(SPEC.origin)])
         report["harness_sha256"] = {path.relative_to(REPO).as_posix(): s2.sha256(path) for path in harness_sources}
         report["assets_sha256"] = {key: s2.sha256(path) for key, path in assets.items()}

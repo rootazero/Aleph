@@ -1,8 +1,8 @@
 //! Windows `EscapeAbort` implementation using a low-level keyboard hook.
 
-#[cfg(windows)]
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+#[cfg(windows)]
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::Mutex;
 
 use aleph_desktop::platform::EscapeAbort;
@@ -54,6 +54,9 @@ pub struct WindowsEscapeListener {
 /// static is `Sync` — a raw pointer would not be.
 #[cfg(windows)]
 static LISTENER_PTR: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(windows)]
+static ABORT_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 impl WindowsEscapeListener {
     #[must_use]
@@ -183,6 +186,7 @@ impl EscapeAbort for WindowsEscapeListener {
 
             match rx.recv() {
                 Ok(Ok((hook_addr, tid))) => {
+                    ABORT_GENERATION.fetch_add(1, Ordering::SeqCst);
                     *self
                         .hook
                         .lock()
@@ -296,8 +300,26 @@ impl EscapeAbort for WindowsEscapeListener {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(s) = state.as_ref() {
+            #[cfg(windows)]
+            ABORT_GENERATION.fetch_add(1, Ordering::SeqCst);
             s.aborted.store(false, Ordering::SeqCst);
         }
+    }
+
+    fn abort_generation(&self) -> Option<u64> {
+        #[cfg(windows)]
+        {
+            let thread = self
+                .thread
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            thread
+                .as_ref()
+                .filter(|thread| !thread.is_finished())
+                .map(|_| ABORT_GENERATION.load(Ordering::SeqCst))
+        }
+        #[cfg(not(windows))]
+        None
     }
 }
 
@@ -350,6 +372,7 @@ extern "system" fn keyboard_hook_proc(
                 // clears `LISTENER_PTR` before the heap allocation is freed.
                 let state = unsafe { &*(addr as *const ListenerState) };
                 state.aborted.store(true, Ordering::SeqCst);
+                ABORT_GENERATION.fetch_add(1, Ordering::SeqCst);
             }
         }
     }

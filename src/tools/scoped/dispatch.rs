@@ -11,12 +11,12 @@ use crate::capability::ownership::VisibilityScope;
 use crate::capability::policy_runtime::{
     CapabilityCallContext, PolicyAttachment, ResourceUse, RunningCapabilityCall,
 };
-use crate::extension::HookEvent;
 use crate::extension::hooks::{
-    HookContext, HookExecutor, PermissionDecision, budget_hook_contexts,
+    budget_hook_contexts, HookContext, HookExecutor, PermissionDecision,
 };
+use crate::extension::HookEvent;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
-use crate::sandbox::exec_approval::{ApprovalAction, Grant, GrantScope, denial_ledger, grants};
+use crate::sandbox::exec_approval::{denial_ledger, grants, ApprovalAction, Grant, GrantScope};
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::descriptor::{ReplayPolicy, ToolCallIdentity, ToolCapabilityDescriptor};
@@ -24,9 +24,9 @@ use crate::tools::registry::{CanonicalEntryLease, RegistryEntry, ToolHandlerRegi
 use crate::tools::runtime::LoopTool;
 use crate::tools::service::{RefusedBy, ToolError};
 
-use super::ScopedToolService;
 use super::gate_chain::GateRule;
 use super::ledger::ApprovalRecord;
+use super::ScopedToolService;
 
 /// Result size (per [`crate::tool_output::ingress::size_hint`]) at which the
 /// ingress clean moves off the async executor onto a blocking worker. Below it
@@ -1713,6 +1713,8 @@ impl ScopedToolService {
                             recovery,
                             crate::builtin_tools::desktop::operator_approval::scope_desktop_approval(
                                 desktop_approval,
+                                settlement_cancel.clone(),
+                                tokio::time::Instant::from_std(deadline),
                                 crate::tools::adapters::mcp_adapter::invoke_handler_to_settlement(
                                     &entry.handler,
                                     &entry.descriptor,
@@ -2367,7 +2369,7 @@ impl ScopedToolService {
         rule: Option<&str>,
         decision: ApprovalRecord<'_>,
     ) {
-        use crate::session::events::{SessionEvent, now_ms};
+        use crate::session::events::{now_ms, SessionEvent};
 
         let Some(turn) = self.turn_context.as_ref() else {
             return;
@@ -3062,7 +3064,7 @@ impl ScopedToolService {
     /// pipeline, so without reaching back in, a panic body would be the one
     /// error text the model sees unbounded and unfenced.
     pub(super) fn sanitize_tool_error(name: &str, err: ToolError) -> ToolError {
-        use crate::security::content_sanitizer::{ContentSource, wrap_external_content};
+        use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
         // Preserve the original variant so callers can keep matching on
         // `Timeout` / `Transport` / `Execution`; only the `cause` /
         // message string is bounded and sanitized.
