@@ -126,17 +126,20 @@ through owner-scoped replay. The destination includes the label shown in the
 reader and an opaque revision for the active recipient. Core checks that revision
 before sending and checks authorization again before delivering queued output.
 `thought_translate_machine` and `thought_translate_ai` are canonical Tool
-Capabilities. The machine binding names a ready MCP tool that accepts
-`{"text":"…","target_language":"zh"}` (or `en`) and returns a single MCP text
-content block containing `{"text":"…"}`. The AI binding names an enabled
+Capabilities. The translation route uses the scoped dispatch admission for the
+exact captured handler and input. The machine binding names a ready MCP tool that
+accepts `{"text":"…","target_language":"zh"}` (or `en`) and returns a single MCP
+text content block containing `{"text":"…"}`. Core validates that envelope before
+sending the text to the reader. The AI binding names an enabled
 `provider/model` and makes a tools-disabled translation call. Operators set
 `machine_tool` and `ai_model` independently under `[thought_translation]`.
 
 当前 Panel 按 `session_key`、`run_id` 和不透明 `block_id` 请求一条已落定且可读的
 模型思考。Core 通过所有者范围内的回放读取原文。目标包含阅读器显示的名称和
 当前接收方的不透明版本。Core 在派发前核对版本，在交付排队译文前再次验证权限。
-两个引擎走规范 Tool Capability。机器引擎接收 `text` 与 `target_language`，以单条
-MCP 文本块返回含 `text` 的 JSON。AI 引擎调用指定的 `provider/model` 并关闭工具。
+两个引擎走规范 Tool Capability，派发凭证绑定实际捕获的处理器及输入。机器引擎接收
+`text` 与 `target_language`，以单条 MCP 文本块返回含 `text` 的 JSON。Core 校验该
+结构后将译文送至阅读器。AI 引擎调用指定的 `provider/model` 并关闭工具。
 运维在 `[thought_translation]` 分别配置 `machine_tool` 和 `ai_model`。
 
 The gateway binds translation updates to the initiating connection and keeps

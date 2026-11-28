@@ -1,4 +1,7 @@
-//! Ephemeral canonical Tool calls: policy and lease gates without session ledger.
+//! Ephemeral canonical Tool calls for owner-checked thought translation.
+
+use super::GateAdmissionToken;
+use crate::approval::{with_call_identity, CallIdentity};
 use crate::capability::{
     backend::TOOL_NAMESPACE,
     descriptor::CapabilityId,
@@ -8,6 +11,7 @@ use crate::capability::{
     zahir_facade::ZahirFacade,
 };
 use crate::tools::{
+    descriptor::{ToolCallIdentity, ToolSource},
     registry::{CanonicalEntryLease, ToolHandlerRegistry},
     service::{ToolError, ToolOutput},
 };
@@ -26,8 +30,18 @@ impl EphemeralTool {
         captured: CanonicalEntryLease,
         context: &CapabilityCallContext,
     ) -> Option<Self> {
-        // Cold plugin activation can persist state. This path only calls ready tools.
-        if captured.is_cold_declaration() || captured.entry().descriptor.requires_confirmation {
+        let descriptor = &captured.entry().descriptor;
+        let translation_tool = match &descriptor.source {
+            ToolSource::Builtin => matches!(
+                descriptor.name.as_str(),
+                "thought_translate_machine" | "thought_translate_ai"
+            ),
+            ToolSource::Mcp { .. } => true,
+            _ => false,
+        };
+        // Only ready translation adapters and the operator-selected MCP recipient
+        // can enter this path. It has no interactive confirmation or replay lane.
+        if !translation_tool || captured.is_cold_declaration() || descriptor.requires_confirmation {
             return None;
         }
         let lease = facade
@@ -90,13 +104,31 @@ impl EphemeralTool {
         if !self.remains_authorized(facade, registry, context) {
             return Err(denied());
         }
-        let output = crate::tools::adapters::mcp_adapter::invoke_handler(
-            &entry.handler,
-            &entry.descriptor,
-            input,
-            cancel,
-        )
-        .await?;
+        let call = CallIdentity {
+            turn_id: uuid::Uuid::nil(),
+            call_id: uuid::Uuid::new_v4().to_string(),
+        };
+        let admission = GateAdmissionToken::new(false);
+        let invocation = crate::tools::dispatch_verdict::with_gate_admission(
+            &admission,
+            call.call_id.clone(),
+            entry.descriptor.name.clone(),
+            ToolCallIdentity::from_descriptor(&entry.descriptor),
+            input.clone(),
+            crate::identity::current_actor(),
+            async {
+                // The recipient result is parsed as data for Panel, outside the
+                // model-facing output fence used by regular chat dispatch.
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => Err(ToolError::Cancelled {
+                        name: entry.descriptor.name.clone(),
+                    }),
+                    result = entry.handler.invoke(input) => result,
+                }
+            },
+        );
+        let output = with_call_identity(Some(call), invocation).await?;
         if !self.remains_authorized(facade, registry, context) {
             return Err(denied());
         }

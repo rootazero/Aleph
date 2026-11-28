@@ -2929,6 +2929,9 @@ fn looks_like_cancellation(cause: &str) -> bool {
     final_trimmed.ends_with("cancelled") || final_trimmed.ends_with("canceled")
 }
 
+#[path = "ephemeral.rs"]
+pub(crate) mod ephemeral;
+
 #[cfg(test)]
 mod tests {
     use super::*;

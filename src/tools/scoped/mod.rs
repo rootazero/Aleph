@@ -696,4 +696,4 @@ impl ToolService for ScopedToolService {
     }
 }
 
-pub(crate) mod ephemeral;
+pub(crate) use dispatch::ephemeral;

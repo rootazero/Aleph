@@ -36,13 +36,23 @@ and run `npx playwright test tests/e2e/optical-chat.spec.ts` from
 | `git diff --check` | Passed before final bundle commit. / 发布资源提交前通过。 |
 | `cargo fmt --all --check` | The baseline and feature both report the same 29 files. The changed Rust sources pass targeted formatting checks. / 基线和分支均报告同样 29 个文件，改动文件单独检查通过。 |
 | `cargo check -p alephcore --lib --bin aleph-server --tests --jobs 1` | Passed in 19m 14s. / Core、服务端与测试目标类型检查通过，用时 19 分 14 秒。 |
-| `cargo test -p alephcore --lib thought --jobs 1` | Windows ran out of commit memory while Rust generated the Core test binary. Both attempts with `CARGO_PROFILE_TEST_DEBUG=0` and `CARGO_PROFILE_TEST_CODEGEN_UNITS=256` exited 101 during monomorphization. The retry reported `memory allocation of 478150672 bytes failed`. The Core runtime assertions remain pending. / Windows 在 Core 测试二进制的单态化阶段耗尽可提交内存。关闭测试调试信息并设 256 个代码生成单元后，两次仍以 101 退出。重试报错如上，Core 运行断言仍待执行。 |
+| `cargo test -p alephcore --lib thought --jobs 1` | Final run passed all 19 tests, including both registered adapters, owner-scoped replay, recipient replacement and revocation before delivery. Used `CARGO_PROFILE_TEST_DEBUG=0` and `CARGO_PROFILE_TEST_CODEGEN_UNITS=256`. / 最终 19 项全部通过，覆盖两个注册引擎、所有者范围回放、接收方改向和交付前撤权。采用关闭调试信息、256 个代码生成单元的测试配置。 |
+| Core dispatch regression / Core 派发回归 | Ran the same test binary for scoped dispatch, the admission verdict and the MCP adapter. All 36 tests passed. / 使用同一测试二进制运行 scoped dispatch、准入凭证及 MCP 适配器用例，36 项全部通过。 |
 | `cargo test -p aleph-panel -p shared-ui-logic -p aleph-protocol --lib --jobs 1` | 1,580 Panel, 443 protocol and 256 shared UI tests passed. / Panel 1,580 项、协议 443 项、共享 UI 256 项全部通过。 |
 | Initial `CARGO_BUILD_JOBS=1 just wasm` and four Edge cases | Optimized artifact built and four browser cases passed on the first integrated revision. / 首轮优化构建成功，Edge 四项通过。 |
 | Final `CARGO_BUILD_JOBS=1 just wasm` | Optimized `wasm-release` compiled in 9m 15s. The WASM feature fence and WebView baseline check passed. All 41 JS references resolve against 44 WASM exports. The Brotli copies of JS, WASM, and CSS decompress to exactly the shipped bytes. / 正式资源通过 WASM 特性门禁、WebView 基线、JS 引用及 Brotli 内容核对。 |
 | Final Edge and Playwright fixture / 最终浏览器验证 | 6 passed in 25.7s against the optimized shipping build. The phone case enters through the real History button. / Edge 在正式资源上通过 6 项，用时 25.7 秒，手机用例走实际历史入口。 |
 | Windows NSH WebView2 / Windows 桌面 WebView2 | `cargo build -p aleph-nsh-shell --no-default-features --features qa-service --jobs 1` passed. Edge WebView2 `158.0.4370.45` loaded the final shipping bundle in the actual debug host with an isolated QA profile and loopback fixture. Verified 25% water level, keyboard-operated turn details, thought replay, destination disclosure and machine translation in the Chinese bilingual reader. / 调试宿主及隔离配置在实际 WebView2 加载最终资源，验证 25% 水位、键盘明细、思考回放、接收方披露和中文双语机器译文。 |
 | Independent recipient and delivery review / 独立复审 | Both prior findings closed in the production path. A changed provider revision requires new disclosure, and queued text requires live recipient and Capability authorization before delivery. / 两项生产路径问题均关闭，接收方变更需重新披露，排队文本交付前复核当前接收方及能力授权。 |
+
+Earlier Windows runs exhausted commit memory during Core code generation. Once
+memory was available, the integration test found that translation dispatch had
+omitted the canonical invocation proof. The fix supplies that proof and validates
+the machine recipient's MCP response before sending it to the reader. The final
+run built in 30m 34s and executed the tests in 0.25s.
+Windows 前两轮在 Core 代码生成阶段耗尽可提交内存。内存充足后，集成测试发现译写派发
+缺少规范调用凭证。修复补齐凭证，并在把机器译文送到阅读器前校验 MCP 返回结构。
+最终编译用时 30 分 34 秒，测试执行用时 0.25 秒。
 
 The final `aleph_panel_bg.wasm` is 72,758,932 bytes with SHA-256
 `0e855896e5c36b47a0a00282b6bfbb41839494fbdf0c2ce0de2f9ac6543436ba`.
