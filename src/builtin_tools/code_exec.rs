@@ -831,7 +831,7 @@ fn drain_advisory(incomplete: bool) -> Option<String> {
     })
 }
 
-fn sandbox_result_to_output(
+pub(crate) fn sandbox_result_to_output(
     result: std::result::Result<SandboxOutput, SandboxError>,
     language: String,
     timeout_secs: u64,

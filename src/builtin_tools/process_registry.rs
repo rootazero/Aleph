@@ -104,6 +104,9 @@ struct ProcEntry {
     started: Instant,
     owner: ProcessOwner,
     state: ProcState,
+    #[cfg(target_os = "linux")]
+    input_authority:
+        Option<Arc<crate::gateway::execution_engine::shell_effect::ShellInputAuthority>>,
     /// Rolling tail of the child's output while it runs. `None` before
     /// [`ProcessRegistry::attach_live`] runs, and dropped again the moment the
     /// entry leaves `Running` (see the module docs).
@@ -215,6 +218,10 @@ impl ProcEntry {
     /// coordinates. Legacy and managed owners still release theirs on exit.
     fn retire(&mut self, state: ProcState) {
         self.state = state;
+        #[cfg(target_os = "linux")]
+        if !matches!(&self.owner, ProcessOwner::Shell(control) if control.has_explicit_eof()) {
+            self.input_authority = None;
+        }
         if !matches!(self.owner, ProcessOwner::Shell(_)) {
             self.live = None;
         }
@@ -406,10 +413,52 @@ impl ProcessRegistry {
         self.register_inner(command.into(), session_label, ProcessOwner::Shell(control))
     }
 
+    /// Bind the input authority to its exact live shell reservation.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn attach_shell_input(
+        &self,
+        id: u64,
+        control: &Arc<ShellLifecycle>,
+        authority: Arc<crate::gateway::execution_engine::shell_effect::ShellInputAuthority>,
+    ) -> bool {
+        let mut entries = self.lock();
+        let Some(entry) = entries.get_mut(&id) else {
+            return false;
+        };
+        if !matches!(&entry.owner, ProcessOwner::Shell(owner) if Arc::ptr_eq(owner, control))
+            || !matches!(&entry.state, ProcState::Running)
+            || entry.input_authority.is_some()
+        {
+            return false;
+        }
+        entry.input_authority = Some(authority);
+        true
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn shell_input(
+        &self,
+        id: u64,
+        session: &SessionId,
+        observe_closed: bool,
+    ) -> Option<Arc<crate::gateway::execution_engine::shell_effect::ShellInputAuthority>> {
+        let caller = encode_session_label(session);
+        let entries = self.lock();
+        let entry = entries.get(&id)?;
+        if !owns(entry, Some(&caller)) {
+            return None;
+        }
+        let finished_with_eof = observe_closed
+            && matches!(&entry.owner, ProcessOwner::Shell(control) if control.has_explicit_eof());
+        if !matches!(entry.state, ProcState::Running) && !finished_with_eof {
+            return None;
+        }
+        entry.input_authority.clone()
+    }
+
     /// Ask the supervisor of managed entry `id` (owned by `caller`) to
     /// terminate its child, then wait up to `budget` for the reap ack.
-    /// `Reaped` is returned only after the supervisor observed the OS wait;
-    /// the generic [`kill`](Self::kill) never provides that proof.
+    /// `Reaped` is returned only after the supervisor observed the OS wait.
     pub async fn cancel_managed(
         &self,
         id: u64,
@@ -521,6 +570,8 @@ impl ProcessRegistry {
                     state: ProcState::Running,
                     live: None,
                     reported: false,
+                    #[cfg(target_os = "linux")]
+                    input_authority: None,
                 },
             );
             (id, preview)

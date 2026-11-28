@@ -140,6 +140,9 @@ pub async fn handle_graph(request: JsonRpcRequest, runtime: Arc<MemoryRuntime>) 
                 "graph.node_detail" => {
                     graph::handle_node_detail_impl(request, admitted.backend().clone()).await
                 }
+                aleph_protocol::memory_graph::GRAPH_MUTATE_NOTE_METHOD => {
+                    graph::handle_mutate_note(request, services.indexer.clone()).await
+                }
                 "graph.update_note" => {
                     graph::handle_update_note_impl(request, services.indexer.clone()).await
                 }

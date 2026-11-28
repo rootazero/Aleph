@@ -347,7 +347,7 @@ where
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_chat_send_with_engine<P, R>(
     request: alephcore::gateway::JsonRpcRequest,
-    agent_manager: Option<Arc<alephcore::AgentManager>>,
+    shell_owners: Option<PanelShellOwners>,
     engine: Arc<ExecutionEngine<P, R>>,
     event_bus: Arc<GatewayEventBus>,
     router: Arc<AgentRouter>,
@@ -541,12 +541,6 @@ where
         )
         .await;
     } else {
-        let shell_owners = agent_manager.map(|agent_manager| PanelShellOwners {
-            config: app_config,
-            agents: agent_registry,
-            agent_manager,
-            sessions: session_manager,
-        });
         spawn_panel_queued_run(
             engine.clone(),
             run_request,

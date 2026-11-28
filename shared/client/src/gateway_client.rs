@@ -193,7 +193,11 @@ impl GatewayClient {
                 .and_then(|m| m.as_str())
                 .unwrap_or("Unknown error")
                 .to_string();
-            return Err(CliError::Rpc { code, message });
+            return Err(CliError::Rpc {
+                code,
+                message,
+                data: error.get("data").cloned(),
+            });
         }
 
         // Extract result

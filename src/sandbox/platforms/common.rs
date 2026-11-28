@@ -326,7 +326,6 @@ where
     let Some(mut pipe) = pipe else {
         return Ok(());
     };
-    let Drained { head, tail, total } = captured;
     let mut chunk = [0u8; 16 * 1024];
     loop {
         let n = pipe.read(&mut chunk).await?;
@@ -334,23 +333,88 @@ where
             return Ok(());
         }
         let bytes = chunk.get(..n).unwrap_or(&chunk);
-        if let Some((live, stream)) = &tee {
-            live.push(*stream, bytes);
+        capture_output(bytes, head_cap, tail_cap, tee.as_ref(), captured);
+    }
+}
+
+fn capture_output(
+    bytes: &[u8],
+    head_cap: usize,
+    tail_cap: usize,
+    tee: Option<&(Arc<LiveTail>, LiveStream)>,
+    captured: &mut Drained,
+) {
+    if let Some((live, stream)) = tee {
+        live.push(*stream, bytes);
+    }
+    let Drained { head, tail, total } = captured;
+    *total = total.saturating_add(bytes.len() as u64);
+    // The head and rolling tail never hold the same byte twice.
+    let take = head_cap.saturating_sub(head.len()).min(bytes.len());
+    let (opening, overflow) = bytes.split_at(take);
+    head.extend_from_slice(opening);
+    if !overflow.is_empty() && tail_cap > 0 {
+        tail.extend(overflow.iter().copied());
+        if tail.len() > tail_cap {
+            tail.drain(..tail.len() - tail_cap);
         }
-        *total = total.saturating_add(n as u64);
-        // Fill the head first; only what will not fit there reaches the
-        // rolling window, so the two never hold the same byte twice and
-        // `total - head - tail` is the exact size of the hole between them.
-        let take = head_cap.saturating_sub(head.len()).min(n);
-        head.extend_from_slice(bytes.get(..take).unwrap_or(bytes));
-        let overflow = bytes.get(take..).unwrap_or(&[]);
-        if !overflow.is_empty() && tail_cap > 0 {
-            tail.extend(overflow.iter().copied());
-            if tail.len() > tail_cap {
-                tail.drain(..tail.len() - tail_cap);
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn drain_fixed_jsonl<R: tokio::io::AsyncRead + Unpin>(
+    mut pipe: R,
+    head_cap: usize,
+    tail_cap: usize,
+    tee: Option<(Arc<LiveTail>, LiveStream)>,
+    captured: &mut Drained,
+) -> io::Result<()> {
+    let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid fixed JSONL result");
+    let mut chunk = [0u8; 1024];
+    let mut line = Vec::with_capacity(64);
+    loop {
+        let count = pipe.read(&mut chunk).await?;
+        if count == 0 {
+            return if line.is_empty() {
+                Ok(())
+            } else {
+                Err(invalid())
+            };
+        }
+        for &byte in &chunk[..count] {
+            if byte == b'\n' {
+                let result = fixed_jsonl_result(&line).ok_or_else(invalid)?;
+                capture_output(
+                    result.as_bytes(),
+                    head_cap,
+                    tail_cap,
+                    tee.as_ref(),
+                    captured,
+                );
+                line.clear();
+            } else if line.len() < 64 {
+                line.push(byte);
+            } else {
+                return Err(invalid());
             }
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn fixed_jsonl_result(bytes: &[u8]) -> Option<String> {
+    use serde_json::Value;
+
+    let parsed: Value = serde_json::from_slice(bytes).ok()?;
+    let fields = parsed.as_object().filter(|fields| fields.len() == 2)?;
+    let kind = fields.get("kind")?.as_str()?;
+    let count = fields.get("count")?;
+    let count = match kind {
+        "array" | "object" => count.as_u64().filter(|count| *count <= 4096)?.to_string(),
+        "boolean" | "null" | "number" | "string" if count.is_null() => "null".into(),
+        _ => return None,
+    };
+    Some(format!("{{\"kind\":\"{kind}\",\"count\":{count}}}\n"))
 }
 
 /// Drive initial stdin, both output pipes and the wall clock concurrently.
@@ -444,7 +508,27 @@ async fn run_child(
     // `None` is cancellation, which has a distinct winning event from
     // wall timeout, I/O failure and natural exit.
     let (exit, elapsed_ms, drain_incomplete) = {
+        #[cfg(target_os = "linux")]
+        let fixed_jsonl = matches!(&teardown, ChildTeardown::StrictShell(_));
         let drain = async {
+            #[cfg(target_os = "linux")]
+            if fixed_jsonl {
+                let Some(stdout) = stdout else { return true };
+                let result = drain_fixed_jsonl(
+                    stdout,
+                    head_cap,
+                    tail_cap,
+                    live.map(|tail| (tail, LiveStream::Stdout)),
+                    &mut captured_stdout,
+                )
+                .await;
+                if result.is_err() {
+                    if let Some(control) = lifecycle {
+                        control.request_cancel();
+                    }
+                }
+                return result.is_err();
+            }
             let (out, err) = tokio::join!(
                 drain_bounded(
                     stdout,
@@ -922,6 +1006,26 @@ mod tests {
                 assert!(partial_stderr.is_empty());
             }
             other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn fixed_jsonl_drain_keeps_only_complete_structural_lines() {
+        let stdout = b"{\"count\":2,\"kind\":\"array\"}\n{\"kind\":\"string\",\"count\":null,\"raw\":\"OUTPUT_CANARY\"}\n";
+        let mut captured = Drained::default();
+        let result = drain_fixed_jsonl(&stdout[..], 4096, 0, None, &mut captured).await;
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(captured.head, b"{\"kind\":\"array\",\"count\":2}\n");
+        for truncated in [
+            b"{\"kind\":\"null\",\"count\":null}".as_slice(),
+            b"OUTPUT_CANARY",
+        ] {
+            let mut captured = Drained::default();
+            assert!(drain_fixed_jsonl(truncated, 4096, 0, None, &mut captured)
+                .await
+                .is_err());
+            assert!(captured.head.is_empty());
         }
     }
 

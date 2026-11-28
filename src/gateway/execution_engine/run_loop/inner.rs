@@ -10,9 +10,11 @@ use tracing::{error, info, warn};
 
 use crate::sync_primitives::Arc;
 
-use super::super::{ExecutionError, RunRequest};
+use super::super::{
+    tool_service_builder::build_scoped_request_tool_service, ExecutionError, RunRequest,
+};
+use crate::extension::hooks::{budget_hook_contexts, join_messages, HookExecutor};
 use crate::extension::HookEvent;
-use crate::extension::hooks::{HookExecutor, budget_hook_contexts, join_messages};
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::EventEmitter;
 
@@ -928,8 +930,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             // SubagentTool construction
             let subagent_tool = {
-                use crate::agents::AgentRegistry;
                 use crate::agents::subagent_tool::SubagentTool;
+                use crate::agents::AgentRegistry;
 
                 let orchestrator = match self.orchestrator.get() {
                     Some(o) => o,
@@ -1151,7 +1153,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Arc::new(t)
             };
 
-            let tool_service = super::super::build_request_tool_service(
+            let tool_service = build_scoped_request_tool_service(
                 loop_registry,
                 allowed_names,
                 Some(subagent_tool),
@@ -1166,6 +1168,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 deferred.clone(),
                 self.tool_health.clone(),
             );
+            #[cfg(target_os = "linux")]
+            let tool_service = tool_service.with_paired_shell(
+                super::super::shell_effect::PairedShellRoute::for_turn(request, agent.clone()),
+            );
+            let tool_service: Arc<dyn crate::tools::service::ToolService> = Arc::new(tool_service);
 
             // Legacy backfill: a session with `messages` rows but no
             // `session_events` (pre-event-log era) would have its history

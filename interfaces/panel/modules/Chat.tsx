@@ -6,6 +6,8 @@ import { ChatModel } from "aleph/panel";
 import { HOST_UNAVAILABLE, RESOURCE_NOT_FOUND, type PanelEvent, type PanelSdk, RpcError } from "../shell/sdk";
 import { TranscriptList } from "./chat/TranscriptList";
 import { ContextSheet } from "./chat/ContextSheet";
+import { Questionnaire } from "./chat/Questionnaire";
+import { useClarification } from "./chat/clarification";
 import type { Change } from "./chat/Diff";
 import type { Diagram } from "./chat/MessageBody";
 import { newIdempotencyKey } from "./chatIdempotency";
@@ -70,6 +72,7 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
   cleanup(() => props.setReaderMode(false));
   const model = new ChatModel();
   const sessionKey = signal<string | null>((sdk.intent()?.session_key as string | undefined) ?? null);
+  const clarification = useClarification(sdk, sessionKey);
   model.reset(sessionKey() ?? "");
   const keys = signal<string[]>([]);
   const rows = new Map<string, Signal<ChatRow>>();
@@ -284,7 +287,7 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
 
   const send = async () => {
     const text = draft().trim();
-    if (!text || composing || sending() || activeRun() || waitingForAdmission()) return;
+    if (!text || composing || sending() || activeRun() || waitingForAdmission() || clarification.pending()) return;
     const key = sessionKey();
     const params: Record<string, unknown> = {
       message: text, channel: "gui:chat", stream: true, idempotency_key: newIdempotencyKey(),
@@ -406,6 +409,7 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
           </Button>
         </View>
       </If>
+      <If when={!fullscreen()}><Questionnaire state={clarification} /></If>
       <View class={fullscreen() ? "hidden" : "flex-row items-end gap-2"}>
         <Input
           value={draft()}
@@ -420,7 +424,7 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
           class="flex-1 rounded-(--radius) border border-input px-3 py-2 text-foreground"
         />
         <If when={activeRun()} else={
-          <Button disabled={sending() || waitingForAdmission() || !draft().trim()} onPress={() => void send()}
+          <Button disabled={sending() || waitingForAdmission() || !!clarification.pending() || !draft().trim()} onPress={() => void send()}
             class="rounded-(--radius) bg-primary px-4 py-2 disabled:opacity-40">
             <Text class="text-primary-foreground">Send</Text>
           </Button>

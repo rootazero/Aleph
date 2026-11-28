@@ -81,6 +81,7 @@ mod tests {
     #[test]
     fn the_operator_gate_is_restricted_and_everything_else_is_not() {
         let refusal = CliError::Rpc {
+            data: None,
             code: AUTH_REQUIRED,
             message: ADMIN_REQUIRED_MESSAGE.to_string(),
         };
@@ -90,6 +91,7 @@ mod tests {
             CliError::Timeout("read timeout".into()),
             CliError::Disconnected("socket closed".into()),
             CliError::Rpc {
+                data: None,
                 code: -32602,
                 message: "invalid params: view".into(),
             },
@@ -112,6 +114,7 @@ mod tests {
         assert!(line.contains("no response in 30s"));
 
         let refusal = CliError::Rpc {
+            data: None,
             code: AUTH_REQUIRED,
             message: ADMIN_REQUIRED_MESSAGE.to_string(),
         };

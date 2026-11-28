@@ -86,10 +86,15 @@ def seed_nebula(aleph, dense):
     for partition in categories:
         (root / partition / 'reference').mkdir(parents=True)
     own = root / 'main__u-owner/reference'
-    for source in range(100):
-        count = 24 if dense else 1
-        links = ' '.join(f'[[reference/nebula-{(source + offset) % 100:03d}]]'
-                         for offset in range(1, count + 1))
+    size = 500 if dense else 100
+    for source in range(size):
+        group = (source // 100) * 100
+        targets = [group + (source + offset) % 100 for offset in range(1, 16 if dense else 2)]
+        if dense:
+            # The root already reaches every neighbor. Omitting inbound root links
+            # keeps its title query from ranking dozens of body-only matches first.
+            targets = list(range(1, size)) if source == 0 else [target for target in targets if target != 0]
+        links = ' '.join(f'[[reference/nebula-{target:03d}]]' for target in targets)
         body = 'Personal note fixture only.\n' if source == 0 else ''
         (own / f'nebula-{source:03d}.md').write_text(frontmatter + body + links, encoding='utf-8')
     for partition, body in [('main', 'Organization twin.'), ('main__u-nebula-foreign', 'Foreign twin.')]:
@@ -157,17 +162,35 @@ class Desktop:
         return next((w for w in windows if w['layer'] == 0 and w['name'] == 'Aleph'), None)
 
     def bring_to_front(self, pid):
-        # Stage Manager shows a background window as a small thumbnail; the
-        # capture needs the real window.
+        # A freshly launched shell may still be staged when activation returns.
         subprocess.run(
-            ['osascript', '-e',
-             f'tell application "System Events" to set frontmost of (first process whose unix id is {pid}) to true'],
+            ['osascript', '-e', 'tell application "System Events"', '-e',
+             f'tell first process whose unix id is {pid}', '-e', 'set visible to true',
+             '-e', 'set frontmost to true', '-e', 'try', '-e',
+             'perform action "AXRaise" of first window', '-e', 'end try',
+             '-e', 'end tell', '-e', 'end tell'],
             check=True, capture_output=True, timeout=20,
         )
+
+    def visible_window(self, child):
+        deadline = time.monotonic() + 12
+        window = self.main_window(child.pid)
+        while time.monotonic() < deadline and child.poll() is None:
+            if window and window['onscreen'] and window['width'] >= 400:
+                return window
+            self.bring_to_front(child.pid)
+            time.sleep(0.4)
+            window = self.main_window(child.pid)
+        return window
 
     def threads(self, pid):
         result = subprocess.run(['ps', '-M', '-p', str(pid)], capture_output=True, text=True, timeout=10)
         return max(len(result.stdout.splitlines()) - 1, 0)
+
+    def rss_kib(self, pid):
+        result = subprocess.run(['ps', '-o', 'rss=', '-p', str(pid)],
+                                capture_output=True, text=True, timeout=5)
+        return int(result.stdout.strip()) if result.stdout.strip().isdigit() else 0
 
     def run(self, name, extra_env, settle, action=None):
         """One launch: wait for the main window, bring it to the front, let it
@@ -185,12 +208,20 @@ class Desktop:
                 time.sleep(0.3)
             require(window is not None, f'{name}: the shell opened no main window')
             self.bring_to_front(child.pid)
-            time.sleep(settle)
-            if action is not None:
-                action(child.pid)
-            window = self.main_window(child.pid)
+            peak_rss_kib = self.rss_kib(child.pid)
+            deadline = time.monotonic() + settle
+            while time.monotonic() < deadline and child.poll() is None:
+                peak_rss_kib = max(peak_rss_kib, self.rss_kib(child.pid))
+                time.sleep(0.25)
+            window = self.visible_window(child)
             require(window and window['onscreen'] and window['width'] >= 400,
                     f'{name}: the main window is not in front: {window}')
+            if action is not None:
+                action(child.pid)
+                peak_rss_kib = max(peak_rss_kib, self.rss_kib(child.pid))
+                window = self.visible_window(child)
+                require(window and window['onscreen'] and window['width'] >= 400,
+                        f'{name}: the main window is not in front after interaction: {window}')
             require(child.poll() is None, f'{name}: the shell exited early')
             image = self.out / f'desktop-{name}.png'
             subprocess.run(['screencapture', '-x', '-o', f'-l{window["id"]}', str(image)], check=True, timeout=20)
@@ -198,6 +229,7 @@ class Desktop:
                 'phase': name,
                 'window': {k: window[k] for k in ('width', 'height', 'name')},
                 'threads': self.threads(child.pid),
+                'sampled_peak_rss_kib': peak_rss_kib or None,
                 'screenshot': image.name,
             }
         finally:
@@ -274,7 +306,7 @@ def receipt(args):
                     gateway.start()
                     report['desktop'] = 'not run (web-only)'
                 else:
-                    key = desktop_phases(desktop, gateway, phases, report, args.nebula)
+                    key = desktop_phases(desktop, gateway, phases, report, args.nebula, args.native_view)
 
                 # Web: the same TSX source from /v1/panel/ in Chrome.
                 fixture = {
@@ -305,7 +337,65 @@ def receipt(args):
     print(json.dumps(report), flush=True)
 
 
-def desktop_phases(desktop, gateway, phases, report, nebula):
+def desktop_nebula_action(desktop, native_view, fixture, evidence):
+    def action(pid):
+        image = desktop.out / 'desktop-nebula-probe.png'
+        evidence['interaction_peak_rss_kib'] = desktop.rss_kib(pid)
+
+        def visible_text(text, refresh_overview=False):
+            deadline = time.monotonic() + 45
+            next_refresh = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                evidence['interaction_peak_rss_kib'] = max(
+                    evidence['interaction_peak_rss_kib'], desktop.rss_kib(pid))
+                window = desktop.main_window(pid)
+                require(window, 'the Nebula window disappeared')
+                subprocess.run(['screencapture', '-x', '-o', f'-l{window["id"]}', str(image)],
+                               check=True, timeout=10)
+                try:
+                    observed = subprocess.check_output([native_view, 'read', image], text=True, timeout=10)
+                except subprocess.TimeoutExpired:
+                    continue
+                rows = json.loads(observed)
+                for row in rows:
+                    if text in row['text']:
+                        return row
+                if refresh_overview and time.monotonic() >= next_refresh:
+                    refresh = next((row for row in rows if 'Refresh graph' in row['text']), None)
+                    if refresh is not None:
+                        click(refresh)
+                        evidence['overview_refreshes'] += 1
+                        next_refresh = time.monotonic() + 2
+                time.sleep(0.25)
+            raise RuntimeError(f'Nebula text was not visible: {text}')
+
+        def click(row):
+            subprocess.run([native_view, 'click', str(pid), str(row['x']), str(row['y'])],
+                           check=True, timeout=10)
+
+        started = time.monotonic()
+        if fixture == 'off':
+            visible_text('memory_unavailable')
+            evidence['runtime_unavailable'] = True
+        else:
+            total = 501 if fixture == 'dense' else 101
+            evidence['overview_refreshes'] = 0
+            visible_text(f'100 of {total} graph notes', refresh_overview=True)
+            evidence['overview_observed_ms'] = round((time.monotonic() - started) * 1_000)
+            click(visible_text('nebula-000'))
+            visible_text('Personal note fixture only.')
+            if fixture == 'dense':
+                focus = visible_text('Show neighborhood')
+                started = time.monotonic()
+                click(focus)
+                visible_text('500 notes in this neighborhood')
+                evidence['focus_observed_ms'] = round((time.monotonic() - started) * 1_000)
+        image.unlink()
+
+    return action
+
+
+def desktop_phases(desktop, gateway, phases, report, nebula, native_view=None):
     # Desktop without a Desktop IPC target: an honest unavailable state.
     phases.append(desktop.run('unavailable', {}, settle=4))
 
@@ -318,7 +408,11 @@ def desktop_phases(desktop, gateway, phases, report, nebula):
     if nebula:
         require(tabs('memory-nebula')[0] in first['order'], 'Nebula capability was not published')
         desktop.write_layout(key, {**first, 'active': tabs('memory-nebula')[0]})
-        phases.append(desktop.run('memory-nebula', {'ALEPH_SHELL_PANEL_IPC': str(gateway.endpoint)}, settle=8))
+        evidence = {}
+        action = desktop_nebula_action(desktop, native_view, nebula, evidence) if native_view else None
+        phase = desktop.run('memory-nebula', {'ALEPH_SHELL_PANEL_IPC': str(gateway.endpoint)},
+                            settle=0 if action else 8, action=action)
+        phases.append({**phase, **evidence})
 
     # Open the Sessions module through the stored layout (the edit UI
     # itself is driven in Chrome and by `nsh test`).
@@ -360,12 +454,13 @@ def main():
     parser.add_argument('--nebula', choices=('normal', 'dense', 'off'), help='exercise Memory Nebula with isolated files')
     parser.add_argument('--web', type=Path, required=True, help='interfaces/panel/out-web/Aleph Panel')
     parser.add_argument('--winlist', type=Path, help='compiled winlist.swift')
+    parser.add_argument('--native-view', type=Path, help='compiled qa/nsh_s3_chat/native-view.swift for native Nebula checks')
     parser.add_argument('--node-modules', type=Path, required=True, help='node_modules holding playwright')
     parser.add_argument('--out', type=Path, required=True, help='new directory for evidence')
     args = parser.parse_args()
     if not args.web_only and (sys.platform != 'darwin' or not (args.shell and args.winlist)):
         parser.error('desktop QA requires macOS, --shell and --winlist; use --web-only otherwise')
-    for name in ('server', 'shell', 'web', 'winlist', 'node_modules'):
+    for name in ('server', 'shell', 'web', 'winlist', 'native_view', 'node_modules'):
         if path := getattr(args, name):
             setattr(args, name, path.resolve(strict=True))
     receipt(args)

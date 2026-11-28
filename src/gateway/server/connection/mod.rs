@@ -101,11 +101,9 @@ pub mod upgrade;
 pub(super) mod web_v1;
 
 /// The methods both v1 entries (Desktop IPC and Web `/v1/ws`) mount. One
-/// list so the two entries cannot drift apart; everything else is rejected
-/// with `METHOD_NOT_FOUND` before it reaches Core. The `chat.*` trio is the
-/// S3 chat slice: each runs through the same dispatch, ownership check and
-/// idempotency cache as on legacy `/ws`. Other mutating methods such as
-/// `panel.project.select` stay off until a later stage approves them.
+/// list so the two entries cannot drift apart. Mounted calls use the same
+/// dispatch and ownership checks as legacy `/ws`, including the guarded
+/// questionnaire resolver. Unmounted methods return `METHOD_NOT_FOUND`.
 pub(super) const V1_METHODS: &[&str] = &[
     "health",
     "sessions.list",
@@ -113,10 +111,13 @@ pub(super) const V1_METHODS: &[&str] = &[
     aleph_protocol::memory_graph::GRAPH_QUERY_METHOD,
     aleph_protocol::memory_graph::GRAPH_SEARCH_METHOD,
     aleph_protocol::memory_graph::GRAPH_NODE_DETAIL_METHOD,
+    aleph_protocol::memory_graph::GRAPH_MUTATE_NOTE_METHOD,
     "chat.history",
     "chat.models.list",
     "chat.send",
     "chat.abort",
+    "clarification.pending",
+    "clarification.resolve",
     aleph_protocol::panel_voice::VOICE_TURN_TRANSCRIBE_METHOD,
     aleph_protocol::panel_voice::VOICE_TURN_SYNTHESIZE_METHOD,
     aleph_protocol::panel_voice::VOICE_TURN_CANCEL_METHOD,
@@ -141,9 +142,9 @@ pub(super) const V1_FEATURES: &[aleph_protocol::system_hello::Feature] = &[
 /// `live_events`. This list only NARROWS: a frame must first pass the shared
 /// [`event_admission::admit_event`] decision (identity, scope, ownership,
 /// projection) and then name one of these topics. It is the chat slice's
-/// run lifecycle plus the overflow warning. The tool presentation topic can
-/// only be produced by [`event_admission::V1EventFeed`] after negotiation;
-/// its raw source topics remain excluded.
+/// run lifecycle, questionnaire notifications, and the overflow warning.
+/// Only [`event_admission::V1EventFeed`] can produce the tool presentation
+/// topic after negotiation. Its raw source topics remain excluded.
 pub(super) const V1_EVENT_TOPICS: &[&str] = &[
     "stream.run_accepted",
     "stream.response_chunk",
@@ -153,6 +154,8 @@ pub(super) const V1_EVENT_TOPICS: &[&str] = &[
     // a run already live on its session; without it Chat waits on that id
     // forever.
     "stream.run_joined",
+    "stream.ask_user",
+    "stream.clarification_ended",
     aleph_protocol::chat_transcript::CHAT_TOOL_TOPIC,
     "connection.warning",
 ];

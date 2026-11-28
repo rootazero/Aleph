@@ -1363,7 +1363,10 @@ impl HandlerRegistry {
         }
         if let Some(result) = response.result.as_mut() {
             if self.memory_nebula_mounted() {
-                panel_capabilities::project_memory_nebula(result);
+                panel_capabilities::project_memory_nebula(
+                    result,
+                    self.has_method(aleph_protocol::memory_graph::GRAPH_MUTATE_NOTE_METHOD),
+                );
             }
             if voice_events_live
                 && [

@@ -27,6 +27,26 @@ const INIT: &str = "/aleph-sandbox-init";
 const STARTUP_LIMIT: Duration = Duration::from_secs(3);
 
 impl BubblewrapDriver {
+    fn fixed_jsonl_configured(&self) -> bool {
+        self.options.no_new_privs
+            && self.options.cgroup_enabled
+            && self.options.include_platform_defaults
+            && self.deny_read_globs.is_empty()
+            && self
+                .options
+                .cpu_quota_percent
+                .is_some_and(|value| value > 0)
+            && self.options.max_pids.is_some_and(|value| value > 0)
+    }
+
+    pub(super) fn fixed_jsonl_preflight(&self) -> bool {
+        self.fixed_jsonl_configured()
+            && StrictShellCgroup::can_delegate()
+            && check_immutable_system_executable(BWRAP).is_ok()
+            && check_immutable_system_executable(JSONL_PROGRAM).is_ok()
+            && self.open_jsonl_sandbox_init().is_ok()
+    }
+
     pub(super) async fn run_jsonl_consumer(
         &self,
         workspace: &File,
@@ -35,12 +55,8 @@ impl BubblewrapDriver {
         max_output_bytes: usize,
         lifecycle: &ShellLifecycle,
     ) -> Result<SandboxOutput, SandboxError> {
-        if !self.options.no_new_privs
-            || !self.options.cgroup_enabled
-            || !self.options.include_platform_defaults
-            || !self.deny_read_globs.is_empty()
-            || profile.linux_init_policy.is_none()
-        {
+        let start = Instant::now();
+        if !self.fixed_jsonl_configured() || profile.linux_init_policy.is_none() {
             return Err(SandboxError::UnsupportedPolicy {
                 platform: "linux/bwrap",
                 feature: "jsonl_inspect".into(),
@@ -54,7 +70,7 @@ impl BubblewrapDriver {
         check_immutable_system_executable(BWRAP).map_err(setup_error)?;
         check_immutable_system_executable(JSONL_PROGRAM).map_err(setup_error)?;
         // Mount this process's executable even if an update swaps its path.
-        let init_binary = open_sandbox_init().map_err(setup_error)?;
+        let init_binary = self.open_jsonl_sandbox_init().map_err(setup_error)?;
         let init_fd = init_binary.as_raw_fd();
         let scope = StrictShellCgroup::create(CgroupV2Limits {
             memory_mb: profile.max_memory_mb,
@@ -167,7 +183,9 @@ impl BubblewrapDriver {
             })
         };
 
-        let start = Instant::now();
+        if start.elapsed() >= timeout {
+            return Err(setup_error("startup deadline elapsed"));
+        }
         let mut child = lifecycle.spawn(|| cmd.spawn().map_err(setup_error))?;
         let ready = await_fifo_writer(
             &writer_path,
@@ -195,14 +213,18 @@ impl BubblewrapDriver {
         )
         .await
     }
-}
 
-fn open_sandbox_init() -> io::Result<File> {
-    #[cfg(test)]
-    if let Some(path) = std::env::var_os("ALEPH_TEST_FIXED_JSONL_SERVER") {
-        return File::open(path);
+    fn open_jsonl_sandbox_init(&self) -> io::Result<File> {
+        #[cfg(feature = "test-helpers")]
+        if let Some(path) = &self.test_sandbox_init {
+            return File::open(path);
+        }
+        #[cfg(test)]
+        if let Some(path) = std::env::var_os("ALEPH_TEST_FIXED_JSONL_SERVER") {
+            return File::open(path);
+        }
+        File::open("/proc/self/exe")
     }
-    File::open("/proc/self/exe")
 }
 
 fn setup_error(error: impl std::fmt::Display) -> SandboxError {
@@ -308,8 +330,13 @@ mod tests {
             &crate::config::types::ShellSecurityConfig::default(),
         );
         let sandbox = sandbox.as_workspace().unwrap();
+        let supervisor = fs::read_to_string("/proc/self/cgroup").unwrap();
+        let supervisor =
+            crate::sandbox::cgroup_v2::parse_proc_self_cgroup_path(&supervisor).unwrap();
+        let delegated_root = Path::new("/sys/fs/cgroup")
+            .join(supervisor.strip_prefix("/").unwrap().parent().unwrap());
 
-        for stop in [false, true] {
+        for finish in ["eof", "stop", "timeout", "shutdown"] {
             let session = SessionKey::main("fixed-jsonl-proof");
             let launch = SandboxCommand {
                 session_id: session.clone(),
@@ -325,6 +352,22 @@ mod tests {
                 },
                 timeout: Some(Duration::from_secs(10)),
             };
+            let expired_control = ShellLifecycle::default();
+            let expired = with_exec_workspace(
+                Some(workspace.clone()),
+                sandbox.execute_fixed_jsonl(
+                    launch.clone(),
+                    &witness,
+                    &expired_control,
+                    Instant::now(),
+                ),
+            )
+            .await;
+            assert!(
+                matches!(expired, Err(SandboxError::ExecutionFailed(message)) if message == "fixed JSONL startup deadline elapsed")
+            );
+            assert!(expired_control.input_snapshot().is_err());
+
             let job = Arc::new(ShellLifecycle::default());
             let live = Arc::new(LiveTail::new());
             let mut run = Box::pin(SESSION_ID.scope(
@@ -333,7 +376,17 @@ mod tests {
                     live.clone(),
                     with_exec_workspace(
                         Some(workspace.clone()),
-                        sandbox.execute_fixed_jsonl(launch, &witness, &job),
+                        sandbox.execute_fixed_jsonl(
+                            launch,
+                            &witness,
+                            &job,
+                            Instant::now()
+                                + if finish == "timeout" {
+                                    Duration::from_secs(3)
+                                } else {
+                                    Duration::from_secs(8)
+                                },
+                        ),
                     ),
                 ),
             ));
@@ -346,6 +399,50 @@ mod tests {
                     }
                 }) => ready.expect("fixed consumer never attached"),
             }
+            let group = fs::read_dir(&delegated_root)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .as_bytes()
+                        .starts_with(b"aleph-jsonl-")
+                })
+                .expect("the real consumer has a delegated job group");
+            for (control, value) in [
+                ("cpu.max", "50000 100000"),
+                ("memory.max", "268435456"),
+                ("memory.swap.max", "0"),
+                ("pids.max", "16"),
+            ] {
+                assert_eq!(
+                    fs::read_to_string(group.join(control)).unwrap().trim(),
+                    value
+                );
+            }
+            let processes = fs::read_to_string(group.join("cgroup.procs")).unwrap();
+            let jq = processes
+                .lines()
+                .find_map(|pid| {
+                    let process = Path::new("/proc").join(pid);
+                    (fs::read_to_string(process.join("comm")).ok()?.trim() == "jq")
+                        .then_some(process)
+                })
+                .expect("jq is a member before input delivery");
+            assert!(
+                processes.lines().count() > 1,
+                "jq and its supervisor share the group"
+            );
+            let status = fs::read_to_string(jq.join("status")).unwrap();
+            assert!(status
+                .lines()
+                .any(|line| line.starts_with("NoNewPrivs:") && line.ends_with('1')));
+            assert!(status
+                .lines()
+                .any(|line| line.starts_with("CapEff:") && line.ends_with("0000000000000000")));
+            assert!(status
+                .lines()
+                .any(|line| line.starts_with("Seccomp:") && line.ends_with('2')));
             let frame = JsonlFrame::from_record(&serde_json::json!([1, 2])).unwrap();
             let bytes = frame.bytes().len();
             let attempt = |prefix, action| {
@@ -367,27 +464,67 @@ mod tests {
                     }
                 }) => assert_eq!(output.expect("no output before EOF"), b"{\"kind\":\"array\",\"count\":2}\n"),
             }
-            if stop {
-                job.request_cancel();
-                assert_eq!(
-                    attempt(bytes, ShellInputAction::Close).consume(),
-                    Err(ShellEffectDenied::Stale)
-                );
-            } else {
-                assert_eq!(
-                    attempt(bytes, ShellInputAction::Close).consume(),
-                    Ok(ShellEffectResult::Closed)
-                );
-            }
-            let result = tokio::time::timeout(Duration::from_secs(4), run)
-                .await
-                .expect("native group did not settle");
+            let registry = crate::builtin_tools::process_registry::process_registry();
+            let result = match finish {
+                "shutdown" => {
+                    let crate::builtin_tools::process_registry::RegisterOutcome::Registered(id) =
+                        registry.reserve_shell("native shutdown", None, job.clone())
+                    else {
+                        panic!("native shutdown job must be in the production registry");
+                    };
+                    let (unconfirmed, ()) = tokio::join!(
+                        crate::builtin_tools::bash_exec::shutdown_background_jobs(),
+                        async {
+                            let result = run.await;
+                            assert!(matches!(result, Err(SandboxError::ExecutionFailed(_))));
+                            let outcome = crate::builtin_tools::code_exec::sandbox_result_to_output(
+                                result,
+                                "bash".into(),
+                                8,
+                            );
+                            assert!(!registry.complete(id, outcome));
+                            assert!(matches!(
+                                registry.poll(id, None),
+                                crate::builtin_tools::process_registry::PollOutcome::Killed
+                            ));
+                        },
+                    );
+                    assert_eq!(unconfirmed, 0);
+                    None
+                }
+                _ => {
+                    match finish {
+                        "stop" => {
+                            job.request_cancel();
+                            assert_eq!(
+                                attempt(bytes, ShellInputAction::Close).consume(),
+                                Err(ShellEffectDenied::Stale)
+                            );
+                        }
+                        "eof" => assert_eq!(
+                            attempt(bytes, ShellInputAction::Close).consume(),
+                            Ok(ShellEffectResult::Closed)
+                        ),
+                        "timeout" => {}
+                        _ => unreachable!(),
+                    }
+                    Some(
+                        tokio::time::timeout(Duration::from_secs(6), run)
+                            .await
+                            .expect("native group did not settle"),
+                    )
+                }
+            };
             assert!(
                 job.settled(),
                 "strict teardown was not acknowledged: {result:?}"
             );
-            if !stop {
-                assert_eq!(result.unwrap().exit_code, Some(0));
+            assert!(!group.exists(), "{finish} left a populated group");
+            assert!(!jq.exists(), "{finish} left the consumer alive");
+            match finish {
+                "eof" => assert_eq!(result.unwrap().unwrap().exit_code, Some(0)),
+                "timeout" => assert!(matches!(result, Some(Err(SandboxError::Timeout { .. })))),
+                _ => assert!(job.stopped(), "{finish}: {result:?}"),
             }
         }
     }

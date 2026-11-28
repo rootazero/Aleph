@@ -47,6 +47,7 @@ use crate::tools::AlephTool;
 /// worse interaction than two calls of five. codex caps at 3, Claude Code's own
 /// `AskUserQuestion` at 4.
 const MAX_QUESTIONS: usize = 4;
+const MAX_PREVIEW_BYTES: usize = 16 * 1024;
 
 /// A single choice offered to the user.
 ///
@@ -59,12 +60,14 @@ const MAX_QUESTIONS: usize = 4;
 pub enum AskUserChoice {
     /// A simple choice label (also used as the returned value).
     Simple(String),
-    /// A labeled choice with a short description shown beside it.
+    /// A labeled choice with optional supporting content.
     Detailed {
         /// The choice label (also used as the returned value).
         label: String,
         /// A short description helping the user choose.
-        description: String,
+        description: Option<String>,
+        /// Expandable Markdown. All previews share a 16 KiB UTF-8 limit.
+        preview: Option<String>,
     },
 }
 
@@ -80,16 +83,22 @@ impl AskUserChoice {
     fn description(&self) -> Option<&str> {
         match self {
             Self::Simple(_) => None,
-            Self::Detailed { description, .. } => Some(description),
+            Self::Detailed { description, .. } => description.as_deref(),
         }
     }
 
     fn to_option(&self) -> ClarificationOption {
-        let opt = ClarificationOption::new(self.label(), self.label());
-        match self.description() {
-            Some(desc) => opt.with_description(desc),
-            None => opt,
+        let mut option = ClarificationOption::new(self.label(), self.label());
+        if let Some(description) = self.description() {
+            option = option.with_description(description);
         }
+        if let Self::Detailed { preview, .. } = self {
+            option.preview = preview
+                .as_ref()
+                .filter(|value| !value.trim().is_empty())
+                .cloned();
+        }
+        option
     }
 }
 
@@ -307,6 +316,17 @@ impl AskUserTool {
                 AlephError::tool(format!("ask_user: question {}: {reason}", i + 1))
             })?;
         }
+        let preview_bytes: usize = questions
+            .iter()
+            .flat_map(|question| &question.options)
+            .filter_map(|option| option.preview.as_ref())
+            .map(String::len)
+            .sum();
+        if preview_bytes > MAX_PREVIEW_BYTES {
+            return Err(AlephError::tool(format!(
+                "ask_user: option previews total {preview_bytes} bytes; shorten them to at most {MAX_PREVIEW_BYTES} bytes"
+            )));
+        }
         ClarificationRequest::new(questions).map_err(AlephError::tool)
     }
 
@@ -358,12 +378,11 @@ const WITHHELD_SECRET_REASON: &str =
 impl AlephTool for AskUserTool {
     const NAME: &'static str = "ask_user";
     const DESCRIPTION: &'static str =
-        "Ask the user up to four clarifying questions and wait for the reply, instead of \
-         guessing a detail that is theirs to decide. Pass `question` for one, or `questions` \
-         for several in one interaction. Choices are strings or `{label, description}`; free \
-         text is always accepted, so never add an \"other\" choice. `multi_select` takes several \
-         picks; `secret` masks the input and is skipped on a messaging channel. The run pauses \
-         until they answer; the replies — or a timeout — come back.";
+        "Ask up to four clarifying questions and pause for replies. Pass `question` for one or \
+         `questions` for several. Choices are strings or `{label, description?, preview?}`. \
+         Use `preview` for expandable Markdown samples. Free text is always accepted, so omit \
+         an \"other\" choice. `multi_select` accepts several picks. `secret` masks input and \
+         skips the question on messaging channels. Returns the answers or a timeout.";
 
     type Args = AskUserArgs;
     type Output = AskUserOutput;
@@ -482,6 +501,57 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn option_previews_reach_both_read_projections() {
+        use crate::clarification::session::ask_user_frame;
+        use std::time::Duration;
+
+        let input = serde_json::from_value(serde_json::json!({
+            "question": "Pick?",
+            "choices": [
+                "alpha",
+                {"label": "beta", "description": "shown beside the label"},
+                {"label": "gamma", "preview": "```toml\nport = 42\n```"},
+                {"label": "delta", "preview": " \n "}
+            ]
+        }))
+        .unwrap();
+        let request = AskUserTool::build_request(&input).unwrap();
+        let manager = ClarificationManager::new();
+        let (id, _waiter) = manager
+            .register_with_identity("session", request.clone(), Duration::from_secs(10), "run")
+            .await;
+        let pending = manager.list_pending().await;
+        let snapshot = serde_json::to_value(&pending[0]).unwrap();
+        let event =
+            serde_json::to_value(ask_user_frame("run", "session", &id, &request, 0)).unwrap();
+        let options = &snapshot["questions"][0]["options"];
+        assert_eq!(options, &event["questions"][0]["options"]);
+        assert_eq!(options[0], serde_json::json!({"label": "alpha"}));
+        assert_eq!(options[1]["description"], "shown beside the label");
+        assert_eq!(options[2]["preview"], "```toml\nport = 42\n```");
+        assert!(options[3].get("preview").is_none());
+    }
+
+    #[test]
+    fn option_preview_limit_counts_utf8_bytes_across_questions() {
+        for (second, allowed) in [("é".repeat(4096), true), ("é".repeat(4097), false)] {
+            let input = serde_json::from_value(serde_json::json!({
+                "questions": [
+                    {"question":"First?", "choices":[{"label":"a","description":"a","preview":"é".repeat(4096)}]},
+                    {"question":"Second?", "choices":[{"label":"b","description":"b","preview":second}]}
+                ]
+            }))
+            .unwrap();
+            let result = AskUserTool::build_request(&input);
+            if allowed {
+                assert!(result.is_ok());
+            } else {
+                assert!(result.unwrap_err().to_string().contains("16384 bytes"));
+            }
+        }
+    }
+
     #[test]
     fn option_value_cannot_alias_another_option_label() {
         assert!(validate_options(&[ClarificationOption::new("one", "one")]).is_ok());
@@ -543,7 +613,8 @@ mod tests {
                 AskUserChoice::Simple("alpha".into()),
                 AskUserChoice::Detailed {
                     label: "beta".into(),
-                    description: "the other one".into(),
+                    description: Some("the other one".into()),
+                    preview: None,
                 },
             ],
             questions: vec![],

@@ -2006,6 +2006,7 @@ impl AppState {
                         .map(|label| aleph_protocol::AskUserOption {
                             label,
                             description: None,
+                            preview: None,
                         })
                         .collect(),
                     multi_select: view.multi_select,

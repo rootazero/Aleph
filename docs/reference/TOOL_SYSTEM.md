@@ -346,7 +346,11 @@ Three things about this pair are load-bearing:
 
 Plain `bash` waits for completion (default 60 s, ceiling 170 s). `background: true` starts a managed job with a 3600 s default and a 14400 s ceiling. `yield_ms` (1–10000) limits only the first wait: return the final result if it settles in time, otherwise return a `process_id`. Setting `yield_ms` alone does not opt into the longer background execution budget. Owned worktrees do not support either detached form.
 
-后续调用复用 `bash`：`list` 查作业，`poll` 看状态或滚动尾巴，`wait` 等完成（默认 60 秒，上限 170 秒），`kill` 请求取消；`read` 在同一会话内用 `next_cursor` 增量读取 stdout/stderr。游标只在本次 daemon 生命周期和原进程有效，终态保留同一滚动窗口直到淘汰；没有恢复、重放或任意 stdin/EOF 写入。`read` 按源字节报告流各自的 `lost`（已滚出）、`withheld`（不能安全展示）和 `pending`（等待完整行）。保留窗口不是完整 transcript；终态 `poll`/`wait` 仍返回原有最终结果。详见 [Shell 生命周期](PROCESS_MANAGEMENT.md#agent-shell-子进程-agent-shell-children)。
+后续调用复用 `bash`：`list` 查作业，`poll` 看状态或滚动尾巴，`wait` 等完成（默认 60 秒，上限 170 秒），`kill` 请求取消；`read` 在同一会话内用 `next_cursor` 增量读取 stdout/stderr。游标只在本次 daemon 生命周期和原进程有效，终态保留同一滚动窗口直到淘汰。`read` 按源字节报告流各自的 `lost`（已滚出）、`withheld`（不能安全展示）和 `pending`（等待完整行）。保留窗口不是完整 transcript；终态 `poll`/`wait` 仍返回原有最终结果。详见 [Shell 生命周期](PROCESS_MANAGEMENT.md#agent-shell-子进程-agent-shell-children)。
+
+**受控 JSONL / Controlled JSONL** — 仅符合条件的 Linux 配对 Gateway turn 发布以下参数。启动需 `stdin_profile: "jsonl_inspect"` 与 `background: true` 或 `yield_ms`，工作区和固定消费者由 Core 绑定。`write_stdin` 带 `process_id` 和一个 JSON `record`（含 `null`），单帧最多 4096 字节（含换行），累计最多 16 KiB，并受原生 pipe 与策略预算限制。`close_stdin` 只带 `process_id`，首次关闭与每次写入均需单次操作员审批。`written` 表示字节由管道接收，`read` 返回 jq 已产出的类型和计数。
+
+Only the eligible Linux paired Gateway turn advertises this profile. The route requires a verified delegated cgroup and an attended operator. It refuses calls when a configured tool hook or tool-call guardrail would need the record. The same `process_id` is used for input, EOF and the existing lifecycle actions. `already_closed` confirms a prior explicit EOF for a still-authorized caller. Model-visible results contain fixed type/count lines and structural receipts. See [the sandbox prerequisites](SANDBOX.md#execution-pipeline--执行顺序).
 
 ### Web & Search
 
@@ -559,6 +563,10 @@ Rule of thumb: `ctx_search` = "what did that tool print?", `recall_events` =
 `ask_user` 仍由现有工具注册和作用域发现，不另建交互 Capability。它等待的是问题的答案，不是执行授权。两种入参形状不可混用；题目 ID 唯一，空问题和会被文字回复歧义匹配的选项会在挂起之前被拒绝。现役 Panel/TUI 可暂存、复核并一次提交尚未回答的问题，或明确取消并丢弃已记录答案。Channel 保留逐题文字回复。人答复不会自动取得执行授权，也不会扩展工具作用域。应答与兼容协议见 [FEATURE_LOCATOR §5.3](FEATURE_LOCATOR.md#53-llm-与用户互动-llm-user-interaction)。
 
 `ask_user` uses the existing scoped tool registration, not a separate interaction capability. It waits for an answer, not execution authorization. Do not mix the flat and grouped arguments. Empty prompts, duplicate question IDs, and ambiguous option labels fail before the call parks. The current Panel and TUI can review and submit outstanding answers together or explicitly cancel and discard recorded answers. Channel replies stay sequential. Answering does not grant execution or widen tool scope. See [FEATURE_LOCATOR §5.3](FEATURE_LOCATOR.md#53-llm-与用户互动-llm-user-interaction) for the response and compatibility contract.
+
+选项可传字符串，或传带 `label`、可选 `description` 和可选 `preview` 的对象。TSX Panel 按需展开 Markdown 预览。每次调用的预览合计最多占 16 KiB UTF-8，纯空白预览视为省略。
+
+Each choice accepts a string or an object with `label`, optional `description`, and optional `preview`. The TSX Panel expands Markdown previews on demand. Nonblank previews share a 16 KiB UTF-8 limit per call. Whitespace-only previews are omitted.
 
 ---
 

@@ -128,22 +128,9 @@ pub struct CgroupV2Limits {
 
 #[cfg(target_os = "linux")]
 impl StrictShellCgroup {
-    /// The service must run in `DelegateSubgroup=supervisor`. The unit's
-    /// otherwise empty root owns the controllers; never walk ancestors for
-    /// a writable fallback (which could be a slice shared by other services).
-    pub(crate) fn create(limits: CgroupV2Limits) -> std::io::Result<Self> {
+    fn delegated_parent() -> std::io::Result<PathBuf> {
         use std::{fs, io, path::Path};
 
-        let (Some(memory_mb), Some(cpu_percent), Some(pids)) =
-            (limits.memory_mb, limits.cpu_quota_percent, limits.max_pids)
-        else {
-            return Err(io::Error::other(
-                "strict shell requires memory, CPU and PID limits",
-            ));
-        };
-        if memory_mb == 0 || cpu_percent == 0 || pids == 0 {
-            return Err(io::Error::other("strict shell limits must be positive"));
-        }
         let membership = fs::read_to_string("/proc/self/cgroup")?;
         let relative = parse_proc_self_cgroup_path(&membership)
             .ok_or_else(|| io::Error::other("no unified cgroup membership"))?;
@@ -166,6 +153,41 @@ impl StrictShellCgroup {
         {
             return Err(io::Error::other("delegated cgroup root is not empty"));
         }
+        Ok(parent)
+    }
+
+    pub(crate) fn can_delegate() -> bool {
+        Self::delegated_parent().is_ok_and(|parent| {
+            let controllers = std::fs::read_to_string(parent.join("cgroup.controllers"));
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(parent.join("cgroup.subtree_control"))
+                .is_ok()
+                && controllers.is_ok_and(|available| {
+                    ["cpu", "memory", "pids"]
+                        .into_iter()
+                        .all(|required| available.split_whitespace().any(|name| name == required))
+                })
+        })
+    }
+
+    /// The service must run in `DelegateSubgroup=supervisor`. The unit's
+    /// otherwise empty root owns the controllers; never walk ancestors for
+    /// a writable fallback (which could be a slice shared by other services).
+    pub(crate) fn create(limits: CgroupV2Limits) -> std::io::Result<Self> {
+        use std::{fs, io};
+
+        let (Some(memory_mb), Some(cpu_percent), Some(pids)) =
+            (limits.memory_mb, limits.cpu_quota_percent, limits.max_pids)
+        else {
+            return Err(io::Error::other(
+                "strict shell requires memory, CPU and PID limits",
+            ));
+        };
+        if memory_mb == 0 || cpu_percent == 0 || pids == 0 {
+            return Err(io::Error::other("strict shell limits must be positive"));
+        }
+        let parent = Self::delegated_parent()?;
         fs::write(parent.join("cgroup.subtree_control"), b"+cpu +memory +pids")?;
         let path = tempfile::Builder::new()
             .prefix("aleph-jsonl-")

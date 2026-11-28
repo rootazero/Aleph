@@ -23,7 +23,8 @@ pub const MAX_INFLIGHT: u32 = 8;
 pub const HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 const MAX_DEPTH: usize = 64;
-const MAX_ITEMS: usize = 4096;
+/// Maximum entries in a JSON array or object on local IPC and Web v1.
+pub const MAX_JSON_CONTAINER_ITEMS: usize = 4096;
 /// Maximum UTF-8 byte length of ordinary strings in a v1 JSON payload.
 pub const MAX_STRING_BYTES: usize = 65_536;
 
@@ -215,7 +216,7 @@ impl<'de> Visitor<'de> for JsonValue {
         }
         let mut items = Vec::new();
         while let Some(value) = seq.next_element_seed(self.child(JsonPosition::Ordinary))? {
-            if items.len() == MAX_ITEMS {
+            if items.len() == MAX_JSON_CONTAINER_ITEMS {
                 return Err(A::Error::custom("IPC array limit exceeded"));
             }
             items.push(value);
@@ -229,7 +230,7 @@ impl<'de> Visitor<'de> for JsonValue {
         }
         let mut members = Map::new();
         while let Some(key) = map.next_key::<String>()? {
-            if members.len() == MAX_ITEMS
+            if members.len() == MAX_JSON_CONTAINER_ITEMS
                 || key.len() > MAX_STRING_BYTES
                 || members.contains_key(&key)
             {

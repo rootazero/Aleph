@@ -590,6 +590,7 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     // --- Task 7 fix round 1 ---
     ("memory.trace", Treatment::PartitionChecked),
     ("memory.delete", Treatment::PartitionChecked),
+    ("graph.mutate_note", Treatment::PartitionChecked),
     ("graph.node_detail", Treatment::PartitionChecked),
     ("graph.search", Treatment::PartitionChecked),
     // --- Round 2026-08-21: the curated (hot-tier) face ---

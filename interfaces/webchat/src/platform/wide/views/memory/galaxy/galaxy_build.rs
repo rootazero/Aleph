@@ -252,6 +252,8 @@ mod tests {
             updated_at: None,
         };
         let resp = GraphQueryResponse {
+            focus: None,
+            truncated: None,
             nodes: vec![node("a/x"), node("a/y")],
             edges: vec![NoteLinkDto {
                 from: "a/x".into(),

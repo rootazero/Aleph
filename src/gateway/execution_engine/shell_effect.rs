@@ -1,11 +1,15 @@
 //! Private authority composition for a paired Shell input attempt.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::approval::operator_requester::OperatorApprovalRequester;
+use crate::builtin_tools::process_registry::{
+    encode_session_label, process_registry, RegisterOutcome,
+};
+use crate::builtin_tools::{code_exec, process_completion};
 use crate::capability::facade::BackendLease;
 use crate::capability::zahir_facade::ZahirFacade;
 use crate::config::types::{agents_def::agent_admits_user, policies::EXEC_TIER_SESSION_KEY};
@@ -16,6 +20,8 @@ use crate::gateway::router::SessionKey;
 use crate::gateway::server::connection::dispatch::PairedShellOrigin;
 use crate::gateway::session_store::file_backend::{ShellSessionGuard, ShellSessionIdentity};
 use crate::gateway::session_store::SessionStore;
+use crate::sandbox::context::LIVE_TAIL;
+use crate::sandbox::live_tail::LiveTail;
 use crate::sandbox::shell_input::{
     ShellEffectDenied, ShellEffectResult, ShellInputAction, ShellPipeAttempt, JSONL_ARGS,
     JSONL_PROGRAM,
@@ -34,14 +40,15 @@ use super::{
 
 /// This is a binding to live owners, not a snapshot granting permission.
 /// In particular no role, session tier, or merged tool permission is cached.
-#[cfg_attr(test, derive(Clone))]
-pub(super) struct PairedShellRoute {
+#[derive(Clone)]
+pub(crate) struct PairedShellRoute {
     origin: PairedShellOrigin,
     agents: Arc<AgentRegistry>,
     agent: Arc<AgentInstance>,
     config: Arc<RwLock<crate::Config>>,
     agent_manager: Arc<crate::AgentManager>,
     store: Arc<dyn SessionStore>,
+    sandbox: Arc<dyn Sandbox>,
     session: SessionKey,
 }
 
@@ -77,8 +84,159 @@ impl PairedShellRoute {
             config: owners.config,
             agent_manager: owners.agent_manager,
             store: owners.sessions,
+            sandbox: owners.sandbox,
             session: request.session_key.clone(),
         })
+    }
+
+    pub(crate) fn can_offer(&self) -> bool {
+        let Ok(config) = self.config.try_read() else {
+            return false;
+        };
+        self.agent.is_tool_allowed("bash")
+            && self
+                .sandbox
+                .as_workspace()
+                .is_some_and(|workspace| workspace.can_run_fixed_jsonl(&config))
+            && self.agents.try_shell_agent_guard(&self.agent).is_ok()
+            && self
+                .origin
+                .try_effect_guard()
+                .is_ok_and(|guard| guard.role_at_effect().is_some())
+    }
+
+    pub(crate) async fn launch(
+        &self,
+        service: &ScopedToolService,
+        timeout: Duration,
+        cancel: &CancellationToken,
+    ) -> Result<u64, ShellEffectDenied> {
+        if timeout.is_zero() || timeout > Duration::from_secs(4 * 60 * 60) {
+            return Err(ShellEffectDenied::Expired);
+        }
+        let job = Arc::new(ShellLifecycle::default());
+        let deadline = Instant::now() + timeout;
+        let path = self.agent.workspace().to_path_buf();
+        let workspace = tokio::task::spawn_blocking(move || ShellWorkspace::pin(&path))
+            .await
+            .map_err(|_| ShellEffectDenied::Stale)?
+            .map_err(|_| ShellEffectDenied::Stale)?;
+        let launch = SandboxCommand {
+            session_id: self.session.clone(),
+            tool_name: "bash".into(),
+            program: JSONL_PROGRAM.into(),
+            args: JSONL_ARGS.into_iter().map(str::to_owned).collect(),
+            cwd: Some(workspace.path().to_path_buf()),
+            env: Default::default(),
+            capabilities: crate::sandbox::SandboxCapabilities {
+                max_memory_mb: Some(256),
+                ..Default::default()
+            },
+            stdin: None,
+            timeout: Some(timeout),
+        };
+        let authority = Arc::new(
+            ShellInputAuthority::bind(
+                self.clone(),
+                launch,
+                service,
+                workspace,
+                job.clone(),
+                deadline,
+            )
+            .await?,
+        );
+        authority.check_launch().await?;
+        if cancel.is_cancelled() || Instant::now() >= deadline {
+            return Err(ShellEffectDenied::Expired);
+        }
+        let registry = process_registry();
+        let label = "jq (jsonl_inspect)";
+        let id = match registry.reserve_shell(
+            label,
+            Some(encode_session_label(&self.session)),
+            job.clone(),
+        ) {
+            RegisterOutcome::Registered(id) => id,
+            RegisterOutcome::TooManyRunning { .. } | RegisterOutcome::AdmissionClosed => {
+                return Err(ShellEffectDenied::Busy);
+            }
+        };
+        let live = Arc::new(LiveTail::for_shell());
+        registry.attach_live(id, live.clone());
+        if !registry.attach_shell_input(id, &job, authority.clone()) {
+            job.request_cancel();
+            let _ = job.cancel_before_spawn();
+            let output = code_exec::sandbox_result_to_output(
+                Err(SandboxError::ExecutionFailed(
+                    "fixed JSONL reservation lost".into(),
+                )),
+                "bash".into(),
+                timeout.as_secs(),
+            );
+            registry.complete(id, output);
+            return Err(ShellEffectDenied::Stale);
+        }
+        let identity = crate::approval::current_call_identity();
+        let turn = crate::tools::turn_context::current_turn_context();
+        let originator = crate::tools::turn_context::current_originator();
+        let session = self.session.clone();
+        tokio::spawn(async move {
+            use crate::sandbox::context::{with_exec_workspace_binding, ExecWorkspace, SESSION_ID};
+            use crate::tools::turn_context::{with_originator, TURN_CONTEXT};
+
+            let workspace = ExecWorkspace::Directory(authority.workspace.path().to_path_buf());
+            let execute = SESSION_ID.scope(
+                session.clone(),
+                LIVE_TAIL.scope(
+                    live,
+                    with_exec_workspace_binding(Some(workspace), authority.run()),
+                ),
+            );
+            let execute =
+                crate::approval::with_call_identity(identity, with_originator(originator, execute));
+            let result = match turn {
+                Some(turn) => TURN_CONTEXT.scope(turn, execute).await,
+                None => execute.await,
+            };
+            let output =
+                code_exec::sandbox_result_to_output(result, "bash".into(), timeout.as_secs());
+            let event = process_completion::completion_event(
+                id,
+                label,
+                output.exit_code,
+                &output.stdout,
+                &output.stderr,
+            );
+            if registry.complete(id, output) {
+                process_completion::broadcast(&session, event).await;
+            }
+        });
+        Ok(id)
+    }
+
+    pub(crate) async fn input(
+        &self,
+        service: &ScopedToolService,
+        approval: &OperatorApprovalRequester,
+        id: u64,
+        cancel: &CancellationToken,
+        action: ShellInputAction,
+    ) -> Result<ShellEffectResult, ShellEffectDenied> {
+        let authority = process_registry()
+            .shell_input(id, &self.session, matches!(action, ShellInputAction::Close))
+            .ok_or(ShellEffectDenied::Stale)?;
+        authority
+            .apply(
+                self,
+                service,
+                approval,
+                id,
+                authority.deadline,
+                cancel,
+                action,
+            )
+            .await
     }
 
     fn same_owners(&self, current: &Self) -> bool {
@@ -88,6 +246,7 @@ impl PairedShellRoute {
             && Arc::ptr_eq(&self.config, &current.config)
             && Arc::ptr_eq(&self.agent_manager, &current.agent_manager)
             && Arc::ptr_eq(&self.store, &current.store)
+            && Arc::ptr_eq(&self.sandbox, &current.sandbox)
             && self.session == current.session
     }
 
@@ -127,7 +286,7 @@ impl PairedShellRoute {
     }
 }
 
-pub(super) struct ShellInputAuthority {
+pub(crate) struct ShellInputAuthority {
     route: PairedShellRoute,
     session: ShellSessionIdentity,
     workspace: ShellWorkspace,
@@ -136,7 +295,6 @@ pub(super) struct ShellInputAuthority {
     launch: SandboxCommand,
     facade: Arc<ZahirFacade>,
     lease: BackendLease,
-    job_id: u64,
     job: Arc<ShellLifecycle>,
     deadline: Instant,
 }
@@ -163,12 +321,11 @@ impl Drop for UnobservedDelivery {
 impl ShellInputAuthority {
     /// Bootstrap from the admitted launch, before exposing its input handle.
     #[allow(clippy::too_many_arguments)]
-    pub(super) async fn bind(
+    async fn bind(
         route: PairedShellRoute,
         launch: SandboxCommand,
-        sandbox: Arc<dyn Sandbox>,
         service: &ScopedToolService,
-        job_id: u64,
+        workspace: ShellWorkspace,
         job: Arc<ShellLifecycle>,
         deadline: Instant,
     ) -> Result<Self, ShellEffectDenied> {
@@ -182,6 +339,7 @@ impl ShellInputAuthority {
             return Err(ShellEffectDenied::Stale);
         }
         let (facade, lease) = service.capture_paired_shell()?;
+        let sandbox = route.sandbox.clone();
         let policy = sandbox
             .as_workspace()
             .and_then(|workspace| workspace.fixed_jsonl_policy())
@@ -191,11 +349,6 @@ impl ShellInputAuthority {
         route.check_session(&session)?;
         let identity = session.identity().clone();
         drop(session);
-        let path = route.agent.workspace().to_path_buf();
-        let workspace = tokio::task::spawn_blocking(move || ShellWorkspace::pin(&path))
-            .await
-            .map_err(|_| ShellEffectDenied::Stale)?
-            .map_err(|_| ShellEffectDenied::Stale)?;
         if launch.cwd.as_deref() != Some(workspace.path()) {
             return Err(ShellEffectDenied::Stale);
         }
@@ -208,10 +361,45 @@ impl ShellInputAuthority {
             launch,
             facade,
             lease,
-            job_id,
             job,
             deadline,
         })
+    }
+
+    async fn check_launch(&self) -> Result<(), ShellEffectDenied> {
+        let session = self.route.session_guard(Some(&self.session)).await?;
+        let metadata = self.route.check_session(&session)?;
+        let config = self
+            .route
+            .config
+            .try_read()
+            .map_err(|_| ShellEffectDenied::Busy)?;
+        let _agent = self.route.agents.try_shell_agent_guard(&self.route.agent)?;
+        if !self.policy.matches_config(&config) {
+            return Err(ShellEffectDenied::UnverifiedPolicy);
+        }
+        let account = self.route.origin.try_effect_guard()?;
+        let role = account.role_at_effect().ok_or(ShellEffectDenied::Expired)?;
+        if self.check_permission(&config, metadata, role)? != PermissionAction::Allow {
+            return Err(ShellEffectDenied::ApprovalRequired);
+        }
+        self.facade
+            .validate_completion(&self.lease)
+            .map_err(|_| ShellEffectDenied::Stale)
+    }
+
+    fn check_permission(
+        &self,
+        config: &crate::Config,
+        metadata: &crate::gateway::session_store::types::SessionMetadata,
+        role: crate::gateway::security::store::UserRole,
+    ) -> Result<PermissionAction, ShellEffectDenied> {
+        let permission =
+            turn_permissions::paired_shell_permission(config, metadata, &self.route.agent, role)?;
+        if !self.route.agent.is_tool_allowed("bash") || permission == PermissionAction::Deny {
+            return Err(ShellEffectDenied::Stale);
+        }
+        Ok(permission)
     }
 
     /// Run the native child using the exact workspace and policy-bearing
@@ -224,7 +412,12 @@ impl ShellInputAuthority {
                     reason: "fixed JSONL sandbox is unavailable".into(),
                 })?;
         sandbox
-            .execute_fixed_jsonl(self.launch.clone(), &self.workspace, &self.job)
+            .execute_fixed_jsonl(
+                self.launch.clone(),
+                &self.workspace,
+                &self.job,
+                self.deadline.into(),
+            )
             .await
     }
 
@@ -233,6 +426,7 @@ impl ShellInputAuthority {
         current: &PairedShellRoute,
         service: &ScopedToolService,
         approval: &OperatorApprovalRequester,
+        job_id: u64,
         deadline: Instant,
         cancel: &CancellationToken,
         action: ShellInputAction,
@@ -250,7 +444,7 @@ impl ShellInputAuthority {
         let _cancel_on_drop = attempt_cancel.clone().drop_guard();
         let attempt = ShellPipeAttempt::prepare(
             self.job.clone(),
-            self.job_id,
+            job_id,
             &self.policy,
             &self.launch,
             approval,
@@ -325,16 +519,7 @@ impl ShellInputAuthority {
         }
         let account = self.route.origin.try_effect_guard()?;
         let role = account.role_at_effect().ok_or(ShellEffectDenied::Expired)?;
-        if !self.route.agent.is_tool_allowed("bash")
-            || turn_permissions::paired_shell_permission(
-                &config,
-                metadata,
-                &self.route.agent,
-                role,
-            )? == PermissionAction::Deny
-        {
-            return Err(ShellEffectDenied::Stale);
-        }
+        self.check_permission(&config, metadata, role)?;
         self.facade
             .commit_shell_pipe_attempt(&self.lease, account.bound_attempt(attempt)?)
     }
@@ -522,6 +707,7 @@ pub(super) mod tests {
             config: Arc::new(RwLock::new(config)),
             agent_manager,
             sessions: store,
+            sandbox: sandbox.clone(),
         };
         assert!(PairedShellRoute::for_turn(&request, agent.clone()).is_none());
         let current =
@@ -567,40 +753,29 @@ pub(super) mod tests {
             filtered.capture_paired_shell(),
             Err(ShellEffectDenied::Stale)
         ));
-        let service = ScopedToolService::new(projection, ["bash".into()].into());
-        let launch = SandboxCommand {
-            session_id: session,
-            tool_name: "bash".into(),
-            program: JSONL_PROGRAM.into(),
-            args: JSONL_ARGS.into_iter().map(str::to_owned).collect(),
-            cwd: Some(workspace.canonicalize().unwrap()),
-            env: Default::default(),
-            capabilities: crate::sandbox::SandboxCapabilities {
-                max_memory_mb: Some(256),
-                ..Default::default()
-            },
-            stdin: None,
-            timeout: Some(Duration::from_secs(15)),
-        };
-        let job = Arc::new(ShellLifecycle::default());
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let authority = Arc::new(
-            ShellInputAuthority::bind(
-                current.clone(),
-                launch,
-                sandbox,
-                &service,
-                1,
-                job.clone(),
-                deadline,
-            )
-            .await
-            .unwrap(),
-        );
         let bus = Arc::new(GatewayEventBus::new());
         let mut events = bus.subscribe_typed();
         let approvals = Arc::new(ExecApprovalManager::new());
-        let requester = OperatorApprovalRequester::for_config_tier(approvals.clone(), bus);
+        let requester = Arc::new(OperatorApprovalRequester::for_config_tier(
+            approvals.clone(),
+            bus,
+        ));
+        let service = ScopedToolService::new(projection, ["bash".into()].into())
+            .with_paired_shell(Some(current.clone()))
+            .with_operator_approval(requester.clone())
+            .with_turn_context(crate::tools::turn_context::TurnContext {
+                session_key: request.session_key.clone(),
+                run_id: request.run_id.clone(),
+                channel_id: String::new(),
+                conversation_id: String::new(),
+                caller_role: Some("member".into()),
+                channel_tool_permissions: None,
+                unattended: false,
+                plan_gate: None,
+                side_question: false,
+                telecom_authority: None,
+            });
+        let deadline = Instant::now() + Duration::from_secs(10);
         let cancel = CancellationToken::new();
         let set_status = |status| {
             account_store
@@ -677,29 +852,29 @@ pub(super) mod tests {
         };
 
         if native {
-            use crate::sandbox::context::{with_exec_workspace, LIVE_TAIL, SESSION_ID};
-            use crate::sandbox::LiveTail;
+            use crate::builtin_tools::process_registry::{ReadOutcome, WaitOutcome};
 
-            let live = Arc::new(LiveTail::new());
-            let mut run = Box::pin(SESSION_ID.scope(
-                current.session.clone(),
-                LIVE_TAIL.scope(
-                    live.clone(),
-                    with_exec_workspace(Some(workspace), authority.run()),
-                ),
-            ));
-            tokio::select! {
-                result = &mut run => panic!("fixed consumer ended before attaching: {result:?}"),
-                ready = tokio::time::timeout_at(deadline.into(), async {
-                    while job.input_progress_for_test().is_err() {
-                        tokio::time::sleep(Duration::from_millis(5)).await;
-                    }
-                }) => ready.expect("fixed consumer never attached"),
-            }
+            let id = service
+                .launch_paired_shell(Duration::from_secs(15), &cancel)
+                .await
+                .expect("reserve fixed jq through the scoped dispatcher");
+            let registry = process_registry();
+            let caller = encode_session_label(&current.session);
+            assert!(registry
+                .shell_input(id, &SessionKey::main("other"), false)
+                .is_none());
+            let authority = registry.shell_input(id, &current.session, false).unwrap();
+            let job = authority.job.clone();
+            tokio::time::timeout_at(deadline.into(), async {
+                while job.input_progress_for_test().is_err() {
+                    assert!(registry.shell_input(id, &current.session, false).is_some());
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("fixed consumer never attached");
 
-            let apply = |action| {
-                Box::pin(authority.apply(&current, &service, &requester, deadline, &cancel, action))
-            };
+            let apply = |action| Box::pin(service.input_paired_shell(id, &cancel, action));
             for (mutation, error) in [
                 (Mutation::Account, ShellEffectDenied::Stale),
                 (Mutation::ToolPermission, ShellEffectDenied::Stale),
@@ -728,11 +903,8 @@ pub(super) mod tests {
             drop(config_writer);
 
             let pending = CancellationToken::new();
-            let mut abandoned = Box::pin(authority.apply(
-                &current,
-                &service,
-                &requester,
-                deadline,
+            let mut abandoned = Box::pin(service.input_paired_shell(
+                id,
                 &pending,
                 write(serde_json::json!([1, 2, 3])),
             ));
@@ -751,18 +923,25 @@ pub(super) mod tests {
             approve(&mut events);
             assert_eq!(accepted.await, Ok(ShellEffectResult::Written(6)));
             set_status(UserStatus::Deactivated);
-            tokio::select! {
-                result = &mut run => panic!("fixed consumer ended before EOF: {result:?}"),
-                output = tokio::time::timeout_at(deadline.into(), async {
-                    loop {
-                        let bytes = live.snapshot().stdout;
-                        if bytes.ends_with(b"\n") {
-                            break bytes;
-                        }
-                        tokio::time::sleep(Duration::from_millis(5)).await;
+            let cursor = tokio::time::timeout_at(deadline.into(), async {
+                loop {
+                    let ReadOutcome::View {
+                        stdout,
+                        next_cursor,
+                        ..
+                    } = registry.read(id, &current.session, None)
+                    else {
+                        panic!("fixed consumer output is unavailable");
+                    };
+                    if !stdout.text.is_empty() {
+                        assert_eq!(stdout.text.trim_end(), r#"{"kind":"array","count":2}"#);
+                        break next_cursor;
                     }
-                }) => assert_eq!(output.unwrap(), b"{\"kind\":\"array\",\"count\":2}\n"),
-            }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("fixed consumer should emit before EOF");
             assert!(matches!(
                 events.try_recv(),
                 Ok(GatewayEventFrame::ApprovalResolved { .. })
@@ -780,22 +959,85 @@ pub(super) mod tests {
             assert_eq!(job.input_progress_for_test().unwrap(), (6, false));
             set_status(UserStatus::Active);
 
+            let mut another = apply(write(serde_json::json!({"private_marker": 42})));
+            assert!(futures::poll!(another.as_mut()).is_pending());
+            approve(&mut events);
+            assert_eq!(another.await, Ok(ShellEffectResult::Written(22)));
+            check_resolved(&mut events);
+            let next = tokio::time::timeout_at(deadline.into(), async {
+                loop {
+                    let ReadOutcome::View {
+                        stdout,
+                        next_cursor,
+                        ..
+                    } = registry.read(id, &current.session, Some(&cursor))
+                    else {
+                        panic!("second fixed consumer record is unavailable");
+                    };
+                    if !stdout.text.is_empty() {
+                        assert_eq!(stdout.text.trim_end(), r#"{"kind":"object","count":1}"#);
+                        break next_cursor;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("second record should be processed before EOF");
+
             let mut eof = apply(ShellInputAction::Close);
             assert!(futures::poll!(eof.as_mut()).is_pending());
             approve(&mut events);
             assert_eq!(eof.await, Ok(ShellEffectResult::Closed));
-            let output = tokio::time::timeout_at(deadline.into(), run)
+            let WaitOutcome::Done(output) = registry
+                .wait(id, Some(&caller), Duration::from_secs(4))
                 .await
-                .expect("native child should settle after EOF")
-                .expect("native child should exit normally");
-            assert_eq!(output.exit_code, Some(0));
+            else {
+                panic!("native child should settle after EOF");
+            };
+            assert_eq!(output.exit_code, 0);
             assert_eq!(
-                live.snapshot().stdout,
-                b"{\"kind\":\"array\",\"count\":2}\n"
+                output.stdout.lines().collect::<Vec<_>>(),
+                [
+                    r#"{"kind":"array","count":2}"#,
+                    r#"{"kind":"object","count":1}"#,
+                ]
             );
+            assert!(output.stderr.is_empty());
+            assert!(
+                matches!(registry.read(id, &current.session, Some(&next)), ReadOutcome::View { stdout, .. } if stdout.text.is_empty())
+            );
+            assert!(registry.shell_input(id, &current.session, false).is_none());
             return;
         }
 
+        let workspace = ShellWorkspace::pin(&workspace).unwrap();
+        let launch = SandboxCommand {
+            session_id: session,
+            tool_name: "bash".into(),
+            program: JSONL_PROGRAM.into(),
+            args: JSONL_ARGS.into_iter().map(str::to_owned).collect(),
+            cwd: Some(workspace.path().to_path_buf()),
+            env: Default::default(),
+            capabilities: crate::sandbox::SandboxCapabilities {
+                max_memory_mb: Some(256),
+                ..Default::default()
+            },
+            stdin: None,
+            timeout: Some(Duration::from_secs(15)),
+        };
+        let job = Arc::new(ShellLifecycle::default());
+        let authority = Arc::new(
+            ShellInputAuthority::bind(
+                current.clone(),
+                launch,
+                &service,
+                workspace,
+                job.clone(),
+                deadline,
+            )
+            .await
+            .unwrap(),
+        );
         let (mut reader, writer) = nonblocking_test_pipe();
         job.spawn(|| Ok(())).unwrap();
         job.ready_with_input(writer).unwrap();
@@ -818,7 +1060,7 @@ pub(super) mod tests {
                 ShellInputAction::Write(JsonlFrame::from_record(&serde_json::Value::Null).unwrap())
             };
             let mut effect = Box::pin(
-                authority.apply(&current, &service, &requester, deadline, &cancel, action),
+                authority.apply(&current, &service, &requester, 1, deadline, &cancel, action),
             );
             assert!(futures::poll!(effect.as_mut()).is_pending());
             let GatewayEventFrame::ApprovalRequested { approval_id, .. } =
@@ -857,6 +1099,7 @@ pub(super) mod tests {
                 &current,
                 &service,
                 &requester,
+                1,
                 deadline,
                 &cancel,
                 ShellInputAction::Close,

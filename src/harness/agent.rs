@@ -964,11 +964,13 @@ pub(crate) fn tool_use_blocks(tool_calls: &[NativeToolCall]) -> Vec<Value> {
     tool_calls
         .iter()
         .map(|c| {
+            let projected =
+                crate::builtin_tools::bash_jsonl::project_arguments(&c.name, &c.arguments);
             let mut block = json!({
                 "type": "tool_use",
                 "id": c.id,
                 "name": c.name,
-                "input": c.arguments,
+                "input": projected.as_ref().unwrap_or(&c.arguments),
             });
             if let Some(sig) = &c.thought_signature {
                 // `json!({...})` above always yields an Object, but saying so

@@ -489,6 +489,10 @@ name = "markdown_projection_bench"
 harness = false
 
 [[test]]
+name = "paired_shell_gateway"
+required-features = ["test-helpers"]
+
+[[test]]
 name = "cron_probe"
 required-features = ["test-helpers"]
 

@@ -1303,6 +1303,7 @@ mod dialog_key_tests {
                     .map(|label| AskUserOption {
                         label,
                         description: None,
+                        preview: None,
                     })
                     .collect(),
                 multi_select: view.multi_select,

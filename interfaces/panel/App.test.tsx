@@ -245,6 +245,168 @@ test("Nebula opens exact search addresses without assuming graph membership", as
   await app.waitFor("Body from org-b");
   expect(app.texts()).toContain("Not in the current graph");
   expect(paramsSeen).toEqual([{ agent_id: "org-b", node_id: "concept/same" }]);
+  expect(app.texts()).not.toContain("Edit Markdown");
+});
+
+test("Nebula keeps a conflicting Markdown draft and retries with an explicit revision", async () => {
+  const node = { id: "concept/note", path: "concept/note", tags: [], link_count: 0, agent_id: "org-a", name: "Draft target", category: "concept" };
+  const tab = { ...NEBULA_TAB, descriptor: { ...NEBULA_TAB.descriptor, permissions: ["graph.mutate_note"] } };
+  const attempts: Record<string, unknown>[] = [];
+  let content = "Original Markdown";
+  let revision = "old";
+  const handlers = gateway({
+    "panel.capabilities.snapshot": () => nebulaSnapshot([tab]),
+    "graph.query": () => ({ nodes: [node], edges: [] }),
+    "graph.node_detail": () => ({ node, content, revision, backlinks: [] }),
+  });
+  const read = handlers["aleph.rpc"];
+  const app = await openPanel({ host: { handlers: { ...handlers,
+    "aleph.rpc": (call: { method: string; params: Record<string, unknown> }) => {
+      if (call.method !== "graph.mutate_note") return read(call);
+      attempts.push(call.params);
+      if (attempts.length === 1) {
+        content = "Concurrent Markdown";
+        revision = "current";
+        return { error: { code: -32031, message: "Note changed. Reload it before retrying." } };
+      }
+      content = String((call.params.action as { content: string }).content);
+      revision = "saved";
+      return { result: { address: { agent_id: node.agent_id, node_id: node.id }, status: "updated" } };
+    },
+  } } });
+  await app.waitFor("label:Open Memory Nebula");
+  await app.press("label:Open Memory Nebula");
+  await app.waitFor("Draft target");
+  await app.press("Draft target");
+  await app.press("Edit Markdown");
+  await app.type("label:Note Markdown", " Draft");
+  await app.press("Save");
+  await app.waitFor("Note changed. Reload it before retrying.");
+  await app.press("Reload note");
+  await app.waitFor("Concurrent Markdown");
+  await app.press("Use latest revision");
+  await app.press("Save");
+  await app.waitFor("Edit Markdown");
+  expect(attempts).toHaveLength(2);
+  expect(attempts[0]).toMatchObject({ address: { agent_id: "org-a", node_id: "concept/note" }, action: { type: "update" }, revision: "old" });
+  expect(String((attempts[0].action as { content: string }).content)).toContain(" Draft");
+  expect(attempts[1]).toMatchObject({ revision: "current", action: attempts[0].action });
+  expect(attempts[1].idempotency_key).not.toEqual(attempts[0].idempotency_key);
+});
+
+test("Nebula resumes a partial rename using the original request after opening its destination", async () => {
+  const agent_id = "org-a";
+  const original = { agent_id, node_id: "concept/original" };
+  const destination = { agent_id, node_id: "concept/renamed" };
+  const failedSource = { agent_id, node_id: "concept/linking" };
+  const noteRow = (target: typeof original, name: string) => ({
+    agent_id, id: target.node_id, path: target.node_id, name, category: "concept", tags: [], link_count: 0,
+  });
+  const tab = { ...NEBULA_TAB, descriptor: { ...NEBULA_TAB.descriptor, permissions: ["graph.mutate_note"] } };
+  const attempts: unknown[] = [];
+  const handlers = gateway({
+    "panel.capabilities.snapshot": () => nebulaSnapshot([tab]),
+    "graph.query": () => ({ nodes: [noteRow(original, "Original note")], edges: [] }),
+    "graph.node_detail": (params) => ({
+      node: (params as typeof original).node_id === destination.node_id ? noteRow(destination, "Renamed note") : noteRow(original, "Original note"),
+      content: "Markdown body", revision: "original revision", backlinks: [],
+    }),
+  });
+  const read = handlers["aleph.rpc"];
+  const app = await openPanel({ host: { handlers: { ...handlers,
+    "aleph.rpc": (call: { method: string; params: Record<string, unknown> }) => {
+      if (call.method !== "graph.mutate_note") return read(call);
+      attempts.push(call.params);
+      if (attempts.length === 1) return { error: { code: -32603, message: "Index reconciliation is required", data: {
+        reconciliation_required: true, address: destination, failed_source: failedSource,
+      } } };
+      return { result: { address: destination, status: "renamed" } };
+    },
+  } } });
+  await app.waitFor("label:Open Memory Nebula");
+  await app.press("label:Open Memory Nebula");
+  await app.press("Original note");
+  await app.press("Rename");
+  await app.type("label:New note title", " revised");
+  await app.press("Save");
+  await app.waitFor("Index reconciliation is required");
+  await app.waitFor("Inspect backlink source");
+  await app.press("Reload affected note");
+  await app.waitFor("Renamed note");
+  await app.press("Resume rename");
+  await app.waitFor("Edit Markdown");
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]).toEqual(attempts[0]);
+});
+
+test("Nebula follows addressed relationships and focuses an off-window note", async () => {
+  const root = { id: "concept/root", path: "concept/root", tags: [], link_count: 1, agent_id: "org-a", name: "Root", category: "concept" };
+  const neighbor = { ...root, id: "concept/neighbor", path: "concept/neighbor", name: "Neighbor" };
+  const target = { agent_id: "org-a", node_id: neighbor.id };
+  const app = await open("./App.tsx", { host: { handlers: gateway({
+    "panel.capabilities.snapshot": () => nebulaSnapshot([NEBULA_TAB]),
+    "graph.query": (params) => (params as { focus?: unknown }).focus
+      ? { nodes: [neighbor, root], edges: [], focus: target }
+      : { nodes: [root], edges: [] },
+    "graph.node_detail": (params) => (params as { node_id: string }).node_id === root.id
+      ? { node: root, content: "Root body", backlinks: [], outgoing: [
+        { to: neighbor.id, status: "active", label: "Follow neighbor", target },
+        { to: "concept/deleted", status: "tombstone" },
+      ] }
+      : { node: neighbor, content: "Neighbor body", backlinks: [root.id], backlink_targets: [{ agent_id: root.agent_id, node_id: root.id }] },
+  }) } });
+  await app.waitFor("label:Open Memory Nebula");
+  await app.press("label:Open Memory Nebula");
+  await app.waitFor("Root");
+  await app.press("Root");
+  await app.waitFor("→ Follow neighbor");
+  expect(app.texts()).toContain("→ concept/deleted · tombstone");
+  await app.press("→ Follow neighbor");
+  await app.waitFor("Neighbor body");
+  await app.press("Show neighborhood");
+  await app.waitFor("2 notes in this neighborhood");
+  expect(rpcParams(app, "graph.query")).toEqual([{ limit: 100 }, { limit: 500, focus: target }]);
+  expect(rpcParams(app, "graph.node_detail").at(-1)).toEqual(target);
+  await app.press("← concept/root");
+  await app.waitFor("Root body");
+  await app.press("Back to overview");
+  await app.waitFor("1 of 1 graph notes");
+  expect(rpcParams(app, "graph.query").at(-1)).toEqual({ limit: 100 });
+});
+
+test("Nebula keeps its graph after refresh fails and discards a late detail", async () => {
+  const first = { id: "concept/first", path: "concept/first", tags: [], link_count: 0, agent_id: "org-a", name: "First note", category: "concept" };
+  const second = { ...first, id: "concept/second", path: "concept/second", name: "Second note" };
+  let queries = 0;
+  let finishFirst!: (response: unknown) => void;
+  const firstDetail = new Promise<unknown>((resolve) => { finishFirst = resolve; });
+  const app = await open("./App.tsx", { host: { handlers: gateway({
+    "panel.capabilities.snapshot": () => nebulaSnapshot([NEBULA_TAB]),
+    "graph.query": () => {
+      if (++queries === 2) throw new Error("Graph temporarily unavailable");
+      return { nodes: [first, second], edges: [] };
+    },
+    "graph.node_detail": (params) => (params as { node_id: string }).node_id === first.id
+      ? firstDetail
+      : { node: second, content: "Second body", backlinks: [] },
+  }) } });
+  await app.waitFor("label:Open Memory Nebula");
+  await app.press("label:Open Memory Nebula");
+  await app.waitFor("First note");
+  const openFirst = app.press("First note");
+  await app.waitUntil(() => rpcCalls(app, "graph.node_detail") === 1);
+  const openSecond = app.press("Second note");
+  await app.waitFor("Second body");
+  finishFirst({ node: first, content: "Late first body", backlinks: [] });
+  await openFirst;
+  await openSecond;
+  await app.press("Refresh graph");
+  await app.waitFor("Retry graph");
+  expect(app.texts()).toContain("2 of 2 graph notes");
+  expect(app.texts()).toContain("Second body");
+  expect(app.texts()).not.toContain("Late first body");
+  await app.press("Retry graph");
+  await app.waitFor("Retry graph", { state: "gone" });
 });
 
 test("Nebula discovery is not carried across connection identities", async () => {
@@ -314,6 +476,198 @@ async function openChat(handlers: ReturnType<typeof gateway>) {
   await app.waitFor("Earlier answer");
   return app;
 }
+
+const questionnaireWrites = (app: Parameters<typeof rpcParams>[0]) =>
+  rpcParams(app, "clarification.resolve").map(({ idempotency_key, ...params }) => {
+    expect(String(idempotency_key)).toMatch(/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/);
+    return params;
+  });
+
+const selectQuestion = {
+  id: "choice", prompt: "Select deployment?", multi_select: true,
+  options: [
+    { label: "Alpha", description: "Shared QA", preview: "```toml\nport = 42\n```" },
+    { label: "Beta" },
+  ],
+};
+const textQuestion = { id: "literal", prompt: "Type the reply", options: [{ label: "Existing reply" }] };
+const secretQuestion = { id: "secret", prompt: "Enter the test value", options: [], secret: true };
+const pendingQuestionnaire = (request_id = "request-1", answered = 0) => ({
+  session_key: "s-1", request_id, run_id: "r-1", answered,
+  questions: [selectQuestion, textQuestion, secretQuestion],
+});
+const askEvent = (request_id: string) => ({ topic: "stream.ask_user", data: {
+  type: "ask_user", session_key: "s-1", request_id, run_id: "r-1",
+} });
+
+test("previews independently and submits one exact guarded batch after review", async () => {
+  let pending = [pendingQuestionnaire()];
+  const { handlers } = chatGateway({
+    "clarification.pending": () => ({ pending }),
+    "clarification.resolve": () => { pending = []; return { status: "answered" }; },
+  });
+  const app = await openChat(handlers);
+  await app.waitFor("Select deployment?");
+  await app.type("label:Message", "ordinary draft");
+  await app.press("label:Preview Alpha");
+  await app.waitFor("port = 42");
+  expect(rpcParams(app, "clarification.resolve")).toEqual([]);
+  await app.press("label:Hide preview for Alpha");
+  await app.waitFor("port = 42", { state: "gone" });
+  await app.press("label:Beta");
+  await app.press("Continue");
+  await app.press("Enter your own answer");
+  await app.type("label:Your answer", "1");
+  await app.press("Continue");
+  await app.type("label:Your answer", "private-test-value");
+  await app.press("Review answers");
+  await app.waitFor("Hidden answer");
+  expect(app.texts()).not.toContain("private-test-value");
+  expect(rpcParams(app, "clarification.resolve")).toEqual([]);
+  await app.press("Submit answers");
+  await app.waitFor("Submit answers", { state: "gone" });
+  expect(questionnaireWrites(app)).toEqual([{
+    session_key: "s-1", expected_request_id: "request-1", expected_question_id: "choice",
+    action: { kind: "submit", answers: [
+      { question_id: "choice", answer: { kind: "choices", indices: [1] } },
+      { question_id: "literal", answer: { kind: "text", text: "1" } },
+      { question_id: "secret", answer: { kind: "text", text: "private-test-value" } },
+    ] },
+  }]);
+  await app.press("Send");
+  expect(rpcParams(app, "chat.send")[0]?.message).toBe("ordinary draft");
+});
+
+test("rereads current guards after advance and ignores a late ask after reconnect", async () => {
+  let pending = [pendingQuestionnaire()];
+  const { handlers } = chatGateway({
+    "sessions.list": () => ({ sessions: [
+      { key: "s-1", label: "Release notes", message_count: 3 },
+      { key: "s-2", label: "Build notes", message_count: 2 },
+    ], count: 2 }),
+    "clarification.pending": () => ({ pending }),
+    "clarification.resolve": () => { pending = []; return { status: "cancelled" }; },
+  });
+  const app = await openChat(handlers);
+  await app.waitFor("Select deployment?");
+  pending = [pendingQuestionnaire("request-1", 1)];
+  await app.host.send("aleph.event", askEvent("request-1"));
+  await app.waitFor("Type the reply");
+  await app.press("Cancel questions");
+  await app.waitFor("Type the reply", { state: "gone" });
+  expect(questionnaireWrites(app)).toEqual([{
+    session_key: "s-1", expected_request_id: "request-1", expected_question_id: "literal",
+    action: { kind: "cancel" },
+  }]);
+  pending = [pendingQuestionnaire("request-2")];
+  await app.host.send("aleph.connection", { ...CONNECTED, state: "disconnected", subject: null });
+  await app.host.send("aleph.connection", CONNECTED);
+  await app.waitFor("Select deployment?");
+  await app.press("label:Beta");
+  await app.press("label:Open Sessions");
+  await app.press("label:Open chat Build notes");
+  await app.waitFor("Select deployment?", { state: "gone" });
+  await app.press("label:Open Sessions");
+  await app.press("label:Open chat Release notes");
+  await app.waitFor("Select deployment?");
+  expect(rpcParams(app, "clarification.resolve")).toHaveLength(1);
+  pending = [];
+  await app.host.send("aleph.event", askEvent("request-1"));
+  await app.waitFor("Select deployment?", { state: "gone" });
+  expect(rpcParams(app, "clarification.resolve").length).toBe(1);
+});
+
+test("keeps later drafts when another panel advances the same questionnaire", async () => {
+  let pending = [pendingQuestionnaire()];
+  const { handlers } = chatGateway({
+    "clarification.pending": () => ({ pending }),
+    "clarification.resolve": () => ({ status: "stale" }),
+  });
+  const app = await openChat(handlers);
+  await app.waitFor("Select deployment?");
+  await app.press("label:Beta");
+  await app.press("label:Alpha");
+  await app.press("Continue");
+  await app.press("label:Existing reply");
+  await app.press("Continue");
+  await app.type("label:Your answer", "secret draft");
+  await app.press("Review answers");
+  await app.waitFor("Beta, Alpha");
+  pending = [pendingQuestionnaire("request-1", 1)];
+  await app.host.send("aleph.event", askEvent("request-1"));
+  await app.waitFor("Type the reply");
+  await app.press("Continue");
+  await app.press("Review answers");
+  await app.waitFor("Hidden answer");
+  await app.press("Submit answers");
+  await app.waitFor("Questions changed. Check the current questionnaire before trying again.");
+  expect(questionnaireWrites(app)).toEqual([{
+    session_key: "s-1", expected_request_id: "request-1", expected_question_id: "literal",
+    action: { kind: "submit", answers: [
+      { question_id: "literal", answer: { kind: "choices", indices: [0] } },
+      { question_id: "secret", answer: { kind: "text", text: "secret draft" } },
+    ] },
+  }]);
+});
+
+test("ignores an older pending read and recovers a lost write without resending", async () => {
+  let completeRead!: (reply: unknown) => void;
+  let failWrite!: (error: Error) => void;
+  let startedRead!: () => void;
+  let startedWrite!: () => void;
+  const reading = new Promise<void>((resolve) => { startedRead = resolve; });
+  const writing = new Promise<void>((resolve) => { startedWrite = resolve; });
+  const oldRead = new Promise((resolve) => { completeRead = resolve; });
+  const lostWrite = new Promise((_, reject) => { failWrite = reject; });
+  let pending = [pendingQuestionnaire()];
+  let holdRead = false;
+  const { handlers } = chatGateway({
+    "clarification.pending": () => {
+      if (holdRead) {
+        startedRead();
+        return oldRead;
+      }
+      return { pending };
+    },
+    "clarification.resolve": () => {
+      startedWrite();
+      return lostWrite;
+    },
+  });
+  const app = await openChat(handlers);
+  await app.waitFor("Select deployment?");
+  holdRead = true;
+  const oldEvent = app.host.send("aleph.event", askEvent("request-1"));
+  try {
+    await reading;
+    holdRead = false;
+    pending = [pendingQuestionnaire("request-2", 2)];
+    await app.host.send("aleph.event", askEvent("request-2"));
+    await app.waitFor("Enter the test value");
+  } finally {
+    completeRead({ pending: [pendingQuestionnaire()] });
+    await oldEvent;
+  }
+  await app.type("label:Your answer", "answer before disconnect");
+  await app.press("Review answers");
+  const submit = app.press("Submit answers");
+  try {
+    await writing;
+    await app.keyboard.press("return");
+    expect(rpcParams(app, "clarification.resolve")).toHaveLength(1);
+    pending = [];
+  } finally {
+    failWrite(new Error("Connection lost"));
+    await submit;
+  }
+  await app.waitFor("Submit answers", { state: "gone" });
+  expect(questionnaireWrites(app)).toEqual([{
+    session_key: "s-1", expected_request_id: "request-2", expected_question_id: "secret",
+    action: { kind: "submit", answers: [
+      { question_id: "secret", answer: { kind: "text", text: "answer before disconnect" } },
+    ] },
+  }]);
+});
 
 test("resumes the acknowledged session after Settings and same-subject reconnect", async () => {
   const { handlers } = chatGateway();
