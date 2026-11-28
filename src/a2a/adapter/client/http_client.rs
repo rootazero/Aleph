@@ -20,6 +20,7 @@ use crate::security::ssrf::{validate_url_with_pinned, SsrfPolicy};
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 const STREAM_OPEN_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_STREAM_REJECTION_BYTES: usize = 64 * 1024;
 
 type EventStream = Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>;
 
@@ -293,7 +294,12 @@ impl A2AClient {
             .request_auth(client.post(url.clone()), url)?
             .json(&body);
         let request = if endpoint.streaming() {
-            request.header(reqwest::header::ACCEPT, "text/event-stream")
+            let accept = if endpoint.protocol() == RpcProtocol::Legacy {
+                "text/event-stream"
+            } else {
+                "text/event-stream, application/json"
+            };
+            request.header(reqwest::header::ACCEPT, accept)
         } else {
             request.timeout(self.timeout)
         };
@@ -381,16 +387,29 @@ impl PreparedDelegation {
 
         let protocol = self.endpoint.protocol();
         if streaming {
-            let is_sse = response
+            let media_type = response
                 .headers()
                 .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|h| h.to_str().ok())
-                .is_some_and(|h| {
-                    h.split(';')
-                        .next()
-                        .is_some_and(|main| main.trim().eq_ignore_ascii_case("text/event-stream"))
-                });
-            if !is_sse {
+                .and_then(|header| header.to_str().ok())
+                .and_then(|header| header.split(';').next())
+                .map(str::trim)
+                .unwrap_or_default();
+            if protocol != RpcProtocol::Legacy
+                && media_type.eq_ignore_ascii_case("application/json")
+            {
+                let body =
+                    tokio::time::timeout(STREAM_OPEN_TIMEOUT, read_stream_rejection(response))
+                        .await
+                        .map_err(|_| {
+                            DispatchError::unknown(A2AError::Timeout(STREAM_OPEN_TIMEOUT))
+                        })??;
+                rpc_result(protocol, &body, Some(&self.id), self.timeout)?;
+                return Err(DispatchError::unknown(A2AError::InvalidRequest(
+                    "A2A streaming endpoint returned a JSON-RPC result without an event stream"
+                        .into(),
+                )));
+            }
+            if !media_type.eq_ignore_ascii_case("text/event-stream") {
                 return Err(DispatchError::unknown(A2AError::InvalidRequest(
                     "A2A streaming endpoint did not return an event stream".into(),
                 )));
@@ -424,6 +443,23 @@ impl PreparedDelegation {
             Ok(DelegationResponse::Unary(task))
         }
     }
+}
+
+async fn read_stream_rejection(mut response: reqwest::Response) -> Result<Vec<u8>, DispatchError> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| DispatchError::unknown(transport_error(error)))?
+    {
+        if chunk.len() > MAX_STREAM_REJECTION_BYTES.saturating_sub(body.len()) {
+            return Err(DispatchError::unknown(A2AError::ParseError(
+                "A2A streaming rejection exceeds the response size limit".into(),
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 fn transport_error(err: reqwest::Error) -> A2AError {
@@ -493,7 +529,7 @@ mod tests {
     use super::*;
     use crate::a2a::domain::A2ARole;
     use futures::StreamExt;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{header, headers, method, path};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
     fn local_policy() -> SsrfPolicy {
@@ -606,7 +642,7 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path("/shared-rpc"))
-            .and(header("accept", "text/event-stream"))
+            .and(headers("accept", vec!["text/event-stream", "application/json"]))
             .respond_with(|request: &Request| {
                 let body = assert_message_request(request, "message/stream");
                 assert_eq!(body["params"]["message"]["role"], "user");
@@ -638,6 +674,49 @@ mod tests {
         };
         assert_eq!(event.status.message.unwrap().text_content(), "已完成");
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn standard_streaming_decodes_json_rpc_rejection_without_resending() {
+        for (protocol, code) in [(RpcProtocol::V03, -32004), (RpcProtocol::V1, -32005)] {
+            let server = MockServer::start().await;
+            let url = Url::parse(&format!("{}/rpc", server.uri())).unwrap();
+            let endpoint = ResolvedEndpoint::new(url, protocol, true);
+            let rpc_method = endpoint.method();
+            Mock::given(method("POST"))
+                .and(path("/rpc"))
+                .respond_with(move |request: &Request| {
+                    let body = assert_message_request(request, rpc_method);
+                    ResponseTemplate::new(200).set_body_raw(
+                        json!({"jsonrpc": "2.0", "id": body["id"], "error": {
+                            "code": code, "message": "operation rejected"
+                        }})
+                        .to_string(),
+                        "application/json; charset=utf-8",
+                    )
+                })
+                .expect(1)
+                .mount(&server)
+                .await;
+            let mut client = A2AClient::with_ssrf_policy(server.uri(), local_policy());
+            client.endpoint = Some(endpoint);
+            let result = client
+                .prepare_delegation("local-id", &A2AMessage::text(A2ARole::User, "hello"))
+                .await
+                .unwrap()
+                .send()
+                .await;
+            let Err(error) = result else {
+                panic!("expected a JSON-RPC rejection");
+            };
+            assert_eq!(error.delivery, DeliveryStatus::ResponseReceived);
+            assert!(matches!(
+                (protocol, error.error),
+                (RpcProtocol::V03, A2AError::UnsupportedOperation(_))
+                    | (RpcProtocol::V1, A2AError::UnsupportedContentType)
+            ));
+            assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        }
     }
 
     #[tokio::test]
