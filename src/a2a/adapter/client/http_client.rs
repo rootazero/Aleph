@@ -36,7 +36,7 @@ pub struct A2AClient {
     policy: SsrfPolicy,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryStatus {
     NotSent,

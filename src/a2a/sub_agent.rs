@@ -33,13 +33,14 @@ pub struct A2ASubAgent {
     /// Task 11 wires the real registry at startup; `None` falls back to direct insert.
     capture_registry: Option<Arc<MemoryExtensionRegistry>>,
     memory_runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
+    capability_facade: std::sync::Weak<crate::capability::zahir_facade::ZahirFacade>,
 }
 
 /// Outcome of an A2A delegation via [`A2ASubAgent::execute_delegation`].
 ///
 /// Unlike the bare [`SubAgentResult`], this also reports *which* remote agent
 /// handled the task, so the `a2a_delegate` tool can surface it to the model.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DelegationOutcome {
     /// Name of the remote agent that handled the task, or `None` when explicit
     /// agent resolution found no matching agent.
@@ -60,7 +61,16 @@ impl A2ASubAgent {
             raw_memory_writer: None,
             capture_registry: None,
             memory_runtime: None,
+            capability_facade: std::sync::Weak::new(),
         }
+    }
+
+    pub fn with_capability_facade(
+        mut self,
+        facade: &Arc<crate::capability::zahir_facade::ZahirFacade>,
+    ) -> Self {
+        self.capability_facade = Arc::downgrade(facade);
+        self
     }
 
     /// Drop the cached HTTP client of an agent that is no longer registered.
@@ -245,31 +255,36 @@ impl A2ASubAgent {
             }
         };
 
-        self.execute_registered_delegation(&target, prompt, parent_agent_id, parent_session_id)
-            .await
+        let mut request = SubAgentRequest::new(prompt);
+        request.parent_agent_id = parent_agent_id;
+        request.parent_session_id = parent_session_id;
+        if let Some(facade) = self.capability_facade.upgrade() {
+            return super::capability::invoke_remote_agent(
+                &facade,
+                &self.card_registry,
+                &target,
+                &request,
+            )
+            .await;
+        }
+        #[cfg(test)]
+        return Ok(self.execute_registered_delegation(&target, &request).await);
+        #[cfg(not(test))]
+        Err(crate::error::AlephError::tool("A2A capability source is unavailable"))
     }
 
     /// Dispatch a selection carrying the invocation generation read from the registry.
-    pub async fn execute_registered_delegation(
+    pub(crate) async fn execute_registered_delegation(
         &self,
         target: &RegisteredAgent,
-        prompt: &str,
-        parent_agent_id: Option<String>,
-        parent_session_id: Option<String>,
-    ) -> crate::error::Result<DelegationOutcome> {
-        let mut request = SubAgentRequest::new(prompt);
-        if let Some(aid) = parent_agent_id {
-            request = request.with_parent_agent(aid);
-        }
-        if let Some(sid) = parent_session_id {
-            request = request.with_parent_session(sid);
-        }
-        let (result, delivery) = self.dispatch(target, &request).await;
-        Ok(DelegationOutcome {
+        request: &SubAgentRequest,
+    ) -> DelegationOutcome {
+        let (result, delivery) = self.dispatch(target, request).await;
+        DelegationOutcome {
             agent: Some(target.card.name.clone()),
             result,
             delivery,
-        })
+        }
     }
 }
 
@@ -568,9 +583,8 @@ mod tests {
         let selected = sub.card_registry.snapshot().await.remove(0);
         sub.card_registry.unregister("peer").await.unwrap();
         let outcome = sub
-            .execute_registered_delegation(&selected, "do it", None, None)
-            .await
-            .unwrap();
+            .execute_registered_delegation(&selected, &SubAgentRequest::new("do it"))
+            .await;
         assert_eq!(outcome.delivery, DeliveryStatus::NotSent);
         assert!(server.received_requests().await.unwrap().is_empty());
     }

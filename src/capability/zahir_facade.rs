@@ -1231,14 +1231,10 @@ impl ZahirFacade {
                 .describe(scope)
                 .into_iter()
                 .filter_map(|capture| {
-                    let descriptor = capture.descriptor();
-                    self.tree
-                        .generation(&descriptor.id, &scope.visibility)
-                        .map(|_| {
-                            let mut descriptor = descriptor.clone();
-                            descriptor.visibility = scope.visibility.clone();
-                            descriptor
-                        })
+                    let mut descriptor = capture.projected_descriptor()?;
+                    self.tree.generation(&descriptor.id, &scope.visibility)?;
+                    descriptor.visibility = scope.visibility.clone();
+                    Some(descriptor)
                 })
                 .collect()
         };
@@ -2082,10 +2078,10 @@ impl Zahir for ZahirFacade {
             .specials
             .describe(&scope)
             .into_iter()
-            .map(|capture| {
-                let mut descriptor = capture.descriptor().clone();
+            .filter_map(|capture| {
+                let mut descriptor = capture.projected_descriptor()?;
                 descriptor.visibility = scope.visibility.clone();
-                descriptor
+                Some(descriptor)
             })
             .filter(|descriptor| ToolBackendAdapter::descriptor_in_scope(descriptor, &scope))
             .filter(|descriptor| {

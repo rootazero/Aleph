@@ -102,6 +102,7 @@ mod tests {
             agents: vec![A2AAgentEntry {
                 name: name.to_string(),
                 url: url.to_string(),
+                rpc_url: None,
                 trust_level: None,
                 token: None,
             }],

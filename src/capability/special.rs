@@ -93,6 +93,16 @@ impl CapabilityHandlerCall {
 /// The asynchronous callable boundary for special capabilities.
 #[async_trait]
 pub trait CapabilityHandler: Send + Sync {
+    /// Check whether the source still owns the captured invocation target.
+    fn source_available(&self) -> bool {
+        true
+    }
+
+    /// Report live health for discovery while retaining the captured invocation.
+    fn projected_health(&self) -> Option<super::descriptor::CapabilityHealth> {
+        None
+    }
+
     async fn invoke(
         &self,
         input: Value,
@@ -302,8 +312,25 @@ impl CapturedSpecialEntry {
         self.provider_generation
     }
 
+    pub(crate) fn source_available(&self) -> bool {
+        self.handler.source_available()
+    }
+
+    pub(crate) fn projected_descriptor(&self) -> Option<CapabilityDescriptor> {
+        if !self.source_available() {
+            return None;
+        }
+        let mut descriptor = self.descriptor().clone();
+        if let Some(health) = self.handler.projected_health() {
+            descriptor.metadata.health = Some(health);
+        }
+        Some(descriptor)
+    }
+
     pub(crate) fn validate_provider(&self) -> bool {
-        self.provider.is_ready() && self.provider.generation() == self.provider_generation
+        self.provider.is_ready()
+            && self.provider.generation() == self.provider_generation
+            && self.source_available()
     }
 
     pub(crate) fn provider_handle(&self) -> ProviderHandle {
@@ -379,6 +406,30 @@ impl SpecialRegistrationHandle {
     #[must_use]
     pub fn id(&self) -> &CapabilityId {
         &self.id
+    }
+
+    /// Invalidate discovery for the exact registration while preserving its lease.
+    pub(crate) fn publish_projection_change(&self) -> bool {
+        let Some(state) = self.state.upgrade() else {
+            return false;
+        };
+        let mut state = state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.closed
+            || !state.entries.get(&self.id).is_some_and(|entry| {
+                entry.capture.descriptor.revision.0 == self.revision
+            })
+        {
+            return false;
+        }
+        let Some(revision) = state.revision.checked_add(1) else {
+            return false;
+        };
+        state.revision = revision;
+        drop(state);
+        let _ = self.changes.send(SpecialPublication { revision });
+        true
     }
 
     /// Remove only the exact special incarnation this handle created.

@@ -79,8 +79,12 @@ pub struct A2AAgentEntry {
     /// Display name for the agent
     pub name: String,
 
-    /// A2A endpoint URL
+    /// Remote agent base URL or exact Agent Card URL.
     pub url: String,
+
+    /// Exact JSON-RPC URL authorized by the operator for cross-origin discovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpc_url: Option<String>,
 
     /// Trust level override (auto-inferred from URL if not set)
     #[serde(default, skip_serializing_if = "Option::is_none")]

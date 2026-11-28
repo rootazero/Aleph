@@ -1,7 +1,7 @@
 use std::sync::RwLockReadGuard;
 
 use crate::a2a::adapter::client::{A2AClient, A2AClientPool};
-use crate::a2a::config::{A2AAgentEntry, A2AConfig};
+use crate::a2a::config::A2AConfig;
 use crate::a2a::domain::{A2AError, AgentCard, TrustLevel};
 use crate::a2a::port::{A2AResult, AgentHealth, AgentResolver, RegisteredAgent};
 use crate::security::ssrf::SsrfPolicy;
@@ -69,6 +69,14 @@ impl CardRegistry {
             .agents
             .iter()
             .any(|agent| agent.card.id == agent_id && agent.invocation_generation() == generation)
+    }
+
+    pub(crate) fn projected_health(&self, agent_id: &str, generation: Uuid) -> Option<AgentHealth> {
+        self.read_state()
+            .agents
+            .iter()
+            .find(|agent| agent.card.id == agent_id && agent.invocation_generation() == generation)
+            .map(|agent| agent.health)
     }
 
     pub(crate) fn dispatch_target(
@@ -162,14 +170,6 @@ impl CardRegistry {
     /// Each `A2AAgentEntry` is converted to a `RegisteredAgent` with a
     /// placeholder `AgentCard`. The card refresh worker resolves its endpoint.
     pub async fn load_from_config(&self, config: &A2AConfig) {
-        self.load_from_config_with_pins(config, |_| None).await;
-    }
-
-    pub async fn load_from_config_with_pins(
-        &self,
-        config: &A2AConfig,
-        pin_for: impl Fn(&A2AAgentEntry) -> Option<String>,
-    ) {
         let mut configured = Vec::new();
         let mut seen_slugs: std::collections::HashSet<String> = std::collections::HashSet::new();
         for entry in &config.agents {
@@ -199,7 +199,7 @@ impl CardRegistry {
                 AgentHealth::Healthy,
                 entry.token.clone(),
             )
-            .with_discovery(pin_for(entry));
+            .with_discovery(entry.rpc_url.clone());
 
             configured.push(agent);
         }
@@ -533,12 +533,14 @@ mod tests {
                 A2AAgentEntry {
                     name: "Local Helper".to_string(),
                     url: "http://localhost:9000".to_string(),
+                    rpc_url: None,
                     trust_level: None,
                     token: None,
                 },
                 A2AAgentEntry {
                     name: "Remote Service".to_string(),
                     url: "https://api.example.com/a2a".to_string(),
+                    rpc_url: None,
                     trust_level: Some("public".to_string()),
                     token: Some("tok-123".to_string()),
                 },

@@ -24,13 +24,6 @@ impl WireVersion {
         }
     }
 
-    pub(crate) fn header(self) -> &'static str {
-        match self {
-            Self::V03 => "0.3",
-            Self::V10 => "1.0",
-        }
-    }
-
     pub(crate) fn methods(self) -> [&'static str; 5] {
         match self {
             Self::V03 => [

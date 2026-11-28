@@ -18,6 +18,7 @@ pub(in crate::commands::start) struct StartupResources {
     events: Option<Arc<alephcore::capability::events::InMemoryEventStream>>,
     bridge: Option<alephcore::gateway::capability_events::CapabilityEventBridge>,
     pty: Option<&'static alephcore::gateway::pty::PtyManager>,
+    a2a_registry: Option<Arc<alephcore::a2a::service::CardRegistry>>,
     a2a_workers: Vec<tokio::task::JoinHandle<()>>,
     cleanup_called: AtomicBool,
 }
@@ -36,6 +37,7 @@ impl StartupResources {
             events: None,
             bridge: None,
             pty: None,
+            a2a_registry: None,
             a2a_workers: Vec::new(),
             cleanup_called: AtomicBool::new(false),
         }
@@ -86,6 +88,13 @@ impl StartupResources {
         self.pty = Some(manager);
     }
 
+    pub(in crate::commands::start) fn install_a2a_registry(
+        &mut self,
+        registry: Arc<alephcore::a2a::service::CardRegistry>,
+    ) {
+        self.a2a_registry = Some(registry);
+    }
+
     pub(in crate::commands::start) fn install_a2a_worker(
         &mut self,
         worker: tokio::task::JoinHandle<()>,
@@ -108,6 +117,9 @@ impl StartupResources {
             policy.stop_admission();
         }
         let mut observation_failure = None;
+        if let Some(registry) = &self.a2a_registry {
+            registry.close().await;
+        }
         for worker in &self.a2a_workers {
             worker.abort();
         }
@@ -130,7 +142,9 @@ impl StartupResources {
         }
         if let Some(drain) = self.acp_drain.as_mut() {
             // Retain the join future if the cleanup caller is cancelled.
-            observation_failure = drain.await.err();
+            if let Err(error) = drain.await {
+                observation_failure.get_or_insert(error);
+            }
             self.acp_drain = None;
         }
         if let Some(host) = &self.projection_host {

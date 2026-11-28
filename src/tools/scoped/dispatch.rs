@@ -1841,22 +1841,7 @@ impl ScopedToolService {
     }
 
     fn capability_call_context(call_id: &str) -> CapabilityCallContext {
-        let turn = crate::tools::turn_context::current_turn_context();
-        // Routing sessions and agent actors never stand in for human identity.
-        let actor = turn
-            .as_ref()
-            .filter(|turn| !turn.run_id.is_empty())
-            .map_or(OwnerRef::Runtime, |turn| {
-                OwnerRef::Run(RunId(turn.run_id.clone()))
-            });
-        CapabilityCallContext::from_trusted_parts(
-            actor,
-            crate::gateway::visibility::ambient_principal(),
-            turn.as_ref().map(|turn| turn.session_key.to_key_string()),
-            None,
-            crate::gateway::caller_identity::current_caller_conn_id(),
-            call_id.into(),
-        )
+        CapabilityCallContext::for_current_turn(call_id)
     }
 
     fn validate_plugin_capture(

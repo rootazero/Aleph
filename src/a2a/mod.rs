@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod capability;
 pub mod config;
 pub mod domain;
 pub mod port;
