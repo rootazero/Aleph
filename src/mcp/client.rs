@@ -11,7 +11,7 @@ use std::time::Duration;
 const DEFAULT_REMOTE_TIMEOUT_SECS: u64 = 300;
 
 use crate::error::{AlephError, Result};
-use crate::mcp::external::{check_runtime, McpServerConnection, RuntimeKind};
+use crate::mcp::external::{McpServerConnection, RuntimeKind, check_runtime};
 use crate::mcp::sampling::SamplingHandler;
 use crate::mcp::transport::{
     HttpTransport, HttpTransportConfig, McpTransport, SseTransport, SseTransportConfig,
@@ -60,6 +60,7 @@ pub struct McpClient {
     /// `call_tool` falls back to `O(n*m)` over servers × tools — fine on a
     /// 2-server setup, ruinous on a 20-server × 30-tool deployment.
     tool_name_index: tokio::sync::RwLock<HashMap<String, String>>,
+    retired: std::sync::atomic::AtomicBool,
 }
 
 impl McpClient {
@@ -71,7 +72,17 @@ impl McpClient {
             sampling_handler: Arc::new(SamplingHandler::new()),
             tool_filter: None,
             tool_name_index: tokio::sync::RwLock::new(HashMap::new()),
+            retired: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    pub(crate) fn retire(&self) {
+        self.retired
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) fn is_retired(&self) -> bool {
+        self.retired.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Install a per-server tool filter before the client is shared.

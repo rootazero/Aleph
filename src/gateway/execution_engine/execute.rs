@@ -865,8 +865,13 @@ where
             // `stamp_slash_mode`), and this call is a no-op for them. Unattested:
             // none of this text is a person typing `/foo`, so a `/skill` it
             // resolves never pre-grants (`slash_skill_pregrant`).
-            self.stamp_slash_mode_unattested(&request.input, &mut request.metadata)
-                .await;
+            let slash_workspace = request.workspace_path().map(std::path::Path::to_path_buf);
+            self.stamp_slash_mode_unattested(
+                &request.input,
+                &mut request.metadata,
+                slash_workspace.as_deref(),
+            )
+            .await;
         }
 
         // Naked agent-loop strategic planner (StraTA round 2): on a genuine

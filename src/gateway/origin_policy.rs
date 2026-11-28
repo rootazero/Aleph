@@ -22,8 +22,6 @@
 //!     means a same-host non-browser caller (shell webview, curl, CLI).
 //!   * **Exact allow-list match** → allow. Operator-configured extra origins
 //!     (`[gateway] allowed_origins`) for split panel/API deployments.
-//!   * **`tauri:` scheme** → allow. The desktop shell's own webview origin,
-//!     unspoofable by a remote page.
 //!   * **Same-origin with an IP-literal / loopback `Host`** (the `Origin`
 //!     authority equals the request `Host`, *and* that `Host` is an IP literal
 //!     or loopback) → allow. Keeps LAN deployments reached by IP
@@ -49,8 +47,7 @@ use axum::http::Uri;
 #[derive(Debug, Clone, Default)]
 pub struct OriginPolicy {
     /// Operator-configured extra origins, compared verbatim (case-insensitive)
-    /// against the raw `Origin` header. Empty ⇒ only same-origin / loopback /
-    /// `tauri:` are accepted.
+    /// against the raw `Origin` header. An empty list uses the same-origin rules.
     allowed: Vec<String>,
     /// Escape hatch: when true, every Origin passes unconditionally.
     /// Opt-in only via [`OriginPolicy::allow_any`]; all other constructors
@@ -68,7 +65,7 @@ impl OriginPolicy {
         }
     }
 
-    /// Policy with no extra origins — same-origin, loopback and `tauri:` only.
+    /// Policy with no extra origins.
     #[must_use]
     pub const fn loopback_only() -> Self {
         Self {
@@ -91,7 +88,7 @@ impl OriginPolicy {
     /// `host` (the raw `Host` header) may proceed.
     ///
     /// `host` is `None` when the request carries no `Host` header. Same-origin
-    /// cannot be established then, so only `tauri:` and the allow-list pass.
+    /// cannot be established then, so a nonempty origin needs an allow-list match.
     #[must_use]
     pub fn is_allowed(&self, origin: Option<&str>, host: Option<&str>) -> bool {
         if self.allow_any {
@@ -124,9 +121,6 @@ impl OriginPolicy {
 
         match uri.scheme_str() {
             Some("http") | Some("https") => {}
-            // The desktop shell webview's own origin. Unspoofable by a remote
-            // page and only present for in-process requests.
-            Some("tauri") => return true,
             _ => return false,
         }
 
@@ -243,9 +237,11 @@ mod tests {
     }
 
     #[test]
-    fn tauri_scheme_allowed() {
+    fn retired_shell_origin_requires_an_explicit_allow_list_entry() {
         let p = OriginPolicy::loopback_only();
-        assert!(p.is_allowed(Some("tauri://localhost"), None));
+        assert!(!p.is_allowed(Some("tauri://localhost"), None));
+        let configured = OriginPolicy::new(vec!["tauri://localhost".to_string()]);
+        assert!(configured.is_allowed(Some("tauri://localhost"), None));
     }
 
     #[test]

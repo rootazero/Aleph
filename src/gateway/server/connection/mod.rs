@@ -101,11 +101,9 @@ pub mod upgrade;
 pub(super) mod web_v1;
 
 /// The methods both v1 entries (Desktop IPC and Web `/v1/ws`) mount. One
-/// list so the two entries cannot drift apart; everything else is rejected
-/// with `METHOD_NOT_FOUND` before it reaches Core. The `chat.*` trio is the
-/// S3 chat slice: each runs through the same dispatch, ownership check and
-/// idempotency cache as on legacy `/ws`. Other mutating methods such as
-/// `panel.project.select` stay off until a later stage approves them.
+/// list so the two entries cannot drift apart. Mounted calls use the same
+/// dispatch and ownership checks as legacy `/ws`, including the guarded
+/// questionnaire resolver. Unmounted methods return `METHOD_NOT_FOUND`.
 pub(super) const V1_METHODS: &[&str] = &[
     "health",
     "sessions.list",
@@ -113,10 +111,13 @@ pub(super) const V1_METHODS: &[&str] = &[
     aleph_protocol::memory_graph::GRAPH_QUERY_METHOD,
     aleph_protocol::memory_graph::GRAPH_SEARCH_METHOD,
     aleph_protocol::memory_graph::GRAPH_NODE_DETAIL_METHOD,
+    aleph_protocol::memory_graph::GRAPH_MUTATE_NOTE_METHOD,
     "chat.history",
     "chat.models.list",
     "chat.send",
     "chat.abort",
+    "clarification.pending",
+    "clarification.resolve",
     aleph_protocol::panel_voice::VOICE_TURN_TRANSCRIBE_METHOD,
     aleph_protocol::panel_voice::VOICE_TURN_SYNTHESIZE_METHOD,
     aleph_protocol::panel_voice::VOICE_TURN_CANCEL_METHOD,
@@ -141,9 +142,9 @@ pub(super) const V1_FEATURES: &[aleph_protocol::system_hello::Feature] = &[
 /// `live_events`. This list only NARROWS: a frame must first pass the shared
 /// [`event_admission::admit_event`] decision (identity, scope, ownership,
 /// projection) and then name one of these topics. It is the chat slice's
-/// run lifecycle plus the overflow warning. The tool presentation topic can
-/// only be produced by [`event_admission::V1EventFeed`] after negotiation;
-/// its raw source topics remain excluded.
+/// run lifecycle, questionnaire notifications, and the overflow warning.
+/// Only [`event_admission::V1EventFeed`] can produce the tool presentation
+/// topic after negotiation. Its raw source topics remain excluded.
 pub(super) const V1_EVENT_TOPICS: &[&str] = &[
     "stream.run_accepted",
     "stream.response_chunk",
@@ -153,6 +154,8 @@ pub(super) const V1_EVENT_TOPICS: &[&str] = &[
     // a run already live on its session; without it Chat waits on that id
     // forever.
     "stream.run_joined",
+    "stream.ask_user",
+    "stream.clarification_ended",
     aleph_protocol::chat_transcript::CHAT_TOOL_TOPIC,
     "connection.warning",
 ];
@@ -439,10 +442,16 @@ pub async fn handle_connection(
         idempotency: ctx.idempotency_guard.clone(),
         class: ctx.channel_class,
     };
-    let rpc_peer = dispatch::DispatchPeer::legacy(
+    let paired_store = ctx.security_store.as_ref().filter(|store| {
+        ctx.device_token_mgr
+            .as_ref()
+            .is_some_and(|manager| Arc::ptr_eq(store, manager.store()))
+    });
+    let rpc_peer = dispatch::DispatchPeer::panel(
         ctx.connections.clone(),
         conn_id.clone(),
         ctx.client_is_local,
+        paired_store.cloned(),
     );
     let mut ui_effects = acknowledged_effects::AcknowledgedEffects::new();
     let ui_dispatch = acknowledged_effects::EffectDispatch {
@@ -901,10 +910,10 @@ pub async fn handle_connection(
                                                     // authorization and is the sole source of the
                                                     // credential-verified device id (never the request's
                                                     // claimed id; node admission below cannot reach it).
-                                                    let (authorized, resolved_user, resolved_role, verified_user) =
+                                                    let (authorized, resolved_user, resolved_role, verified_user, token_id) =
                                                         if conns.contains_key(&conn_id) {
-                                                            let (fresh_ok, fresh_verified_device_id) =
-                                                                auth::revalidate_connect_credential_source(
+                                                            let (fresh_ok, fresh_credential) =
+                                                                auth::revalidate_connect_credential(
                                                                     &auth_outcome,
                                                                     req.params.as_ref(),
                                                                     ctx.device_token_mgr.as_deref(),
@@ -914,12 +923,15 @@ pub async fn handle_connection(
                                                                 authorized,
                                                                 ctx.client_is_local,
                                                                 authed_device_id.as_deref(),
-                                                                fresh_verified_device_id.as_deref(),
+                                                                fresh_credential.as_ref().map(|c| c.device_id.as_str()),
                                                                 ctx.security_store.as_deref(),
                                                             );
-                                                            (authorized, u, r, v)
+                                                            let token_id = fresh_credential
+                                                                .filter(|_| v.is_some())
+                                                                .map(|c| c.token_id);
+                                                            (authorized, u, r, v, token_id)
                                                         } else {
-                                                            (false, None, "guest", None)
+                                                            (false, None, "guest", None, None)
                                                         };
                                                     // What the client is told, and what the event
                                                     // scope grants. A connect can be
@@ -1003,6 +1015,7 @@ pub async fn handle_connection(
                                                             state.caller_role = resolved_role.to_string();
                                                             state.caller_user = resolved_user;
                                                             state.verified_user = verified_user;
+                                                            state.verified_device_token_id = token_id;
                                                             // Device binding for the per-device revoke.
                                                             // Same value as the connection-local latch
                                                             // above, written under this one lock: the
@@ -1328,28 +1341,6 @@ pub async fn handle_connection(
 
                                                 }
                                             }
-                                        }
-
-                                        #[cfg(feature = "native-qa")]
-                                        if req.method == "connect" {
-                                            let snapshot = dispatch::CallerSnapshot::read(
-                                                &ctx.connections,
-                                                &conn_id,
-                                                ctx.client_is_local,
-                                            )
-                                            .await;
-                                            let observer = ctx.middleware_chain.native_qa_observer();
-                                            let authorized = serde_json::from_str::<serde_json::Value>(&response)
-                                                .ok()
-                                                .and_then(|value| value.get("result").cloned())
-                                                .and_then(|result| result.get("authorized").and_then(serde_json::Value::as_bool))
-                                                .unwrap_or(false);
-                                            crate::gateway::native_qa::observe_connect(
-                                                &observer,
-                                                snapshot.verified_user,
-                                                snapshot.device_id,
-                                                authorized,
-                                            );
                                         }
 
                                         response

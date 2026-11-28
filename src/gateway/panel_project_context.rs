@@ -4,10 +4,10 @@ use std::collections::HashMap;
 
 use aleph_protocol::panel::PanelProjectSelection;
 
-use crate::extension::visibility::{canonical_root, VisibilityCtx};
-use crate::gateway::security::store::{DeviceRow, SecurityStore, UserStatus};
+use crate::extension::visibility::{VisibilityCtx, canonical_root};
 use crate::gateway::security::PANEL_DEVICE_TYPE;
-use crate::projects::{authz, ProjectStatus, ProjectStore};
+use crate::gateway::security::store::{DeviceRow, SecurityStore, UserStatus};
+use crate::projects::{ProjectStatus, ProjectStore, authz};
 use crate::sync_primitives::{Arc, Mutex};
 
 /// Only authenticated ingress constructs this; strings from RPC params are not principals.
@@ -18,6 +18,10 @@ pub(crate) struct PanelCallerContext {
 }
 
 impl PanelCallerContext {
+    pub(crate) fn has_verified_principal(&self) -> bool {
+        self.verified_user.is_some()
+    }
+
     pub(crate) fn authenticated(verified_user: Option<String>, device_id: Option<String>) -> Self {
         Self {
             verified_user,

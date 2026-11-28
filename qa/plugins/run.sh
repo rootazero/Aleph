@@ -103,6 +103,7 @@ export RUST_MIN_STACK="${RUST_MIN_STACK:-268435456}"
 
 SERVER_PID=""
 MOCK_PID=""
+MCP_MOCK_PID=""
 say() { printf '\n=== %s ===\n' "$*"; }
 stop_server() {
   [ -n "$SERVER_PID" ] || return 0
@@ -118,6 +119,7 @@ stop_server() {
 cleanup() {
   stop_server
   [ -n "$MOCK_PID" ] && { kill "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null; }
+  [ -n "$MCP_MOCK_PID" ] && { kill "$MCP_MOCK_PID" 2>/dev/null; wait "$MCP_MOCK_PID" 2>/dev/null; }
   if [ "$KEEP" = "1" ]; then echo "artifacts kept in $QA_ROOT"; else rm -rf "$QA_ROOT"; fi
 }
 trap cleanup EXIT
@@ -261,6 +263,19 @@ PY
     [ -n "$SRC" ] || { echo "  [FAIL] init --type $rt produced no directory"; RC=1; continue; }
     ( cd "$SRC" && "$CLI" plugin validate . >"$QA_ROOT/validate-$rt.log" 2>&1 ) \
       || { echo "  [FAIL] plugin validate rejected its own scaffold ($rt)"; cat "$QA_ROOT/validate-$rt.log"; RC=1; }
+    case "$rt" in
+    wasm)
+      toolchain=$(cd "$REPO" && rustup show active-toolchain | awk 'NR == 1 { print $1 }')
+      ( cd "$SRC" && CARGO_TARGET_DIR="$SRC/target" cargo +"$toolchain" build --target wasm32-wasip1 --release ) \
+        >"$QA_ROOT/build-$rt.log" 2>&1 \
+        || { echo "  [FAIL] could not build the WASM scaffold"; tail -30 "$QA_ROOT/build-$rt.log"; RC=1; continue; }
+      ;;
+    mcp)
+      ( cd "$SRC" && npm install --ignore-scripts --no-audit --no-fund ) \
+        >"$QA_ROOT/build-$rt.log" 2>&1 \
+        || { echo "  [FAIL] could not install MCP scaffold dependencies"; tail -30 "$QA_ROOT/build-$rt.log"; RC=1; continue; }
+      ;;
+    esac
     cp -R "$SRC" "$INSTALLED/qa-scaffold-$rt"
   done
 
@@ -534,8 +549,8 @@ visibility)
   # anywhere else would prove discovery, not visibility.
   PROJECT="$QA_ROOT/proj-vis"
   REQ_LOG="$QA_ROOT/requests.jsonl"
-  say "plant a project plugin: one skill, one agent, one MCP server"
-  python3 "$HERE/plant_visibility.py" "$PROJECT" "$HERE/mcp_mock_server.py" || exit 1
+  say "plant project and global copies of the same plugin"
+  python3 "$HERE/plant_visibility.py" "$PROJECT" "$HERE/mcp_mock_server.py" "$INSTALLED" || exit 1
 
   say "start mock provider (single-shot plan, recording every request)"
   python3 "$BUSY/mock_anthropic.py" "$MOCK_PORT" /etc/hostname single-shot "" "$REQ_LOG" \
@@ -566,7 +581,7 @@ visibility)
     *) echo "  [FAIL] the daemon is not in real mode — no run below would reach the mock"; RC=1 ;;
   esac
 
-  say "probe: one run inside the project, one run with no project"
+  say "probe model visibility with the project copy active and disabled"
   python3 "$HERE/drive_visibility.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$PROJECT" "$REQ_LOG" probe || RC=$?
   ;;
 
@@ -590,7 +605,7 @@ command)
   REQ_LOG="$QA_ROOT/requests.jsonl"
   say "plant a plugin with a command"
   python3 - "$INSTALLED" <<'PY' || exit 1
-import pathlib, sys
+import json, pathlib, sys
 root = pathlib.Path(sys.argv[1], "qa-cmd-plugin")
 (root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
 (root / "commands").mkdir(exist_ok=True)
@@ -601,6 +616,21 @@ root = pathlib.Path(sys.argv[1], "qa-cmd-plugin")
     "---\ndescription: Greet someone\nargument-hint: \"[name]\"\n---\n"
     "Say hello to $1 and mention the token QA_CMD_MARKER_$1 verbatim.\n"
     "Second: ${2:-nobody}. Inline: !`printf 'QA_%s_RAN' INLINE`\n")
+pi = root.parent / "qa-pi"
+(pi / "prompts").mkdir(parents=True, exist_ok=True)
+(pi / "package.json").write_text(json.dumps({
+    "name": "qa-pi",
+    "pi": {"prompts": ["prompts/*.md"], "skills": ["custom/qa-pi-chosen.md"]},
+}) + "\n")
+(pi / "custom").mkdir(exist_ok=True)
+(pi / "custom" / "qa-pi-chosen.md").write_text(
+    "---\nname: qa-pi-chosen\ndescription: Selected Pi skill\n---\nQA_PI_SELECTED_SKILL\n")
+(pi / "skills" / "qa-pi-excluded").mkdir(parents=True, exist_ok=True)
+(pi / "skills" / "qa-pi-excluded" / "SKILL.md").write_text(
+    "---\nname: qa-pi-excluded\ndescription: Excluded Pi skill\n---\nQA_PI_EXCLUDED_SKILL\n")
+(pi / "prompts/review.md").write_text(
+    "---\ndescription: Review two arguments\n---\n"
+    "QA_PI_FIRST=$1; ALL=$@; SLICE=${@:2}; DEFAULT=${3:-missing}\n")
 PY
   say "start mock provider (single-shot: every turn ends with no tool call)"
   start_mock /etc/hostname single-shot "" "$REQ_LOG" || exit 1
@@ -608,7 +638,7 @@ PY
   start_server || exit 1
   assert_real_mode
   say "drive"
-  python3 "$HERE/drive_command.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$REQ_LOG" || RC=$?
+  python3 "$HERE/drive_command.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$REQ_LOG" "$INSTALLED/qa-pi/prompts/review.md" || RC=$?
   say "the withheld inline command is pending on the operator's review surface"
   HOOKS_OUT="$("$BIN" hooks list 2>&1)"
   printf '%s\n' "$HOOKS_OUT" | head -12
@@ -749,6 +779,61 @@ PY
   python3 "$HERE/drive_subagent.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$QA_ROOT/requests-control.jsonl" control || RC=$?
   ;;
 
+dsh|composition)
+  export ALEPH_ACTIVATION_GATE=fatal
+  say "start isolated HTTP MCP mock"
+  python3 "$HERE/mcp_mock_server.py" --http 0 --label dsh-http \
+    --traffic "$QA_ROOT/dsh-http.jsonl" --ready "$QA_ROOT/dsh-http.port" \
+    >"$QA_ROOT/dsh-http.log" 2>&1 &
+  MCP_MOCK_PID=$!
+  for _ in $(seq 1 30); do
+    [ -s "$QA_ROOT/dsh-http.port" ] && break
+    kill -0 "$MCP_MOCK_PID" 2>/dev/null || exit 1
+    sleep 0.2
+  done
+  [ -s "$QA_ROOT/dsh-http.port" ] || exit 1
+  SOURCE="$QA_ROOT/source/qa-dsh"
+  python3 "$HERE/plant_dsh.py" "$SOURCE" "$QA_ROOT" "$(<"$QA_ROOT/dsh-http.port")" \
+    "$HERE/mcp_mock_server.py" || exit 1
+  mkdir -p "$ALEPH_HOME/data"
+  printf '[entries.qa-dsh]\nenabled = false\n\n[entries.qa-dsh-http]\nenabled = false\n' >"$ALEPH_HOME/data/plugins.toml"
+  if [ "$SCENARIO" = composition ]; then
+    python3 "$HERE/drive_composition.py" plant "$QA_ROOT" "$HERE/mcp_mock_server.py" || exit 1
+  fi
+  start_mock /etc/hostname scripted "$QA_ROOT/dsh-tool-specs.json" "$QA_ROOT/dsh-model.jsonl" || exit 1
+  start_server || exit 1
+  assert_real_mode
+  URL="ws://127.0.0.1:$GATEWAY_PORT/ws"
+  python3 "$HERE/drive_dsh.py" "$URL" "$QA_ROOT" install || exit 1
+  if [ "$SCENARIO" = composition ]; then
+    python3 "$HERE/drive_composition.py" install "$URL" "$QA_ROOT" || exit 1
+  fi
+  stop_server
+  start_server || exit 1
+  assert_real_mode
+  python3 "$HERE/drive_dsh.py" "$URL" "$QA_ROOT" disabled || RC=$?
+  if [ "$SCENARIO" = composition ]; then
+    say "run all three formats through the restarted Gateway"
+    start_mock /etc/hostname scripted "$QA_ROOT/composition-prime.json" "$QA_ROOT/composition-prime.jsonl" || exit 1
+    python3 "$HERE/drive_composition.py" prime "$URL" "$QA_ROOT" || RC=$?
+    FP="$("$BIN" hooks list | awk '$3 == "qa-vis" && $2 == "pending" {print $1; exit}')"
+    if [ -z "$FP" ]; then
+      echo "  [FAIL] the live Claude hook did not file a pending approval"
+      RC=1
+    else
+      APPROVAL="$(printf 'y\ny\n' | "$BIN" hooks test "$FP" 2>&1)"
+      printf '%s\n' "$APPROVAL"
+      if ! printf '%s\n' "$APPROVAL" | grep -qF "Approved $FP"; then
+        RC=1
+      fi
+    fi
+    start_mock /etc/hostname scripted "$QA_ROOT/composition-tools.json" "$QA_ROOT/composition-effects.jsonl" || exit 1
+    python3 "$HERE/drive_composition.py" effects "$URL" "$QA_ROOT" || RC=$?
+    start_mock /etc/hostname single-shot "" "$QA_ROOT/composition-model.jsonl" || exit 1
+    python3 "$HERE/drive_composition.py" scope "$URL" "$QA_ROOT" || RC=$?
+  fi
+  ;;
+
 cc-cache)
   # The claim: a plugin Claude Code installed under ~/.claude/plugins is
   # discovered, listed with origin `claude_cache`, DISABLED until the operator
@@ -859,7 +944,7 @@ PY
   fi
   ;;
 *)
-  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse | marketplaces | scope | panel | visibility | command | exit2 | subagent | cc-cache)" >&2; exit 2;;
+  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse | marketplaces | scope | panel | visibility | command | exit2 | subagent | dsh | composition | cc-cache)" >&2; exit 2;;
 esac
 
 say "server warnings about plugins"

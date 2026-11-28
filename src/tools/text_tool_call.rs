@@ -142,6 +142,186 @@ fn strip_spans(text: &str, matches: &[Match]) -> String {
 
 const TOOL_CALL_OPEN: &str = "<tool_call>";
 const TOOL_CALL_CLOSE: &str = "</tool_call>";
+const FUNCTION_OPEN: &str = "<function=";
+const FUNCTION_CLOSE: &str = "</function>";
+const JSON_FENCE: &str = "```";
+const MARKUP_OPEN: [&str; 2] = [TOOL_CALL_OPEN, FUNCTION_OPEN];
+
+/// Keep the live preview behind the first possible tool envelope. The assembled
+/// response can release safe trailing prose after the envelope is validated.
+#[derive(Default)]
+pub(crate) struct ToolTextPreview {
+    pending: String,
+    leading_content: bool,
+    held: bool,
+    emitted: usize,
+}
+
+impl ToolTextPreview {
+    pub(crate) fn push(&mut self, delta: &str) -> String {
+        if self.held {
+            return String::new();
+        }
+        let mut text = std::mem::take(&mut self.pending);
+        text.push_str(delta);
+        let mut markers = MARKUP_OPEN.as_slice();
+        if !self.leading_content {
+            let leading = text.trim_start();
+            if leading.starts_with('{') || leading.starts_with(JSON_FENCE) {
+                self.held = true;
+                text.truncate(text.len() - leading.len());
+                self.emitted += text.len();
+                return text;
+            }
+            if !leading.is_empty() {
+                self.leading_content = !JSON_FENCE.starts_with(leading);
+                if !self.leading_content {
+                    markers = &[TOOL_CALL_OPEN, FUNCTION_OPEN, JSON_FENCE];
+                }
+            }
+        }
+        if let Some((at, _)) = next_markup(&text) {
+            self.held = true;
+            text.truncate(at);
+        } else {
+            let tail_len = markers
+                .iter()
+                .flat_map(|marker| (1..marker.len()).map(move |len| (&marker[..len], len)))
+                .filter(|(prefix, len)| {
+                    text.len() >= *len
+                        && text.as_bytes()[text.len() - len..]
+                            .eq_ignore_ascii_case(prefix.as_bytes())
+                })
+                .map(|(_, len)| len)
+                .max()
+                .unwrap_or(0);
+            self.pending = text.split_off(text.len() - tail_len);
+        }
+        self.emitted += text.len();
+        text
+    }
+
+    pub(crate) const fn emitted(&self) -> usize {
+        self.emitted
+    }
+}
+
+/// Shared boundary for the provider's whole-response JSON action fallback.
+pub(crate) fn json_action_body(text: &str) -> &str {
+    let trimmed = text.trim();
+    if !trimmed.starts_with(JSON_FENCE) {
+        return trimmed;
+    }
+    let (_, body) = trimmed.split_once('\n').unwrap_or((trimmed, ""));
+    let mut end = 0;
+    for line in body.split_inclusive('\n') {
+        if line.trim_start().starts_with(JSON_FENCE) {
+            break;
+        }
+        end += line.len();
+    }
+    body[..end].trim()
+}
+
+fn next_markup(text: &str) -> Option<(usize, &str)> {
+    MARKUP_OPEN
+        .into_iter()
+        .filter_map(|tag| find_ci(text, tag, 0).map(|at| (at, tag)))
+        .min_by_key(|(at, _)| *at)
+}
+
+/// Scan the root members even if the response contains duplicate keys or
+/// ends inside the action value. Decode JSON escapes in candidate keys.
+fn has_json_action_envelope(body: &str) -> bool {
+    let mut depth = 0usize;
+    let mut bytes = body.bytes().enumerate();
+    while let Some((at, byte)) = bytes.next() {
+        match byte {
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => depth = depth.saturating_sub(1),
+            b'"' => {
+                let end = loop {
+                    match bytes.next() {
+                        Some((_, b'\\')) => {
+                            bytes.next();
+                        }
+                        Some((end, b'"')) => break end,
+                        Some(_) => {}
+                        None => return false,
+                    }
+                };
+                if depth != 1 {
+                    continue;
+                }
+                let Some(value) = body[end + 1..].trim_start().strip_prefix(':') else {
+                    continue;
+                };
+                if !serde_json::from_str::<String>(&body[at..=end])
+                    .is_ok_and(|name| name == "action")
+                {
+                    continue;
+                }
+                let value = value.trim_start();
+                if value.is_empty() || value.starts_with('{') {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Project text independently of promotion and tool visibility. A malformed
+/// envelope can still carry private input, including in its unfinished suffix.
+pub(crate) fn visible_tool_text(text: &str) -> std::borrow::Cow<'_, str> {
+    let body = json_action_body(text);
+    if body.starts_with('{') && has_json_action_envelope(body) {
+        return std::borrow::Cow::Borrowed(&text[..text.len() - text.trim_start().len()]);
+    }
+
+    let mut rest = text;
+    let mut visible = String::new();
+    while let Some((at, open)) = next_markup(rest) {
+        visible.push_str(&rest[..at]);
+        let payload = &rest[at + open.len()..];
+        let close = if open == TOOL_CALL_OPEN {
+            TOOL_CALL_CLOSE
+        } else {
+            FUNCTION_CLOSE
+        };
+        let Some(end) = find_ci(payload, close, 0) else {
+            return visible.into();
+        };
+        if open == TOOL_CALL_OPEN {
+            if parse_json_tool_call(&payload[..end]).is_none() {
+                return visible.into();
+            }
+        } else {
+            let Some(call) = parse_function(&payload[..end]) else {
+                return visible.into();
+            };
+            // XML values can be bare strings. A private value containing
+            // both closing tags is indistinguishable from a complete call.
+            // Its apparent prose suffix is untrusted too.
+            let suffix = &payload[end + close.len()..];
+            let next_open = next_markup(suffix).map_or(suffix.len(), |(at, _)| at);
+            if crate::builtin_tools::bash_jsonl::is_private(&call.name, &call.arguments)
+                || call.arguments.get("record").is_some()
+                || call.arguments.get("stdin_profile").is_some()
+                || find_ci(&suffix[..next_open], FUNCTION_CLOSE, 0).is_some()
+            {
+                return visible.into();
+            }
+        }
+        rest = &payload[end + close.len()..];
+    }
+    if rest.len() == text.len() {
+        return text.into();
+    }
+    visible.push_str(rest);
+    visible.into()
+}
 
 /// Extract every `<tool_call>…</tool_call>` block whose body is a JSON object
 /// carrying a tool name. Returns `None` when no well-formed block exists.
@@ -203,8 +383,6 @@ fn coerce_arguments(value: Value) -> Value {
 // Encoding 2: <function=NAME><parameter=KEY>VALUE</parameter>…</function>
 // ---------------------------------------------------------------------------
 
-const FUNCTION_OPEN: &str = "<function=";
-const FUNCTION_CLOSE: &str = "</function>";
 const PARAM_OPEN: &str = "<parameter=";
 const PARAM_CLOSE: &str = "</parameter>";
 
@@ -214,32 +392,16 @@ fn extract_function_xml(text: &str) -> Option<Vec<Match>> {
     let mut matches = Vec::new();
     let mut search = 0usize;
     while let Some(rel_open) = find_ci(text, FUNCTION_OPEN, search) {
-        let name_start = rel_open + FUNCTION_OPEN.len();
-        // Name runs until the closing '>' of the opening tag.
-        let Some(name_slice) = text.get(name_start..) else {
+        let payload_start = rel_open + FUNCTION_OPEN.len();
+        let Some(rel_close) = find_ci(text, FUNCTION_CLOSE, payload_start) else {
             break;
         };
-        let Some(rel_gt) = name_slice.find('>') else {
-            break;
-        };
-        let name = text
-            .get(name_start..name_start + rel_gt)
-            .map_or("", str::trim)
-            .to_string();
-        let inner_start = name_start + rel_gt + 1;
-        let Some(rel_close) = find_ci(text, FUNCTION_CLOSE, inner_start) else {
-            break;
-        };
-        let inner = text.get(inner_start..rel_close).unwrap_or("");
         let end = rel_close + FUNCTION_CLOSE.len();
-        if !name.is_empty() {
+        if let Some(call) = parse_function(&text[payload_start..rel_close]) {
             matches.push(Match {
                 start: rel_open,
                 end,
-                call: PromotedToolCall {
-                    name,
-                    arguments: parse_xml_parameters(inner),
-                },
+                call,
             });
         }
         search = end;
@@ -247,36 +409,35 @@ fn extract_function_xml(text: &str) -> Option<Vec<Match>> {
     (!matches.is_empty()).then_some(matches)
 }
 
-/// Read `<parameter=KEY>VALUE</parameter>` children into a JSON object, coercing
-/// each VALUE to JSON when it parses (number/bool/object/array), else string.
-fn parse_xml_parameters(inner: &str) -> Value {
-    let mut map = Map::new();
-    let mut search = 0usize;
-    while let Some(rel_open) = find_ci(inner, PARAM_OPEN, search) {
-        let key_start = rel_open + PARAM_OPEN.len();
-        let Some(key_slice) = inner.get(key_start..) else {
-            break;
-        };
-        let Some(rel_gt) = key_slice.find('>') else {
-            break;
-        };
-        let key = inner
-            .get(key_start..key_start + rel_gt)
-            .map_or("", str::trim)
-            .to_string();
-        let val_start = key_start + rel_gt + 1;
-        let Some(rel_close) = find_ci(inner, PARAM_CLOSE, val_start) else {
-            break;
-        };
-        let raw = inner.get(val_start..rel_close).map_or("", str::trim);
-        let value =
-            serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::String(raw.to_string()));
-        if !key.is_empty() {
-            map.insert(key, value);
-        }
-        search = rel_close + PARAM_CLOSE.len();
+fn parse_function(payload: &str) -> Option<PromotedToolCall> {
+    let (name, mut inner) = payload.split_once('>')?;
+    let name = name.trim();
+    if name.is_empty() || name.contains('<') {
+        return None;
     }
-    Value::Object(map)
+    let mut arguments = Map::new();
+    // Require complete parameter boundaries before treating the suffix after
+    // the function close as prose. XML parameter values can be bare strings.
+    while !inner.trim_start().is_empty() {
+        inner = inner.trim_start();
+        if find_ci(inner, PARAM_OPEN, 0) != Some(0) {
+            return None;
+        }
+        let (key, value) = inner[PARAM_OPEN.len()..].split_once('>')?;
+        let end = find_ci(value, PARAM_CLOSE, 0)?;
+        let key = key.trim();
+        if key.is_empty() || key.contains('<') {
+            return None;
+        }
+        let raw = value[..end].trim();
+        let parsed = serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.to_owned()));
+        arguments.insert(key.to_owned(), parsed);
+        inner = &value[end + PARAM_CLOSE.len()..];
+    }
+    Some(PromotedToolCall {
+        name: name.to_owned(),
+        arguments: Value::Object(arguments),
+    })
 }
 
 // ---------------------------------------------------------------------------

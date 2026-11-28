@@ -9,7 +9,7 @@ use async_trait::async_trait;
 
 use crate::acp::adapter::{AcpAdapter, AdapterMode};
 use crate::acp::output_format::OutputFormat;
-use crate::acp::session::{AcpSession, AdapterConfig};
+use crate::acp::session::AdapterConfig;
 use crate::config::types::acp::AcpAdapterEntry;
 use crate::error::Result;
 
@@ -163,19 +163,11 @@ impl AcpAdapter for GenericAcpAdapter {
         .await
     }
 
-    async fn spawn_session(&self, cwd: Option<&str>) -> Result<AcpSession> {
-        let timeout = self.timeout.max(Duration::from_secs(1));
-        let config = AdapterConfig {
-            executable: self.executable.clone(),
+    fn build_native_config(&self, cwd: Option<&str>) -> AdapterConfig {
+        AdapterConfig {
             args: self.native_acp_args.clone(),
-            cwd: cwd.map(String::from).or_else(|| self.cwd_override.clone()),
-            env: self.env.clone(),
-            timeout,
-            permission_policy: self.permission_policy(),
-        };
-        let mut session = AcpSession::spawn(self.id(), &config).await?;
-        session.initialize(timeout).await?;
-        Ok(session)
+            ..self.build_config(cwd)
+        }
     }
 }
 

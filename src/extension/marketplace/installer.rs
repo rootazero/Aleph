@@ -24,6 +24,39 @@ pub fn install_plugin_from_cache(
     install_dir: &Path,
     plugin_name: &str,
 ) -> Result<PathBuf, String> {
+    install_checked(source_path, install_dir, plugin_name, |_| Ok(())).map(|(path, ())| path)
+}
+
+pub(super) fn install_checked<T>(
+    source_path: &Path,
+    install_dir: &Path,
+    plugin_name: &str,
+    check: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<(PathBuf, T), String> {
+    let (prepared, verified) = prepare_install(source_path, install_dir, plugin_name, check)?;
+    Ok((prepared.publish()?, verified))
+}
+
+pub(super) struct PreparedInstall {
+    _staging: tempfile::TempDir,
+    install_dir: PathBuf,
+    candidate: PathBuf,
+    destination: PathBuf,
+}
+
+impl PreparedInstall {
+    pub(super) fn publish(self) -> Result<PathBuf, String> {
+        publish_install(&self.install_dir, &self.candidate, &self.destination)?;
+        Ok(self.destination)
+    }
+}
+
+pub(super) fn prepare_install<T>(
+    source_path: &Path,
+    install_dir: &Path,
+    plugin_name: &str,
+    check: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<(PreparedInstall, T), String> {
     // 0. Reject a destination name that could escape the install directory.
     //    `plugin_name` originates from marketplace manifests / user input, so a
     //    crafted value like `../../etc` would let `install_dir.join(...)` write
@@ -52,16 +85,19 @@ pub fn install_plugin_from_cache(
     //    recursive copy that fails partway (disk full, permission error, or a
     //    concurrent install) would leave a half-populated directory at `dest`
     //    that both looks installed and blocks reinstall.
-    let staging = stage_plugin_copy(source_path, install_dir, plugin_name)?;
-    if let Err(e) = std::fs::rename(&staging, &dest) {
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(format!(
-            "Failed to finalize install of '{plugin_name}' into '{}': {e}",
-            dest.display()
-        ));
-    }
-
-    Ok(dest)
+    let staging = new_install_staging(install_dir)?;
+    let candidate = staging.path().join(plugin_name);
+    copy_dir_recursive(source_path, &candidate)?;
+    let verified = check(&candidate)?;
+    Ok((
+        PreparedInstall {
+            _staging: staging,
+            install_dir: install_dir.to_path_buf(),
+            candidate,
+            destination: dest,
+        },
+        verified,
+    ))
 }
 
 /// Update an already-installed plugin in place by atomically swapping in a fresh
@@ -90,6 +126,15 @@ pub fn update_plugin_from_cache(
     install_dir: &Path,
     plugin_name: &str,
 ) -> Result<PathBuf, String> {
+    update_checked(source_path, install_dir, plugin_name, |_| Ok(())).map(|(path, ())| path)
+}
+
+pub(super) fn update_checked<T>(
+    source_path: &Path,
+    install_dir: &Path,
+    plugin_name: &str,
+    check: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<(PathBuf, T), String> {
     super::names::reject_unsafe_segment("plugin name", plugin_name)?;
 
     if !source_path.exists() {
@@ -101,8 +146,11 @@ pub fn update_plugin_from_cache(
 
     let dest = install_dir.join(plugin_name);
 
-    // Stage the new copy first; if this fails the existing install is untouched.
-    let staging = stage_plugin_copy(source_path, install_dir, plugin_name)?;
+    let staging = new_install_staging(install_dir)?;
+    let candidate = staging.path().join(plugin_name);
+    copy_dir_recursive(source_path, &candidate)?;
+    let verified = check(&candidate)?;
+    crate::extension::ensure_plugin_destination_is_safe(install_dir, &dest)?;
 
     // Move the current install aside so we can roll back on failure.
     // `..` is forbidden in plugin names, so a stable backup can be cleaned
@@ -114,7 +162,6 @@ pub fn update_plugin_from_cache(
     let had_existing = dest.exists();
     if had_existing {
         if let Err(e) = std::fs::rename(&dest, &backup) {
-            let _ = std::fs::remove_dir_all(&staging);
             return Err(format!(
                 "Failed to back up existing plugin '{plugin_name}' before update: {e}"
             ));
@@ -122,8 +169,7 @@ pub fn update_plugin_from_cache(
     }
 
     // Swap the staged copy into place. On failure, restore the backup.
-    if let Err(e) = std::fs::rename(&staging, &dest) {
-        let _ = std::fs::remove_dir_all(&staging);
+    if let Err(e) = std::fs::rename(&candidate, &dest) {
         if had_existing {
             let _ = std::fs::rename(&backup, &dest);
         }
@@ -138,64 +184,32 @@ pub fn update_plugin_from_cache(
         let _ = std::fs::remove_dir_all(&backup);
     }
 
-    Ok(dest)
+    Ok((dest, verified))
 }
 
-/// A suffix that keeps staging paths distinct across calls, including
-/// two calls in the same process.
-fn unique_suffix() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!(
-        "{:x}-{:x}-{:x}",
-        std::process::id(),
-        nanos,
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    )
-}
-
-/// Copy `source_path` into a staging directory under `install_dir`, returning
-/// the staging path. Shared by [`install_plugin_from_cache`] and
-/// [`update_plugin_from_cache`] so the staging/cleanup logic lives in one place.
-fn stage_plugin_copy(
-    source_path: &Path,
-    install_dir: &Path,
-    plugin_name: &str,
-) -> Result<PathBuf, String> {
+/// A hidden parent is ignored by discovery. Each candidate keeps its final
+/// directory name for convention-based adapters.
+pub(crate) fn new_install_staging(install_dir: &Path) -> Result<tempfile::TempDir, String> {
     std::fs::create_dir_all(install_dir).map_err(|e| {
         format!(
             "Failed to create install directory '{}': {e}",
             install_dir.display()
         )
     })?;
+    tempfile::Builder::new()
+        .prefix(".aleph-install-")
+        .tempdir_in(install_dir)
+        .map_err(|e| format!("Failed to stage plugin in '{}': {e}", install_dir.display()))
+}
 
-    // The staging directory must not be reachable as a plugin name: a plugin
-    // may legitimately be called `.tmp-install-x`, and removing that path
-    // would delete a live install.
-    let staging = install_dir.join(format!(".tmp-install-{plugin_name}-{}", unique_suffix()));
-    if let Ok(metadata) = std::fs::symlink_metadata(&staging) {
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "Staging path must not be a symlink: '{}'",
-                staging.display()
-            ));
-        }
-        std::fs::remove_dir_all(&staging).map_err(|e| {
-            format!(
-                "Failed to remove stale staging directory '{}': {e}",
-                staging.display()
-            )
-        })?;
+pub(crate) fn publish_install(root: &Path, candidate: &Path, dest: &Path) -> Result<(), String> {
+    crate::extension::ensure_plugin_root_within_authoritative(root, candidate)?;
+    crate::extension::ensure_plugin_destination_is_safe(root, dest)?;
+    if dest.exists() {
+        return Err(format!("Plugin already exists at: {}", dest.display()));
     }
-    if let Err(e) = copy_dir_recursive(source_path, &staging) {
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(e);
-    }
-    Ok(staging)
+    std::fs::rename(candidate, dest)
+        .map_err(|e| format!("Failed to finalize install into '{}': {e}", dest.display()))
 }
 
 /// Verify the SHA-256 hash of a directory by hashing all files recursively.

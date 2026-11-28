@@ -31,9 +31,9 @@ pub(crate) fn resolve_plugin_handler_from_sources(
     tool_name: &str,
 ) -> Option<(String, String)> {
     if let Some(ext_mgr) = extension_manager {
-        if let Some(tool) = ext_mgr.resolve_active_plugin_tool(tool_name) {
-            return Some((tool.plugin_id, tool.handler));
-        }
+        return ext_mgr
+            .resolve_active_plugin_tool(tool_name)
+            .map(|tool| (tool.plugin_id, tool.handler));
     }
 
     tools

@@ -8,9 +8,9 @@
 use std::collections::{HashMap, HashSet};
 
 use aleph_protocol::panel::{
-    valid_identity_segment, valid_relative_entry, valid_version_segment, PanelTabDescriptor,
-    PanelTabKey, PanelTabStatus, PanelUiCapabilityDeclaration, PanelUiCapabilityOrigin,
-    PanelUiCapabilitySnapshot, PanelUiTrust,
+    PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiCapabilityDeclaration,
+    PanelUiCapabilityOrigin, PanelUiCapabilitySnapshot, PanelUiTrust, valid_identity_segment,
+    valid_relative_entry, valid_version_segment,
 };
 
 use super::plugin_trust::OwnerTrustPolicy;
@@ -72,7 +72,7 @@ pub(crate) fn derive_panel_declaration(
     let Some(panel) = record.panel.as_ref() else {
         return Ok(None);
     };
-    if !trust_policy.allows(&record.id, record.origin) {
+    if !trust_policy.allows_instance(&record.instance_key(), record.origin) {
         return Err(PanelDeclarationError::OwnerTrustRejected);
     }
     if !valid_identity_segment(&record.id) {
@@ -301,9 +301,11 @@ mod tests {
             projection.snapshot.declarations[0].descriptor.key.plugin_id,
             "valid"
         );
-        assert!(projection
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "panel.duplicate_key"));
+        assert!(
+            projection
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "panel.duplicate_key")
+        );
     }
 }

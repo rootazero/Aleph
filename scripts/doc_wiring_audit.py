@@ -423,15 +423,10 @@ def check_ports(rel, text, daemon_port):
             )
 
 
-def check_dual_track(rel, text):
-    """The entry documents must keep both desktop hosts visible."""
-    lowered = text.lower()
-    has_nsh = "nsh" in lowered
-    has_tauri = "tauri" in lowered
-    if not has_nsh:
-        bad("DUAL", f"{rel} never mentions the NSH desktop host")
-    if not has_tauri:
-        bad("DUAL", f"{rel} never mentions the legacy Tauri desktop host")
+def check_desktop_host(rel, text):
+    """Keep the production desktop host discoverable from each entry document."""
+    if "desktop/nsh-shell" not in text:
+        bad("HOST", f"{rel} does not point to the NSH desktop host")
 
 
 def check_cut_phrases(rel, text):
@@ -561,7 +556,7 @@ def main():
     for rel in ENTRY_DOCS:
         path = ROOT / rel
         if path.is_file():
-            check_dual_track(rel, path.read_text(encoding="utf-8"))
+            check_desktop_host(rel, path.read_text(encoding="utf-8"))
     check_constitution_sync()
     check_reachability(docs)
 

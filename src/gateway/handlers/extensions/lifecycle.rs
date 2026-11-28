@@ -4,7 +4,7 @@
 use crate::domain::skill::SkillId;
 use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::skills::{ensure_shared_system_initialized, shared_system};
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS, JsonRpcRequest, JsonRpcResponse};
 use crate::hub::cache::CatalogCache;
 use crate::hub::types::ExtensionKind;
 use crate::mcp::manager::McpManagerHandle;
@@ -16,12 +16,16 @@ use std::sync::Arc;
 #[derive(Debug, Deserialize)]
 pub struct ToggleParams {
     pub id: String,
+    #[serde(default)]
+    pub selector: Option<String>,
     pub enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UninstallParams {
     pub id: String,
+    #[serde(default)]
+    pub selector: Option<String>,
 }
 
 /// Parse a façade id of the form `local:{kind}:{backend_id}`.
@@ -32,6 +36,16 @@ pub struct UninstallParams {
 pub fn parse_local_id(id: &str) -> Option<(&str, &str)> {
     let rest = id.strip_prefix("local:")?;
     rest.split_once(':')
+}
+
+fn plugin_target(
+    backend: &str,
+    selector: Option<String>,
+) -> crate::extension::plugin_target::PluginTarget {
+    let selector = selector.or_else(|| {
+        (backend.starts_with("g:") || backend.starts_with("p:")).then(|| backend.to_owned())
+    });
+    crate::extension::plugin_target::PluginTarget::from_fields(backend.to_owned(), selector)
 }
 
 /// extensions.toggle — enable/disable an installed extension, routed by kind.
@@ -64,7 +78,15 @@ pub async fn handle_toggle(req: JsonRpcRequest, mcp: Option<McpManagerHandle>) -
         },
         "plugin" => match crate::extension::try_extension_manager() {
             Some(mgr) => {
-                return toggle_plugin(mgr, req.id, backend, p.enabled).await;
+                return toggle_plugin(
+                    mgr,
+                    req.id,
+                    backend,
+                    p.selector,
+                    &crate::gateway::handlers::plugins::current_plugin_access(),
+                    p.enabled,
+                )
+                .await;
             }
             None => Err("extension manager unavailable".to_string()),
         },
@@ -89,12 +111,15 @@ pub(crate) async fn toggle_plugin(
     manager: &crate::extension::ExtensionManager,
     id: Option<serde_json::Value>,
     backend: &str,
+    selector: Option<String>,
+    access: &crate::extension::plugin_target::PluginAccess,
     enabled: bool,
 ) -> JsonRpcResponse {
-    crate::gateway::handlers::plugins::plugin_control_response(
-        id,
-        manager.set_plugin_enabled(backend, enabled).await,
+    let target = plugin_target(backend, selector);
+    crate::gateway::handlers::plugins::set_enabled_via_registry(
+        manager, id, &target, access, enabled,
     )
+    .await
 }
 
 /// extensions.uninstall — remove an installed extension, routed by kind.
@@ -122,7 +147,33 @@ pub async fn handle_uninstall(
             Some(mcp) => mcp.remove_server(backend).await.map_err(|e| e.to_string()),
             None => Err("mcp manager unavailable".to_string()),
         },
-        "plugin" => uninstall_plugin(backend).await,
+        "plugin" => {
+            let Some(manager) = crate::extension::try_extension_manager() else {
+                return JsonRpcResponse::error(
+                    req.id,
+                    INTERNAL_ERROR,
+                    "extension manager unavailable",
+                );
+            };
+            let target = plugin_target(backend, p.selector);
+            let response =
+                crate::gateway::handlers::plugins::uninstall_via_registry(manager, req.id, target)
+                    .await;
+            if let Some(result) = &response.result {
+                if let Some(key) = result["pluginId"]
+                    .as_str()
+                    .filter(|_| result["scope_kind"] == "global")
+                {
+                    if let Err(error) = cache
+                        .forget_installed_origin(ExtensionKind::Plugin, key)
+                        .await
+                    {
+                        tracing::warn!(id = %p.id, %error, "failed to clear install origin");
+                    }
+                }
+            }
+            return response;
+        }
         "skill" => shared_system()
             .remove_skill(&SkillId::new(backend))
             .await
@@ -156,52 +207,6 @@ fn origin_kind(kind: &str) -> Option<ExtensionKind> {
     }
 }
 
-/// A plugin id is joined onto the plugins directory and `remove_dir_all`'d, so
-/// it must be a single normal path component — no separators, no `..`, not
-/// absolute. Otherwise a crafted `local:plugin:../../x` id could escape the
-/// plugins directory. Mirrors `plugins::handlers::manage::is_safe_plugin_name`.
-fn is_safe_plugin_id(id: &str) -> bool {
-    use std::path::Component;
-    let mut comps = std::path::Path::new(id).components();
-    matches!(
-        (comps.next(), comps.next()),
-        (Some(Component::Normal(_)), None)
-    )
-}
-
-/// Tear down the plugin runtime then delete its directory, mirroring the
-/// existing `plugins.uninstall` handler (stop services before removing files).
-async fn uninstall_plugin(plugin_id: &str) -> Result<(), String> {
-    if !is_safe_plugin_id(plugin_id) {
-        return Err(format!("invalid plugin id: {plugin_id}"));
-    }
-    let dir = crate::extension::default_plugins_dir().join(plugin_id);
-    if !dir.exists() {
-        return Err(format!("plugin not found: {plugin_id}"));
-    }
-    if let Some(mgr) = crate::extension::try_extension_manager() {
-        match mgr.unmount(plugin_id).await {
-            Ok(_) => {}
-            // Never mounted — nothing to tear down; the directory goes anyway.
-            Err(crate::extension::UnmountError::NotMounted(_))
-            | Err(crate::extension::UnmountError::NotFound(_)) => {}
-            // Fail closed: a retained runtime owner still holds this plugin's
-            // activation effects, so the directory must stay — removing it
-            // would strand those effects and report a teardown that did not
-            // happen (P3 owns stop/join recovery).
-            Err(e @ crate::extension::UnmountError::RuntimeOwnerResidual(_)) => {
-                return Err(format!("refusing to uninstall: {e}"));
-            }
-        }
-    }
-    std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
-    crate::extension::plugin_state::forget_plugin_sidecars(plugin_id).await;
-    if let Some(mgr) = crate::extension::try_extension_manager() {
-        let _ = mgr.reload().await;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,16 +228,5 @@ mod tests {
             parse_local_id("local:skill:my:skill"),
             Some(("skill", "my:skill"))
         );
-    }
-
-    #[test]
-    fn plugin_uninstall_id_guard_blocks_traversal() {
-        // Regression: a crafted `local:plugin:..` id must never reach remove_dir_all.
-        assert!(!is_safe_plugin_id("../../../.ssh"));
-        assert!(!is_safe_plugin_id("a/b"));
-        assert!(!is_safe_plugin_id("/abs"));
-        assert!(!is_safe_plugin_id(".."));
-        assert!(!is_safe_plugin_id(""));
-        assert!(is_safe_plugin_id("my-plugin"));
     }
 }

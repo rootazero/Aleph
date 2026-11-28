@@ -1,4 +1,4 @@
-use aleph_protocol::memory_graph::NEBULA_TAB_ID;
+use aleph_protocol::memory_graph::{GRAPH_MUTATE_NOTE_METHOD, NEBULA_TAB_ID};
 use aleph_protocol::panel::{
     PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiCapabilityDeclaration,
     PanelUiCapabilityOrigin, PanelUiCapabilitySnapshot, PanelUiContextSnapshot, PanelUiTrust,
@@ -13,23 +13,12 @@ use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, PERMISSION_DENIED,
 };
 
-/// Add the renderer declaration only when the actual Core read surface is mounted.
-pub(crate) fn with_memory_nebula(
-    snapshot: PanelUiCapabilitySnapshot,
-    mounted: bool,
-) -> PanelUiCapabilitySnapshot {
-    if mounted {
-        with_builtin_shell_tab(snapshot, NEBULA_TAB_ID, "Memory Nebula", "network")
-    } else {
-        snapshot
-    }
-}
-
 fn with_builtin_shell_tab(
     mut snapshot: PanelUiCapabilitySnapshot,
     tab_id: &str,
     label: &str,
     icon: &str,
+    permissions: &[&str],
 ) -> PanelUiCapabilitySnapshot {
     let key = PanelTabKey {
         plugin_id: PANEL_BUILTIN_NAMESPACE.into(),
@@ -51,7 +40,10 @@ fn with_builtin_shell_tab(
             entry: format!("shell/{tab_id}"),
             api_major: PANEL_UI_API_MAJOR,
             trust: PanelUiTrust::Verified,
-            permissions: Vec::new(),
+            permissions: permissions
+                .iter()
+                .map(|method| (*method).to_owned())
+                .collect(),
             status: PanelTabStatus::Enabled,
             status_detail: None,
         },
@@ -64,14 +56,27 @@ fn with_builtin_shell_tab(
     snapshot
 }
 
-pub(crate) fn project_memory_nebula(result: &mut serde_json::Value) {
-    project_declaration(result, |snapshot| with_memory_nebula(snapshot, true));
+pub(crate) fn project_memory_nebula(result: &mut serde_json::Value, mutation_mounted: bool) {
+    project_declaration(result, |snapshot| {
+        let permissions: &[&str] = if mutation_mounted {
+            &[GRAPH_MUTATE_NOTE_METHOD]
+        } else {
+            &[]
+        };
+        with_builtin_shell_tab(
+            snapshot,
+            NEBULA_TAB_ID,
+            "Memory Nebula",
+            "network",
+            permissions,
+        )
+    });
 }
 
 pub(crate) fn project_voice(result: &mut serde_json::Value) {
     use aleph_protocol::panel_voice::VOICE_TAB_ID;
     project_declaration(result, |snapshot| {
-        with_builtin_shell_tab(snapshot, VOICE_TAB_ID, "Voice", "mic")
+        with_builtin_shell_tab(snapshot, VOICE_TAB_ID, "Voice", "mic", &[])
     });
 }
 
@@ -263,7 +268,7 @@ mod tests {
         let mut contextual = json!({
             "revision": 19, "declarations": [], "project_context": selection,
         });
-        super::project_memory_nebula(&mut contextual);
+        super::project_memory_nebula(&mut contextual, false);
         assert_eq!(contextual["project_context"], selection);
         assert_eq!(
             contextual["declarations"],

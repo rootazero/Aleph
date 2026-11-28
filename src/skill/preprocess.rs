@@ -51,15 +51,15 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
-use crate::extension::hooks::{ShellHookConsent, SKILL_INLINE_EVENT, USER_SKILL_OWNER};
+use crate::extension::hooks::{SKILL_INLINE_EVENT, ShellHookConsent, USER_SKILL_OWNER};
 use crate::extension::inline_shell::{
-    run_inline_process, withheld, InlineConsent, Withheld, NO_RUN_DIRECTORY,
+    InlineConsent, NO_RUN_DIRECTORY, Withheld, run_inline_process, withheld,
 };
 use crate::extension::plugin_secrets::SettingsForm;
 use crate::extension::visibility::ScopeKey;
 use crate::extension::{
-    inline_commands, inline_shell_command, run_inline, InlineArgs, InlineShell, InlineSite,
-    TemplateCtx, SKILL_DIR_TOKEN,
+    InlineArgs, InlineShell, InlineSite, SKILL_DIR_TOKEN, TemplateCtx, inline_commands,
+    inline_shell_command, run_inline,
 };
 use crate::sync_primitives::Arc;
 
@@ -118,10 +118,22 @@ impl SkillPreprocessContext {
     /// every one is withheld naming why; otherwise each answers to `consent`
     /// ([`SkillShell`]).
     pub fn for_read(skill_dir: PathBuf, consent: Arc<ShellHookConsent>) -> Self {
+        Self::for_manifest_read(&skill_dir.join("SKILL.md"), skill_dir, consent)
+    }
+
+    pub(crate) fn for_manifest_read(
+        manifest: &Path,
+        skill_dir: PathBuf,
+        consent: Arc<ShellHookConsent>,
+    ) -> Self {
         let shell: Box<dyn InlineShell> =
             match crate::tools::turn_context::current_inline_shell_refusal() {
                 Some(reason) => Box::new(Withheld(reason)),
-                None => Box::new(SkillShell::new(skill_dir.clone(), consent)),
+                None => Box::new(SkillShell::for_manifest(
+                    manifest,
+                    skill_dir.clone(),
+                    consent,
+                )),
             };
         Self::new(skill_dir, shell)
     }
@@ -165,7 +177,7 @@ pub async fn preprocess_skill_content(
 /// regardless of the skill's install provenance: snippet stdout is no more
 /// trustworthy than community content even when the skill itself is bundled.
 fn guard_expanded_body(body: &str) -> Result<(), PreprocessError> {
-    use crate::skill::guard::{install_allowed, scan_content, TrustLevel};
+    use crate::skill::guard::{TrustLevel, install_allowed, scan_content};
 
     let verdict = scan_content("inline-shell-expanded body", body.as_bytes());
     if !install_allowed(verdict.level, TrustLevel::Community) {
@@ -308,23 +320,27 @@ impl SkillShell {
     /// to (`sandbox::context::current_exec_workspace`).
     #[must_use]
     pub fn new(skill_dir: PathBuf, consent: Arc<ShellHookConsent>) -> Self {
-        let skill = skill_dir
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let base = skill_dir.parent().unwrap_or(&skill_dir).to_path_buf();
-        let published = crate::utils::paths::plugin_skill_dirs()
-            .into_iter()
-            .find(|published| published.dir == base);
-        let (owner, scope, plugin) = match published {
-            Some(p) => (
-                ShellHookConsent::skill_owner(&p.plugin_id, &skill),
-                p.scope_key,
-                Some((p.plugin_id, p.plugin_root)),
+        Self::for_manifest(&skill_dir.join("SKILL.md"), skill_dir, consent)
+    }
+
+    fn for_manifest(manifest: &Path, skill_dir: PathBuf, consent: Arc<ShellHookConsent>) -> Self {
+        let skill = if manifest.file_name().is_some_and(|name| name == "SKILL.md") {
+            skill_dir.file_name()
+        } else {
+            manifest.file_stem()
+        }
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+        let base = skill_dir.parent().unwrap_or(&skill_dir);
+        let (owner, scope, plugin) = match super::published_skill_owner(manifest) {
+            Some(published) => (
+                ShellHookConsent::skill_owner(&published.plugin_id, &skill),
+                published.scope_key.clone(),
+                Some((published.runtime_key(), published.plugin_root)),
             ),
             None => (
                 ShellHookConsent::skill_owner(USER_SKILL_OWNER, &skill),
-                ScopeKey::project(&base),
+                ScopeKey::project(base),
                 None,
             ),
         };
@@ -342,6 +358,19 @@ impl SkillShell {
 #[async_trait::async_trait]
 impl InlineShell for SkillShell {
     async fn run(&self, cmd: &str, args: &InlineArgs<'_>) -> Result<String, String> {
+        if let Some((runtime_key, _)) = &self.plugin {
+            use crate::extension::visibility::{PluginInstanceKey, VisibilityCtx};
+            let context = VisibilityCtx::for_authorized_run();
+            if !PluginInstanceKey::runtime_key_allowed(runtime_key, &context)
+                || crate::extension::try_extension_manager()
+                    .is_some_and(|manager| !manager.plugin_visible(runtime_key, &context))
+            {
+                return Err(withheld(
+                    cmd,
+                    "plugin skill owner is unavailable in this workspace",
+                ));
+            }
+        }
         let project = match &self.scope {
             ScopeKey::Project(root) => Some(root.as_path()),
             ScopeKey::Global => None,

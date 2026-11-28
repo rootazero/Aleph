@@ -653,6 +653,31 @@ impl OwnershipTree {
         Ok(commit())
     }
 
+    /// The only OS effect available through this gate is one already prepared
+    /// nonblocking write or close on the captured Shell controller.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn commit_shell_pipe_attempt(
+        &self,
+        capture: &CapturedBinding,
+        attempt: crate::sandbox::shell_input::ShellPipeAttempt,
+    ) -> Result<
+        crate::sandbox::shell_input::ShellEffectResult,
+        crate::sandbox::shell_input::ShellEffectDenied,
+    > {
+        use crate::sandbox::shell_input::ShellEffectDenied;
+        let inner = self.inner.try_lock().map_err(|_| ShellEffectDenied::Busy)?;
+        Self::validate_binding(
+            &inner,
+            &capture.capability,
+            &capture.visibility,
+            capture.generation,
+            &capture.owner,
+            capture.lifetime,
+        )
+        .map_err(|_| ShellEffectDenied::Stale)?;
+        attempt.consume()
+    }
+
     fn validate_binding(
         inner: &OwnershipInner,
         capability: &CapabilityId,

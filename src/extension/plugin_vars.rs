@@ -53,6 +53,13 @@ impl PluginVars {
         }
     }
 
+    /// Derive paths from the owner attached to a hook or inline command.
+    pub(super) fn for_owner(owner: &str, root: &Path) -> Option<Self> {
+        let plugin = super::manifest::validate_plugin_id(owner).is_ok()
+            || super::visibility::PluginInstanceKey::project_runtime_group(owner).is_some();
+        plugin.then(|| Self::new(owner, root))
+    }
+
     /// The plugin's persistent data directory.
     #[must_use]
     pub fn data_dir(&self) -> &Path {

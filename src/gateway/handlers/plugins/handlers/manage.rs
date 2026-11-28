@@ -2,23 +2,12 @@ use serde_json::json;
 
 use aleph_protocol::plugins::{PluginListResult, PluginRow, PluginRuntimeStatus};
 
-use super::super::types::{plugin_row, ToggleParams, UninstallParams};
+use super::super::current_plugin_access;
+use super::super::types::{ToggleParams, UninstallParams, plugin_row};
+use crate::extension::plugin_target::{PluginTarget, PluginTargetError};
 use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::plugins::handlers::get_extension_manager;
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-
-/// A plugin name is joined onto the plugins directory and used for
-/// destructive filesystem operations (`remove_dir_all`, marker writes), so it
-/// must be a single normal path component — no separators, no `..`, not
-/// absolute. Anything else could escape the plugins directory.
-fn is_safe_plugin_name(name: &str) -> bool {
-    use std::path::Component;
-    let mut comps = std::path::Path::new(name).components();
-    matches!(
-        (comps.next(), comps.next()),
-        (Some(Component::Normal(_)), None)
-    )
-}
+use crate::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS, JsonRpcRequest, JsonRpcResponse};
 
 /// List all installed plugins
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
@@ -33,7 +22,7 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
     }
 
     let mut plugins: Vec<PluginRow> = manager
-        .get_plugin_info()
+        .plugin_info_visible_to(&current_plugin_access())
         .await
         .into_iter()
         .map(plugin_row)
@@ -80,67 +69,40 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => return e,
     };
 
-    if !is_safe_plugin_name(&params.name) {
-        return JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            format!("Invalid plugin name: {}", params.name),
-        );
+    let manager = match get_extension_manager() {
+        Ok(manager) => manager,
+        Err(error) => return error.with_id(request.id),
+    };
+    uninstall_via_registry(
+        &manager,
+        request.id,
+        PluginTarget::from_fields(params.name, params.selector),
+    )
+    .await
+}
+
+pub(crate) async fn uninstall_via_registry(
+    manager: &crate::extension::ExtensionManager,
+    id: Option<serde_json::Value>,
+    target: PluginTarget,
+) -> JsonRpcResponse {
+    if let Err(error) = manager.ensure_discovered().await {
+        return JsonRpcResponse::error(id, INTERNAL_ERROR, error.to_string());
     }
-
-    let plugins_dir = crate::extension::default_plugins_dir();
-    let plugin_path = plugins_dir.join(&params.name);
-
-    if !plugin_path.exists() {
-        return JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            format!("Plugin not found: {}", params.name),
-        );
-    }
-
-    // Tear down the runtime BEFORE deleting files: once the plugin dir is
-    // gone its service stop handlers can no longer run, which would orphan
-    // background services and transient MCP servers for the process lifetime.
-    if let Ok(manager) = get_extension_manager() {
-        match manager.unmount(&params.name).await {
-            Ok(report) if !report.all_ok() => tracing::warn!(
-                plugin = %params.name, ?report,
-                "some effects did not dispose cleanly before uninstall"
-            ),
-            Ok(_) => {}
-            // Never mounted (disabled / errored / unknown) — nothing to tear down.
-            Err(crate::extension::UnmountError::NotMounted(_))
-            | Err(crate::extension::UnmountError::NotFound(_)) => {}
-            // Fail closed: a retained runtime owner still holds activation/VM
-            // effects for this plugin, so its directory must survive — deleting
-            // it now would strand effects this build cannot stop and report a
-            // teardown that never happened (P3 owns stop/join recovery).
-            Err(e @ crate::extension::UnmountError::RuntimeOwnerResidual(_)) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INTERNAL_ERROR,
-                    format!("Refusing to uninstall: {e}"),
-                );
-            }
-        }
-    }
-
-    match std::fs::remove_dir_all(&plugin_path) {
-        Ok(()) => {
-            crate::extension::plugin_state::forget_plugin_sidecars(&params.name).await;
-            if let Ok(manager) = get_extension_manager() {
-                if let Err(e) = manager.reload().await {
-                    tracing::warn!("Failed to refresh extensions after uninstall: {}", e);
-                }
-            }
-            JsonRpcResponse::success(request.id, json!({ "ok": true }))
-        }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to remove plugin: {e}"),
+    match manager
+        .uninstall_plugin_target(&target, &current_plugin_access())
+        .await
+    {
+        Ok((instance, Ok(()))) => JsonRpcResponse::success(
+            id,
+            json!({ "ok": true, "pluginId": instance.plugin_id, "selector": instance.selector(), "scope_kind": instance.scope.kind_label() }),
         ),
+        Ok((_, Err(error))) => JsonRpcResponse::error(
+            id,
+            INTERNAL_ERROR,
+            format!("Failed to remove plugin: {error}"),
+        ),
+        Err(error) => plugin_target_error_response(id, error),
     }
 }
 
@@ -169,47 +131,53 @@ async fn handle_toggle(request: JsonRpcRequest, enabled: bool) -> JsonRpcRespons
         Err(e) => return e,
     };
 
-    if !is_safe_plugin_name(&params.name) {
-        return JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            format!("Invalid plugin name: {}", params.name),
-        );
-    }
-
-    // No manager, no toggle: answering `ok` here used to report a write that
-    // never happened.
     let manager = match get_extension_manager() {
         Ok(m) => m,
         Err(e) => return e.with_id(request.id),
     };
-    set_enabled_via_registry(manager, request.id, &params.name, enabled).await
+    let target = PluginTarget::from_fields(params.name, params.selector);
+    set_enabled_via_registry(
+        manager,
+        request.id,
+        &target,
+        &current_plugin_access(),
+        enabled,
+    )
+    .await
 }
 
-/// The body of `plugins.enable` / `plugins.disable` once a manager is in
-/// hand: the id is resolved in the REGISTRY — every origin a load lists,
-/// Claude Code's installs and project plugins included, error rows too —
-/// not by probing `default_plugins_dir()`, which only ever held one origin.
-///
-/// `set_plugin_enabled` owns the durable write and the mount/unmount: on
-/// enable, MCP servers, services, memory extension and slash entries come up
-/// inside the mount; on disable, the scope's disposers stop services and
-/// remove transient MCP servers. This handler touches no marker file — the
-/// marker it used to write was never read by anything.
-pub async fn set_enabled_via_registry(
+pub(crate) async fn set_enabled_via_registry(
     manager: &crate::extension::ExtensionManager,
     id: Option<serde_json::Value>,
-    name: &str,
+    target: &PluginTarget,
+    access: &crate::extension::plugin_target::PluginAccess,
     enabled: bool,
 ) -> JsonRpcResponse {
-    if let Err(e) = manager.ensure_discovered().await {
-        tracing::warn!("Failed to discover extensions: {}", e);
+    if let Err(error) = manager.ensure_discovered().await {
+        tracing::warn!(%error, "Failed to discover extensions");
     }
-    if manager.get_plugin_record(name).await.is_none() {
-        return JsonRpcResponse::error(id, INVALID_PARAMS, format!("Plugin not found: {name}"));
+    match manager
+        .set_plugin_target_enabled(target, access, enabled, true)
+        .await
+    {
+        Ok(result) => plugin_control_response(id, result),
+        Err(error) => plugin_target_error_response(id, error),
     }
+}
 
-    plugin_control_response(id, manager.set_plugin_enabled(name, enabled).await)
+pub(crate) fn plugin_target_error_response(
+    id: Option<serde_json::Value>,
+    error: PluginTargetError,
+) -> JsonRpcResponse {
+    match error {
+        PluginTargetError::Ambiguous { ref selectors } => JsonRpcResponse::error_with_data(
+            id,
+            INVALID_PARAMS,
+            error.to_string(),
+            json!({"selectors": selectors}),
+        ),
+        _ => JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string()),
+    }
 }
 
 /// Shared thin wire projection for both plugin RPC and the Hub facade.

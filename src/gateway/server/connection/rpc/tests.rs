@@ -66,6 +66,129 @@ async fn execute(
 }
 
 #[tokio::test]
+async fn shell_origin_cannot_be_replayed_or_rebound() {
+    assert_shell_origin(false).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires a delegated Linux supervisor subgroup and ALEPH_TEST_FIXED_JSONL_SERVER"]
+async fn paired_shell_approval_reaches_fixed_consumer() {
+    assert!(std::env::var_os("ALEPH_TEST_FIXED_JSONL_SERVER").is_some());
+    assert_shell_origin(true).await;
+}
+
+async fn assert_shell_origin(_native: bool) {
+    use crate::gateway::security::DeviceTokenManager;
+    use crate::gateway::server::connection::dispatch::current_paired_shell_origin;
+
+    let store = Arc::new(SecurityStore::in_memory().unwrap());
+    store
+        .create_user("alice", "Alice", UserRole::Member)
+        .unwrap();
+    let manager = DeviceTokenManager::new(store.clone());
+    let ticket = manager
+        .create_bootstrap_ticket(None, Some("alice"))
+        .unwrap();
+    let paired = manager
+        .exchange_bootstrap_ticket(&ticket, Some("device-alice".into()), None, None)
+        .unwrap();
+    let credential = manager
+        .validate_device_token(&paired.device_token)
+        .unwrap()
+        .unwrap();
+    let mut state = fixture_state("alice");
+    state.verified_device_token_id = Some(credential.token_id.clone());
+    let connections = Arc::new(RwLock::new(HashMap::from([("first".into(), state)])));
+    let panel = DispatchPeer::panel(
+        connections.clone(),
+        "first".into(),
+        false,
+        Some(store.clone()),
+    );
+    let mut handlers = HandlerRegistry::new();
+    let saved_origin = Arc::new(std::sync::Mutex::new(None));
+    for method in ["chat.send", "agent.run"] {
+        let saved_origin = saved_origin.clone();
+        #[cfg(target_os = "linux")]
+        let account_store = store.clone();
+        handlers.register(method, move |req| {
+            let saved_origin = saved_origin.clone();
+            #[cfg(target_os = "linux")]
+            let account_store = account_store.clone();
+            async move {
+                let captured = current_paired_shell_origin();
+                let bound = match captured {
+                    Some(binding) => {
+                        *saved_origin.lock().unwrap() = Some(binding.clone());
+                        #[cfg(target_os = "linux")]
+                        if req.id.as_ref().and_then(serde_json::Value::as_str) == Some("attached") {
+                            crate::gateway::execution_engine::assert_paired_shell_effect_order(
+                                binding.clone(),
+                                &account_store,
+                                _native,
+                            )
+                            .await;
+                        }
+                        tokio::spawn(async move { binding.still_connected().await })
+                            .await
+                            .unwrap()
+                    }
+                    None => false,
+                };
+                assert!(
+                    !tokio::spawn(async { current_paired_shell_origin().is_some() })
+                        .await
+                        .unwrap()
+                );
+                JsonRpcResponse::success(req.id, json!({"bound": bound}))
+            }
+        });
+    }
+    let executor = executor(handlers, Arc::new(RateLimiter::new(Default::default())));
+    let request = |method, key| {
+        JsonRpcRequest::with_id(
+            method,
+            Some(json!({"idempotency_key": key, "verified_device_token_id": credential.token_id})),
+            json!(key),
+        )
+    };
+    let attached = invoke(&executor, &panel, request("chat.send", "attached")).await;
+    assert_eq!(attached["result"]["bound"], true, "{attached}");
+    let fallback = invoke(&executor, &panel, request("agent.run", "fallback")).await;
+    assert_eq!(fallback["result"]["bound"], false, "{fallback}");
+
+    #[cfg(target_os = "linux")]
+    {
+        let origin = saved_origin.lock().unwrap().clone().unwrap();
+        let guard = origin.try_effect_guard().unwrap();
+        assert_eq!(guard.role_at_effect(), Some(UserRole::Member));
+        assert!(connections.try_write().is_err());
+    }
+
+    let mut table = connections.write().await;
+    let state = table.remove("first").unwrap();
+    table.insert("second".into(), state);
+    drop(table);
+    let old_origin = saved_origin.lock().unwrap().take().unwrap();
+    assert!(!old_origin.still_connected().await);
+    #[cfg(target_os = "linux")]
+    assert!(matches!(
+        old_origin.try_effect_guard(),
+        Err(crate::sandbox::shell_input::ShellEffectDenied::Stale)
+    ));
+    let untrusted = DispatchPeer::legacy(connections.clone(), "second".into(), true);
+    let legacy = invoke(&executor, &untrusted, request("chat.send", "legacy")).await;
+    assert_eq!(legacy["result"]["bound"], false, "{legacy}");
+
+    assert!(store.revoke_device_token(&credential.token_id).unwrap());
+    assert!(store.is_device_approved(&paired.device_id).unwrap());
+    let second = DispatchPeer::panel(connections, "second".into(), false, Some(store));
+    let revoked = invoke(&executor, &second, request("chat.send", "revoked")).await;
+    assert_eq!(revoked["result"]["bound"], false, "{revoked}");
+}
+
+#[tokio::test]
 async fn chat_models_list_open_to_members_without_admin_exposure() {
     use crate::config::{Config, ProviderConfig};
     use crate::gateway::protocol::{AUTH_REQUIRED, SERVICE_UNAVAILABLE};
@@ -143,6 +266,134 @@ async fn mounted_graph_reads_prepare_without_an_idempotency_key() {
     ] {
         assert!(!super::super::v1_mounted(method), "{method}");
     }
+}
+
+#[tokio::test]
+async fn v1_mounts_questionnaire_reads_and_guarded_writes() {
+    let caller = peer("questionnaire-member").snapshot().await.unwrap();
+    let pending = "clarification.pending";
+    assert!(super::super::v1_mounted(pending));
+    assert_eq!(Lane::for_method(pending), Lane::Query);
+    assert!(prepare(
+        &JsonRpcRequest::with_id(pending, None, json!(1)),
+        &caller,
+        true
+    )
+    .is_ok());
+
+    let resolve = "clarification.resolve";
+    assert!(super::super::v1_mounted(resolve));
+    assert!(Lane::for_method(resolve).needs_idempotency());
+    assert!(prepare(
+        &JsonRpcRequest::with_id(resolve, None, json!(2)),
+        &caller,
+        true
+    )
+    .is_err());
+    let params = json!({"idempotency_key": uuid::Uuid::new_v4()});
+    assert!(prepare(
+        &JsonRpcRequest::with_id(resolve, Some(params), json!(3)),
+        &caller,
+        true
+    )
+    .is_ok());
+}
+
+#[tokio::test]
+async fn checked_graph_writes_require_a_bound_caller_and_key() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let method = aleph_protocol::memory_graph::GRAPH_MUTATE_NOTE_METHOD;
+    assert!(super::super::v1_mounted(method));
+    assert_eq!(Lane::for_method(method), Lane::Mutate);
+    let legacy = peer("graph-writer");
+    let other_legacy = peer("other-writer");
+    let bound = bound_tests::bind(&legacy).await;
+    let other = bound_tests::bind(&other_legacy).await;
+    let caller = bound.snapshot().await.unwrap();
+    for params in [None, Some(json!({"idempotency_key": " "}))] {
+        let request = JsonRpcRequest::with_id(method, params, json!(1));
+        assert_eq!(
+            prepare(&request, &caller, false)
+                .err()
+                .unwrap()
+                .error
+                .unwrap()
+                .code,
+            IDEMPOTENCY_KEY_REQUIRED
+        );
+    }
+
+    let hits = Arc::new(AtomicUsize::new(0));
+    let mut handlers = HandlerRegistry::new();
+    handlers.register(method, {
+        let hits = hits.clone();
+        move |req| {
+            let hits = hits.clone();
+            Box::pin(async move {
+                let hit = hits.fetch_add(1, Ordering::SeqCst) + 1;
+                JsonRpcResponse::success(req.id, json!({"hit": hit}))
+            })
+        }
+    });
+    let executor = executor(
+        handlers,
+        Arc::new(RateLimiter::new(RateLimitConfig::default())),
+    );
+    let request = |id| {
+        JsonRpcRequest::with_id(
+            method,
+            Some(json!({
+                "address": {"agent_id": "main", "node_id": "reference/one"},
+                "revision": "a".repeat(64),
+                "action": {"type": "rename", "title": "two"},
+                "idempotency_key": "key",
+            })),
+            json!(id),
+        )
+    };
+    assert!(invoke(&executor, &legacy, request(1))
+        .await
+        .get("error")
+        .is_some());
+    assert_eq!(
+        invoke(&executor, &bound, request(2)).await["result"]["hit"],
+        1
+    );
+    assert_eq!(
+        invoke(&executor, &bound, request(3)).await["result"]["hit"],
+        1
+    );
+    assert_eq!(
+        invoke(&executor, &other, request(4)).await["result"]["hit"],
+        2
+    );
+    let mut different = request(5);
+    different.params.as_mut().unwrap()["action"] = json!({"type": "delete"});
+    assert_eq!(
+        invoke(&executor, &bound, different).await["error"]["code"],
+        INVALID_PARAMS
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+
+    // Seed a stale success directly to test the live partition check independently
+    // of the handler's own partition check.
+    let mut foreign = request(6);
+    foreign.params.as_mut().unwrap()["address"]["agent_id"] = json!("main__u-foreign");
+    foreign.params.as_mut().unwrap()["idempotency_key"] = json!("stale");
+    let plan = prepare(&foreign, &caller, false).unwrap();
+    let AcquireResult::Proceed(slot) = executor.idempotency.try_acquire_for_payload(
+        plan.key.as_deref().unwrap(),
+        plan.note_mutation.unwrap().fingerprint,
+    ) else {
+        panic!("expected a new slot");
+    };
+    slot.complete(json!({"hit": 99}));
+    assert_eq!(
+        invoke(&executor, &bound, foreign).await["error"]["code"],
+        RESOURCE_NOT_FOUND
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]

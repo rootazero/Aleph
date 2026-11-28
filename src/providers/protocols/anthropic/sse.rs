@@ -19,7 +19,7 @@ pub(crate) fn parse_anthropic_sse_event(
     let v: serde_json::Value = match serde_json::from_str(data) {
         Ok(v) => v,
         Err(e) => {
-            warn!(error = %e, data = %data, "Failed to parse Anthropic SSE event");
+            warn!(error = %e, bytes = data.len(), "Failed to parse Anthropic SSE event");
             return;
         }
     };

@@ -153,13 +153,28 @@ static ENCODED_COMMAND_RE: Lazy<Regex> = Lazy::new(|| {
 /// by `append_views`, newline-joined.
 #[must_use]
 pub fn normalize_for_matching(text: &str) -> Cow<'_, str> {
+    normalize(text, false).0
+}
+
+/// A fixed data profile may reject records requiring the bounded shell
+/// decoder. It must never approve a prefix after silently dropping a view.
+#[cfg(target_os = "linux")]
+pub(crate) fn normalize_complete(text: &str) -> Option<Cow<'_, str>> {
+    if text.len() > MAX_VIEW_BYTES {
+        return None;
+    }
+    let (view, complete) = normalize(text, true);
+    complete.then_some(view)
+}
+
+fn normalize(text: &str, require_complete: bool) -> (Cow<'_, str>, bool) {
     if is_plain(text) {
-        return Cow::Borrowed(text);
+        return (Cow::Borrowed(text), true);
     }
     let mut out = String::with_capacity(text.len() * 2);
     let mut budget = MAX_DECODED_PAYLOADS;
-    append_views(text, 0, &mut budget, &mut out);
-    Cow::Owned(out)
+    let complete = append_views(text, 0, &mut budget, &mut out, require_complete);
+    (Cow::Owned(out), complete)
 }
 
 /// Whether `text` carries none of the tricks any view folds out, so the raw
@@ -208,9 +223,15 @@ fn is_plain(text: &str) -> bool {
 /// A rule matches if *any* view matches, so no single reading can hide a
 /// command from the others. `depth` and `budget` bound the `-EncodedCommand`
 /// recursion; [`MAX_VIEW_BYTES`] bounds the buffer.
-fn append_views(raw: &str, depth: usize, budget: &mut usize, out: &mut String) {
+fn append_views(
+    raw: &str,
+    depth: usize,
+    budget: &mut usize,
+    out: &mut String,
+    require_complete: bool,
+) -> bool {
     if out.len() >= MAX_VIEW_BYTES {
-        return;
+        return false;
     }
 
     // `strip_unsafe_invisible` only removes whole invisible UTF-8 sequences, so
@@ -235,29 +256,35 @@ fn append_views(raw: &str, depth: usize, budget: &mut usize, out: &mut String) {
         None
     };
 
-    push_view(out, &posix);
+    let mut complete = push_view(out, &posix);
     if let Some(n) = &native {
-        push_view(out, n);
+        complete &= push_view(out, n);
     }
 
     if needs_word_view(&canonical) {
         let word = shell_word_fold(&posix);
         let word_differs = word != posix;
         if word_differs {
-            push_view(out, &word);
+            complete &= push_view(out, &word);
         }
         if let Some(n) = &native {
             let word_native = shell_word_fold(n);
             if word_native != *n && !(word_differs && word_native == word) {
-                push_view(out, &word_native);
+                complete &= push_view(out, &word_native);
             }
         }
     }
 
     // Tested against the *folded* text, not the original: `-e^nc <base64>` only
     // looks like an encoded command after the cmd caret has been folded away.
-    if depth >= MAX_DECODE_ROUNDS || *budget == 0 || !may_carry_encoded_payload(&posix) {
-        return;
+    if !may_carry_encoded_payload(&posix) {
+        return complete;
+    }
+    if require_complete {
+        return complete && !ENCODED_COMMAND_RE.is_match(&posix);
+    }
+    if depth >= MAX_DECODE_ROUNDS || *budget == 0 {
+        return complete;
     }
     for caps in ENCODED_COMMAND_RE.captures_iter(&posix) {
         if *budget == 0 || out.len() >= MAX_VIEW_BYTES {
@@ -270,20 +297,21 @@ fn append_views(raw: &str, depth: usize, budget: &mut usize, out: &mut String) {
             continue;
         };
         *budget -= 1;
-        append_views(&decoded, depth + 1, budget, out);
+        append_views(&decoded, depth + 1, budget, out, false);
     }
+    complete
 }
 
 /// Append one view, newline-separated from whatever is already there and
 /// truncated on a char boundary at [`MAX_VIEW_BYTES`].
-fn push_view(out: &mut String, view: &str) {
+fn push_view(out: &mut String, view: &str) -> bool {
     if !out.is_empty() {
         out.push('\n');
     }
     let room = MAX_VIEW_BYTES.saturating_sub(out.len());
     if view.len() <= room {
         out.push_str(view);
-        return;
+        return true;
     }
     let mut end = room;
     while end > 0 && !view.is_char_boundary(end) {
@@ -292,6 +320,7 @@ fn push_view(out: &mut String, view: &str) {
     if let Some(v) = view.get(..end) {
         out.push_str(v);
     }
+    false
 }
 
 /// Whether a shell-word view would say anything the escape views do not.

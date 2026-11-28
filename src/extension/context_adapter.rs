@@ -52,8 +52,21 @@ impl WasmContextAdapter {
             require_no_ambient_authority(manifest)?;
             loader.load_plugin(manifest)?;
         }
-        let result = loader
-            .bind_wasm(&manifest.id, &declaration.handler)
+        let result = Self::bind_mounted(loader, &manifest.id, declaration);
+        if fresh && result.is_err() {
+            loader.unload_plugin(&manifest.id)?;
+        }
+        result
+    }
+
+    /// Bind an export using the mounted guest as its declaration authority.
+    pub(super) fn bind_mounted(
+        loader: &PluginLoader,
+        runtime_key: &str,
+        declaration: &ContextDeclaration,
+    ) -> ExtensionResult<Self> {
+        loader
+            .bind_wasm(runtime_key, &declaration.handler)
             .and_then(|binding| {
                 if !binding.context_effect_free() {
                     return Err(rejected("actual mounted guest has ambient authority"));
@@ -73,11 +86,7 @@ impl WasmContextAdapter {
                     declaration: declaration.clone(),
                     binding,
                 })
-            });
-        if fresh && result.is_err() {
-            loader.unload_plugin(&manifest.id)?;
-        }
-        result
+            })
     }
 
     pub fn declaration(&self) -> &ContextDeclaration {
@@ -203,7 +212,9 @@ fn has_authority(capabilities: &WasmCapabilities) -> bool {
 
 pub(crate) fn require_no_ambient_authority(manifest: &PluginManifest) -> ExtensionResult<()> {
     if manifest.kind != PluginKind::Wasm {
-        return Err(rejected("only WASM transport is supported; native Pi JavaScript and MCP processes are unsupported"));
+        return Err(rejected(
+            "only WASM transport is supported; native Pi JavaScript and MCP processes are unsupported",
+        ));
     }
     // EXTISM_ENABLE_WASI_OUTPUT causes Extism to inherit stdout/stderr. Refuse
     // that configuration rather than silently opening a second output channel.
@@ -381,16 +392,16 @@ impl crate::context::fabric::ContextHandler for MountedContextHandler {
 mod tests {
     use super::*;
     use crate::context::fabric::{
-        canonical_fingerprint, ContextBudget, ContextOperation, ContextPhase, ContextScope,
-        ContextSnapshot, CONTEXT_CAPABILITY_API_VERSION,
+        CONTEXT_CAPABILITY_API_VERSION, ContextBudget, ContextOperation, ContextPhase,
+        ContextScope, ContextSnapshot, canonical_fingerprint,
     };
     use crate::extension::capability::{CapabilityDeclaration, ContextGrantApproval};
     use crate::extension::manifest::adapter::AdapterRegistry;
-    use crate::extension::manifest::{parse_manifest_from_dir_sync, FilesystemAccess};
+    use crate::extension::manifest::{FilesystemAccess, parse_manifest_from_dir_sync};
     use crate::extension::runtime::wasm::tests::guest_fixture::{
-        manifest_with_checked_input_guest, HANDLER,
+        HANDLER, manifest_with_checked_input_guest,
     };
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     fn declaration() -> ContextDeclaration {
         serde_json::from_value(json!({
@@ -511,8 +522,8 @@ mod tests {
 
     #[test]
     fn context_guest_cannot_import_wasi_even_when_ordinary_plugins_can() {
-        use crate::extension::runtime::wasm::tests::guest_fixture::write_wasi_guest;
         use crate::extension::runtime::wasm::WasmRuntime;
+        use crate::extension::runtime::wasm::tests::guest_fixture::write_wasi_guest;
         let directory = tempfile::tempdir().unwrap();
         let manifest = fixture(directory.path(), "native");
         write_wasi_guest(&manifest.entry_path().unwrap());
@@ -591,7 +602,7 @@ mod tests {
     #[test]
     fn context_guest_vm_enforces_mounted_memory_limit() {
         use crate::extension::runtime::wasm::tests::guest_fixture::{
-            call_guest_raw, write_memory_probe_guest, PAYLOAD_A,
+            PAYLOAD_A, call_guest_raw, write_memory_probe_guest,
         };
         use crate::extension::runtime::wasm::{WasmResourceLimits, WasmRuntime};
         let directory = tempfile::tempdir().unwrap();
@@ -682,9 +693,11 @@ mod tests {
             // The real guest checks all request bytes, not only a canned response.
             let mut changed = request.clone();
             changed.request_id = "different-wire-request".into();
-            assert!(adapter
-                .invoke_json(&loader, &changed, &grant, &caller(), 1000)
-                .is_err());
+            assert!(
+                adapter
+                    .invoke_json(&loader, &changed, &grant, &caller(), 1000)
+                    .is_err()
+            );
         }
     }
 
@@ -708,15 +721,17 @@ mod tests {
         assert!(invoke(&loader).is_err());
         let replacement = WasmContextAdapter::bind(&mut loader, &manifest, &declaration).unwrap();
         assert!(invoke(&loader).is_err());
-        assert!(replacement
-            .invoke_json(
-                &loader,
-                &request(&declaration),
-                &grant(&declaration),
-                &caller(),
-                1000
-            )
-            .is_ok());
+        assert!(
+            replacement
+                .invoke_json(
+                    &loader,
+                    &request(&declaration),
+                    &grant(&declaration),
+                    &caller(),
+                    1000
+                )
+                .is_ok()
+        );
     }
 
     #[test]
@@ -843,11 +858,13 @@ mod tests {
             .handler_resolver(resolver.clone())
             .build();
         assert!(resolver("context-guest:fixture/context").is_none());
-        assert!(manager
-            .set_plugin_enabled("context-guest", true)
-            .await
-            .unwrap()
-            .changed());
+        assert!(
+            manager
+                .set_plugin_enabled("context-guest", true)
+                .await
+                .unwrap()
+                .changed()
+        );
         assert_eq!(
             manager
                 .context_declarations("context-guest")
@@ -856,12 +873,14 @@ mod tests {
                 .len(),
             2
         );
-        assert!(manager
-            .plugin_registry_handle()
-            .read()
-            .await
-            .eligible_context_keys("session-a", now_seconds())
-            .is_empty());
+        assert!(
+            manager
+                .plugin_registry_handle()
+                .read()
+                .await
+                .eligible_context_keys("session-a", now_seconds())
+                .is_empty()
+        );
         let pressure = crate::context::budget::ContextPressure {
             used_tokens: 1000,
             budget_tokens: 1000,
@@ -884,16 +903,18 @@ mod tests {
             ..Default::default()
         };
         // Incomplete advertised bundle and unknown ids do not mutate authority.
-        assert!(manager
-            .grant_context_capabilities(
-                "context-guest",
-                &["absent".into()],
-                &caller(),
-                approval.clone(),
-                now_seconds()
-            )
-            .await
-            .is_err());
+        assert!(
+            manager
+                .grant_context_capabilities(
+                    "context-guest",
+                    &["absent".into()],
+                    &caller(),
+                    approval.clone(),
+                    now_seconds()
+                )
+                .await
+                .is_err()
+        );
         assert_eq!(
             manager
                 .grant_context_capabilities(
@@ -956,32 +977,38 @@ mod tests {
             original_manifest.replace("fixture/context", "forged/new"),
         )
         .unwrap();
-        assert!(manager
-            .context_declarations("context-guest")
-            .await
-            .unwrap()
-            .iter()
-            .any(|d| d.descriptor.id == first.descriptor.id));
-        assert!(manager
-            .grant_context_capabilities(
-                "context-guest",
-                &["forged/new".into()],
-                &caller(),
-                approval.clone(),
-                now_seconds()
-            )
-            .await
-            .is_err());
+        assert!(
+            manager
+                .context_declarations("context-guest")
+                .await
+                .unwrap()
+                .iter()
+                .any(|d| d.descriptor.id == first.descriptor.id)
+        );
+        assert!(
+            manager
+                .grant_context_capabilities(
+                    "context-guest",
+                    &["forged/new".into()],
+                    &caller(),
+                    approval.clone(),
+                    now_seconds()
+                )
+                .await
+                .is_err()
+        );
         std::fs::write(&manifest_path, &original_manifest).unwrap();
         let retained = resolver("context-guest:fixture/context").unwrap();
         let mut direct = request(&first);
         direct.phase = ContextPhase::Preflight;
         direct.operation = ContextOperation::Preflight;
         assert!(retained.invoke(direct.clone()).await.is_err());
-        assert!(retained
-            .invoke_authenticated(direct.clone(), &caller())
-            .await
-            .is_ok());
+        assert!(
+            retained
+                .invoke_authenticated(direct.clone(), &caller())
+                .await
+                .is_ok()
+        );
         let registry = manager.plugin_registry_handle();
         assert_eq!(
             registry
@@ -990,15 +1017,19 @@ mod tests {
                 .revoke_context_grants("context-guest", "session-a"),
             2
         );
-        assert!(retained
-            .invoke_authenticated(direct.clone(), &caller())
-            .await
-            .is_err());
-        assert!(!registry
-            .read()
-            .await
-            .eligible_context_keys("session-b", now_seconds())
-            .is_empty());
+        assert!(
+            retained
+                .invoke_authenticated(direct.clone(), &caller())
+                .await
+                .is_err()
+        );
+        assert!(
+            !registry
+                .read()
+                .await
+                .eligible_context_keys("session-b", now_seconds())
+                .is_empty()
+        );
         messages = original;
         let revoked = fabric
             .preflight(&mut messages, &pressure, 0, &caller(), None)
@@ -1007,11 +1038,13 @@ mod tests {
         assert_eq!(revoked.owner, ContextOwner::Builtin);
         manager.unmount("context-guest").await.unwrap();
         assert!(resolver("context-guest:fixture/context").is_none());
-        assert!(registry
-            .read()
-            .await
-            .eligible_context_keys("session-b", now_seconds())
-            .is_empty());
+        assert!(
+            registry
+                .read()
+                .await
+                .eligible_context_keys("session-b", now_seconds())
+                .is_empty()
+        );
         manager.mount("context-guest").await.unwrap();
         manager
             .grant_context_capabilities(
@@ -1030,11 +1063,13 @@ mod tests {
                 .is_err(),
             "old handler must not rebind to the replacement"
         );
-        assert!(resolver("context-guest:fixture/context")
-            .unwrap()
-            .invoke_authenticated(direct, &caller())
-            .await
-            .is_ok());
+        assert!(
+            resolver("context-guest:fixture/context")
+                .unwrap()
+                .invoke_authenticated(direct, &caller())
+                .await
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1046,23 +1081,29 @@ mod tests {
         let adapter = WasmContextAdapter::bind(&mut loader, &manifest, &declaration).unwrap();
         let request = request(&declaration);
         let grant = grant(&declaration);
-        assert!(adapter
-            .invoke_json(&loader, &request, &grant, &caller(), 2000)
-            .is_err());
+        assert!(
+            adapter
+                .invoke_json(&loader, &request, &grant, &caller(), 2000)
+                .is_err()
+        );
         let foreign = AuthenticatedCaller::from_host_boundary("session-b").unwrap();
-        assert!(adapter
-            .invoke_json(&loader, &request, &grant, &foreign, 1000)
-            .is_err());
+        assert!(
+            adapter
+                .invoke_json(&loader, &request, &grant, &foreign, 1000)
+                .is_err()
+        );
         let mut changed = declaration.clone();
         changed.descriptor.implementation_version = "2".into();
-        assert!(adapter
-            .invoke_json(
-                &loader,
-                &request,
-                &super::tests::grant(&changed),
-                &caller(),
-                1000
-            )
-            .is_err());
+        assert!(
+            adapter
+                .invoke_json(
+                    &loader,
+                    &request,
+                    &super::tests::grant(&changed),
+                    &caller(),
+                    1000
+                )
+                .is_err()
+        );
     }
 }

@@ -69,13 +69,11 @@ pub(crate) fn start(service: LocalService, home: Option<PathBuf>) {
                 let local = home
                     .as_deref()
                     .is_none_or(|home| target_store::load_target(home) == ConnectionTarget::Local);
-                if newly_granted(before, now) && local && service.stop() {
-                    // A connection change may have been saved while stop waited.
-                    if home.as_deref().is_none_or(|home| {
-                        target_store::load_target(home) == ConnectionTarget::Local
-                    }) {
-                        eprintln!("macOS permission granted: restarting the local service");
-                        service.start();
+                if newly_granted(before, now) && local {
+                    if let Err(error) = service.restart_owned() {
+                        eprintln!(
+                            "could not restart bundled Aleph after permission grant: {error}"
+                        );
                     }
                 }
                 before = now;

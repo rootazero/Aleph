@@ -16,17 +16,17 @@ mod types;
 pub use command_handler::serialize_parsed_command;
 pub use types::{
     ChannelConfig, ChannelPermissionLevel, ChannelPolicyConfig, DmPolicy, GroupPolicy,
-    RoutingError, SlashAccessConfig, SLASH_COMMAND_MODE_KEY,
+    RoutingError, SLASH_COMMAND_MODE_KEY, SlashAccessConfig,
 };
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 use tracing::{error, info, warn};
 
 use super::agent_instance::AgentRegistry;
-use super::channel::{InboundMessage, OutboundMessage, CB_MESSAGE_ID_PREFIX};
+use super::channel::{CB_MESSAGE_ID_PREFIX, InboundMessage, OutboundMessage};
 use super::channel_policy::ChannelPolicyProjection;
 use super::channel_registry::ChannelRegistry;
 use super::execution_adapter::ExecutionAdapter;
@@ -35,19 +35,19 @@ use super::handlers::group_chat::SharedOrchestrator;
 use super::agent_env::AgentEnvStore;
 use super::inbound_context::InboundContext;
 use super::pair_loop_guard::{
-    resolve_pair_loop_settings, PairLoopFacts, PairLoopGuard, PairLoopGuardConfig,
+    PairLoopFacts, PairLoopGuard, PairLoopGuardConfig, resolve_pair_loop_settings,
 };
 use super::pairing_store::PairingStore;
 use super::routing_config::RoutingConfig;
 use crate::command::CommandParser;
-use crate::gateway::telecom::operator_control::OperatorControl;
 use crate::gateway::telecom::SmsInboundMeta;
+use crate::gateway::telecom::operator_control::OperatorControl;
 use crate::group_chat::GroupChatExecutor;
 use crate::routing::config::{RouteBinding, SessionConfig};
 
 use command_handler::{
-    classify_clarification_command, classify_special_slash, strip_bot_mention,
-    ClarificationCommand, SpecialSlash,
+    ClarificationCommand, SpecialSlash, classify_clarification_command, classify_special_slash,
+    strip_bot_mention,
 };
 use dedup::InboundDedupTracker;
 use types::check_link_access;
@@ -1008,7 +1008,7 @@ impl InboundMessageRouter {
 
             // Try unified command resolution first (async, all sources)
             if let Some(ref parser) = self.command_parser {
-                if let Some(parsed) = parser.parse_async(slash_text).await {
+                if let Some(parsed) = parser.parse_in_workspace(slash_text, None).await {
                     // Slash-command access tiering — backward-compat: empty
                     // `allow_admin_from` keeps gating OFF for that scope.
                     // Must run BEFORE the special-cased dispatches below:
@@ -1287,9 +1287,9 @@ impl InboundMessageRouter {
             return true;
         }
 
-        use crate::clarification::render::{parse_button_callback, CLARIFICATION_BUTTON_PREFIX};
-        use crate::clarification::session::ChannelReplyDisposition;
         use crate::clarification::ResolveOutcome;
+        use crate::clarification::render::{CLARIFICATION_BUTTON_PREFIX, parse_button_callback};
+        use crate::clarification::session::ChannelReplyDisposition;
         use crate::gateway::i18n::Msg;
 
         // Reserve the namespace even for old or malformed buttons. Only a
@@ -1617,7 +1617,7 @@ mod tests {
         use crate::gateway::channel_policy::parse_channel_activation_policy;
         use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
         use crate::gateway::interfaces::telegram::{
-            config::parse_activation_config, TelegramChannel,
+            TelegramChannel, config::parse_activation_config,
         };
         use crate::routing::session_key::SessionKey;
         use serde_json::json;
@@ -2067,10 +2067,12 @@ mod tests {
         )
         .with_approval_callback_sink(Arc::new(CountingSink(calls.clone())));
 
-        assert!(router
-            .handle_message(public_sms_message("cb_public"))
-            .await
-            .is_ok());
+        assert!(
+            router
+                .handle_message(public_sms_message("cb_public"))
+                .await
+                .is_ok()
+        );
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
             0,
@@ -2130,7 +2132,7 @@ mod tests {
             CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority,
         };
         use crate::workflow::clarify::{
-            ClarifyTaskMeta, CLARIFY_DELIVERED_AT_KEY, CLARIFY_META_KEY,
+            CLARIFY_DELIVERED_AT_KEY, CLARIFY_META_KEY, ClarifyTaskMeta,
         };
 
         let store = SqliteCoordTaskStore::new(rusqlite::Connection::open_in_memory().unwrap());

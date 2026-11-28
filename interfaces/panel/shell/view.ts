@@ -6,6 +6,7 @@ export type PanelTab = {
   icon: string;
   status: "enabled" | "disabled" | "incompatible" | "failed";
   statusDetail: string | null;
+  permissions: string[];
   renderer: "tsx" | "dom";
 };
 

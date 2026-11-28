@@ -336,6 +336,7 @@ fn interpret(
             elapsed_ms,
             partial_stdout,
             partial_stderr,
+            ..
         }) => (
             String::from_utf8_lossy(&partial_stdout).to_string(),
             String::from_utf8_lossy(&partial_stderr).to_string(),
@@ -793,6 +794,7 @@ not json at all"#;
                 elapsed_ms: 120_000,
                 partial_stdout: Vec::new(),
                 partial_stderr: Vec::new(),
+                drain_incomplete: false,
             }),
             build_plan(Some("cargo check"), None),
         );

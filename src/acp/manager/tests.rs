@@ -74,8 +74,7 @@ async fn test_manager_executable_override() {
     entries.get_mut("claude-code").unwrap().executable = Some("/custom/claude".to_string());
     let manager = AcpAdapterManager::from_entries(entries);
     assert!(manager.has_harness("claude-code").await);
-    let adapters = manager.adapters.read().await;
-    let harness = adapters.get("claude-code").unwrap();
+    let harness = manager.adapter("claude-code").unwrap();
     let cfg = harness.build_config(None);
     assert_eq!(cfg.executable, "/custom/claude");
 }
@@ -361,8 +360,7 @@ fn test_persisted_session_legacy_compat() {
     assert_eq!(parsed.session_name, None);
 }
 
-/// `set_gateway_change_hook` fires every time `emit_persistence_event`
-/// fans out — confirms the broadcast wiring used by `acp.sessions.changed`.
+/// Gateway receives invalidations for persisted and live-only changes.
 #[tokio::test]
 async fn test_gateway_change_hook_fires_on_emit() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -376,22 +374,74 @@ async fn test_gateway_change_hook_fires_on_emit() {
         }))
         .await;
 
-    // Two direct emits — fan-out should fire the hook each time even
-    // without a persistence_hook installed.
-    manager
-        .emit_persistence_event(crate::acp::AcpSessionEvent::Created {
-            harness_id: "claude-code".to_string(),
-            acp_session_id: "s1".to_string(),
-            cwd: "/tmp/a".to_string(),
-            session_name: None,
-        })
-        .await;
-    manager
-        .emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-            harness_id: "claude-code".to_string(),
-            cwd: "/tmp/a".to_string(),
-            session_name: Some("backend".to_string()),
-        })
-        .await;
+    let state = manager.state();
+    state.publish(None);
+    state.publish(Some(crate::acp::AcpSessionEvent::Removed {
+        harness_id: "claude-code".to_owned(),
+        cwd: "/tmp/a".to_owned(),
+        session_name: Some("backend".to_owned()),
+    }));
     assert_eq!(counter.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn disabled_harness_never_starts_native_or_oneshot() {
+    use crate::config::types::acp::TrustLevel;
+    let directory = tempfile::tempdir().unwrap();
+    let marker = directory.path().join("started");
+    let entry = AcpAdapterEntry {
+        executable: Some("/bin/sh".into()),
+        args: vec!["-c".into(), format!("touch '{}'; exit 1", marker.display())],
+        enabled: true,
+        trust_level: TrustLevel::Disabled,
+        timeout_seconds: 1,
+        ..Default::default()
+    };
+    let manager =
+        AcpAdapterManager::from_entries(HashMap::from([("blocked".into(), entry.clone())]));
+    let cwd = directory.path().to_str().unwrap();
+    for mode in [AdapterMode::NativeAcp, AdapterMode::Oneshot] {
+        let mut configured = entry.clone();
+        configured.default_mode = mode.to_serde();
+        manager.update_harness("blocked", configured).await.unwrap();
+        let error = manager
+            .prompt_named("blocked", "hello", cwd, None, Some(mode), true, None)
+            .await
+            .unwrap_err();
+        assert!(
+            !marker.exists(),
+            "disabled harness launched in {mode:?}: {error}"
+        );
+        assert!(error.to_string().contains("harness_denied"), "{error}");
+    }
+    let error = manager
+        .ensure_session_named("blocked", cwd, None)
+        .await
+        .unwrap_err();
+    assert!(!marker.exists());
+    assert!(error.to_string().contains("harness_denied"), "{error}");
+    let record = crate::acp::session::PersistedAcpSession {
+        harness_id: "blocked".into(),
+        acp_session_id: "old".into(),
+        cwd: cwd.into(),
+        created_at: chrono::Utc::now(),
+        last_used_at: chrono::Utc::now(),
+        session_name: None,
+    };
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = Arc::clone(&events);
+    manager
+        .set_persistence_hook(Arc::new(move |event| captured.lock().unwrap().push(event)))
+        .await;
+    assert!(manager.restore_sessions(vec![record]).await.is_empty());
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "restore denial must retain the persisted record"
+    );
+    assert!(!marker.exists());
+    let snapshots = manager.list_sessions().await;
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].acp_session_id.as_deref(), Some("old"));
+    assert!(!snapshots[0].alive);
 }

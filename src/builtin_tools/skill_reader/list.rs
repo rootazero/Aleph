@@ -1,12 +1,11 @@
 //! `ListSkillsTool` — List available skills (Level 1 metadata).
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::info;
 
 use super::super::{notify_tool_result, notify_tool_start};
 use super::list_skill_files;
@@ -131,23 +130,24 @@ impl ListSkillsTool {
     }
 
     /// Parse skill frontmatter to extract metadata
-    fn parse_skill_metadata(&self, skill_dir: &Path) -> Option<SkillSummary> {
-        let skill_md = skill_dir.join("SKILL.md");
-        if !skill_md.exists() {
-            return None;
-        }
-
-        let content = fs::read_to_string(&skill_md).ok()?;
-        let id = skill_dir.file_name()?.to_str()?.to_string();
-
-        // Parse frontmatter using v2 parser
+    fn parse_skill_metadata(&self, skill_md: &Path, selected: bool) -> Option<SkillSummary> {
+        let skill_dir = skill_md.parent()?;
         let manifest =
-            crate::skill::parse_skill_content(&content, crate::domain::skill::SkillSource::Global)
-                .ok()?;
-
-        // List files
-        let files = list_skill_files(skill_dir);
-
+            crate::skill::parse_skill_file(skill_md, crate::skill::guess_source(skill_md)).ok()?;
+        let (id, files) = if selected {
+            let file = skill_md.file_name()?.to_str()?.to_owned();
+            let files = if file == "SKILL.md" {
+                list_skill_files(skill_dir)
+            } else {
+                vec![file]
+            };
+            (manifest.id().to_string(), files)
+        } else {
+            (
+                skill_dir.file_name()?.to_str()?.to_owned(),
+                list_skill_files(skill_dir),
+            )
+        };
         // Determine source
         let source = self.get_source_type(skill_dir);
 
@@ -177,62 +177,24 @@ impl ListSkillsTool {
         let mut skills = Vec::new();
         let mut seen_ids = std::collections::HashSet::new();
 
-        // Scan all skills directories
-        for skills_dir in &self.skills_dirs {
+        let filter = args.filter.as_ref().map(|filter| filter.to_lowercase());
+        for root in &self.skills_dirs {
             #[cfg(test)]
-            crate::utils::paths::assert_not_real_claude_home(skills_dir, "skill_list");
-            if !skills_dir.exists() {
-                debug!(
-                    skills_dir = %skills_dir.display(),
-                    "Skills directory does not exist"
-                );
-                continue;
-            }
-
-            if let Ok(entries) = fs::read_dir(skills_dir) {
-                for entry in entries.flatten() {
-                    if let Ok(file_type) = entry.file_type() {
-                        if file_type.is_dir() {
-                            let skill_dir = entry.path();
-
-                            // Skip hidden directories
-                            if let Some(name) = skill_dir.file_name() {
-                                if name.to_str().is_some_and(|n| n.starts_with('.')) {
-                                    continue;
-                                }
-                            }
-
-                            // Try to parse skill metadata
-                            if let Some(summary) = self.parse_skill_metadata(&skill_dir) {
-                                // Skip if already seen (first occurrence wins)
-                                if seen_ids.contains(&summary.id) {
-                                    debug!(
-                                        skill_id = %summary.id,
-                                        "Skill already discovered, skipping duplicate"
-                                    );
-                                    continue;
-                                }
-
-                                // Apply filter if specified
-                                if let Some(ref filter) = args.filter {
-                                    let filter_lower = filter.to_lowercase();
-                                    let matches = summary.id.to_lowercase().contains(&filter_lower)
-                                        || summary.name.to_lowercase().contains(&filter_lower)
-                                        || summary
-                                            .description
-                                            .to_lowercase()
-                                            .contains(&filter_lower);
-
-                                    if !matches {
-                                        continue;
-                                    }
-                                }
-
-                                seen_ids.insert(summary.id.clone());
-                                skills.push(summary);
-                            }
-                        }
-                    }
+            crate::utils::paths::assert_not_real_claude_home(root, "skill_list");
+            let selected = root.is_file();
+            for file in crate::utils::paths::skill_manifest_files(root) {
+                let Some(summary) = self.parse_skill_metadata(&file, selected) else {
+                    continue;
+                };
+                if filter.as_ref().is_some_and(|filter| {
+                    ![&summary.id, &summary.name, &summary.description]
+                        .iter()
+                        .any(|value| value.to_lowercase().contains(filter))
+                }) {
+                    continue;
+                }
+                if seen_ids.insert(summary.id.clone()) {
+                    skills.push(summary);
                 }
             }
         }

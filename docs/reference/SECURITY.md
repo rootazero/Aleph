@@ -3894,7 +3894,6 @@ validation on the browser surface. It guards against the public internet,
 |--------|---------|-----|
 | **absent / empty** | allow | Native clients (CLI, bots, bridges, `tokio-tungstenite`) send none; only browsers do. |
 | **loopback** (`127.0.0.0/8`, `::1`, `localhost`, `*.localhost`) | allow | Same-machine UI. |
-| **`tauri:` scheme** | allow | The desktop shell's own webview origin, unspoofable by a remote page. |
 | **exact allow-list match** (`[gateway] allowed_origins`) | allow | Operator-configured extra origins for split panel/API deployments. |
 | **same-origin** (Origin authority == request `Host`) | allow **only if the `Host` is an IP literal or loopback** | LAN deployments reached by IP (`http://10.10.10.6:18790`) work without config; an IP literal cannot be DNS-rebound. A **domain** `Host` is *not* auto-allowed — the deployment must add its origin to `allowed_origins` (see DNS-rebinding note below). |
 | anything else (public web domain) | **deny** | |
@@ -3902,7 +3901,7 @@ validation on the browser surface. It guards against the public internet,
 Note the gate does **not** auto-allow arbitrary private-LAN IPs by range —
 a cross-origin browser request from another LAN host is only accepted when
 it is same-origin with the gateway's `Host`, in the allow-list, or
-loopback/`tauri:`. Native LAN clients carry no `Origin` and pass freely.
+loopback. Native clients without an `Origin` still follow Gateway authentication.
 
 > **DNS-rebinding — defended.** A classic DNS-rebinding attack rebinds a
 > domain (`evil.com`) to the gateway's own address so the victim's page

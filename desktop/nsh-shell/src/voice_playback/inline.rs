@@ -43,7 +43,7 @@ impl Play {
         let play: Self = serde_json::from_value(value).map_err(|_| INVALID_AUDIO)?;
         validate_id(&play.playback_id)?;
         let len = play.audio_base64.len();
-        if len == 0 || len > MAX_BASE64_BYTES || len % 4 != 0 {
+        if len == 0 || len > MAX_BASE64_BYTES || !len.is_multiple_of(4) {
             return Err(INVALID_AUDIO);
         }
         Ok(play)

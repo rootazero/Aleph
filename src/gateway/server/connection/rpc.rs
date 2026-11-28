@@ -1,22 +1,32 @@
 //! Shared ordinary JSON-RPC execution; transport control stays with the adapter.
 
+use aleph_protocol::memory_graph::{GraphMutateNoteParams, GRAPH_MUTATE_NOTE_METHOD};
 use aleph_protocol::panel_voice::{is_capture_control, VOICE_TURN_CANCEL_METHOD};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::{net::IpAddr, sync::Arc, time::Duration};
 use tracing::{debug, warn};
 
 use super::dispatch::{self, CallerSnapshot, DispatchPeer};
+use crate::gateway::handlers::graph::note_mutation_partition_allowed;
 use crate::gateway::idempotency::{AcquireResult, IdempotencyGuard};
 use crate::gateway::lane::{ChannelClass, Lane, LaneManager};
 use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR, INVALID_PARAMS,
-    RATE_LIMITED,
+    RATE_LIMITED, RESOURCE_NOT_FOUND,
 };
 use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKey, RateLimiter};
 
 pub(super) struct RpcPlan {
     lane: Lane,
     pub(super) key: Option<String>,
+    note_mutation: Option<NoteMutationReplay>,
+}
+
+struct NoteMutationReplay {
+    partition: String,
+    fingerprint: [u8; 32],
 }
 
 impl RpcPlan {
@@ -70,11 +80,13 @@ pub(super) fn prepare(
     require_key: bool,
 ) -> Result<RpcPlan, Box<JsonRpcResponse>> {
     const SEP: char = '\u{1f}';
+    let is_note_mutation = req.method == GRAPH_MUTATE_NOTE_METHOD;
     let raw_key = req
         .params
         .as_ref()
         .and_then(|params| params.get("idempotency_key"))
-        .and_then(serde_json::Value::as_str);
+        .and_then(serde_json::Value::as_str)
+        .filter(|key| !is_note_mutation || !key.trim().is_empty());
     // Prevent a raw key from forging another principal/method's slot.
     if raw_key.is_some_and(|key| key.contains(SEP)) {
         return Err(Box::new(JsonRpcResponse::error(
@@ -90,8 +102,8 @@ pub(super) fn prepare(
         namespaced
     });
     let lane = Lane::for_method(&req.method);
-    if require_key && lane.needs_idempotency() && key.is_none() {
-        warn!(method = %req.method, %lane, "Rejecting mutating RPC without idempotency_key (require_idempotency_key=true)");
+    if (is_note_mutation || require_key && lane.needs_idempotency()) && key.is_none() {
+        warn!(method = %req.method, %lane, "Rejecting mutating RPC without a required idempotency_key");
         return Err(Box::new(JsonRpcResponse::error_with_data(
             req.id.clone(),
             IDEMPOTENCY_KEY_REQUIRED,
@@ -103,7 +115,30 @@ pub(super) fn prepare(
             }),
         )));
     }
-    Ok(RpcPlan { lane, key })
+    let note_mutation = if is_note_mutation {
+        let invalid = || {
+            Box::new(JsonRpcResponse::error(
+                req.id.clone(),
+                INVALID_PARAMS,
+                "Invalid note mutation",
+            ))
+        };
+        let params = req.params.as_ref().ok_or_else(invalid)?;
+        let parsed = GraphMutateNoteParams::deserialize(params).map_err(|_| invalid())?;
+        let canonical = serde_json::to_vec(&(&parsed.address, &parsed.revision, &parsed.action))
+            .map_err(|_| invalid())?;
+        Some(NoteMutationReplay {
+            partition: parsed.address.agent_id,
+            fingerprint: Sha256::digest(canonical).into(),
+        })
+    } else {
+        None
+    };
+    Ok(RpcPlan {
+        lane,
+        key,
+        note_mutation,
+    })
 }
 
 impl RpcExecutor {
@@ -153,7 +188,21 @@ impl RpcExecutor {
         }) else {
             return dispatch().await;
         };
-        let value = match self.idempotency.try_acquire(&key) {
+        let acquisition = match &plan.note_mutation {
+            Some(operation) => self
+                .idempotency
+                .try_acquire_for_payload(&key, operation.fingerprint),
+            None => self.idempotency.try_acquire(&key),
+        };
+        let value = match acquisition {
+            AcquireResult::PayloadMismatch => {
+                return serde_json::to_string(&JsonRpcResponse::error(
+                    req.id.clone(),
+                    INVALID_PARAMS,
+                    "idempotency_key already belongs to a different request",
+                ))
+                .unwrap_or_default();
+            }
             AcquireResult::Proceed(slot) => {
                 let response = dispatch().await;
                 if let Ok(parsed) = serde_json::from_str::<JsonRpcResponse>(&response) {
@@ -192,8 +241,18 @@ impl RpcExecutor {
         };
         // Both cache hits and joined results bypass middleware; the live gate
         // must succeed after obtaining either result, before returning it.
-        if !dispatch::revalidate_peer(peer, &req.method, start).await {
+        let Some(live) = dispatch::revalidate_peer(peer, &req.method, start).await else {
             return dispatch::viewer_denied_response(req.id.clone());
+        };
+        if plan.note_mutation.as_ref().is_some_and(|operation| {
+            !note_mutation_partition_allowed(&operation.partition, live.user.as_deref())
+        }) {
+            return serde_json::to_string(&JsonRpcResponse::error(
+                req.id.clone(),
+                RESOURCE_NOT_FOUND,
+                "Note not found",
+            ))
+            .unwrap_or_default();
         }
         serde_json::to_string(&JsonRpcResponse::success(req.id.clone(), value)).unwrap_or_default()
     }

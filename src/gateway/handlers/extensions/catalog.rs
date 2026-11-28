@@ -3,7 +3,7 @@
 //! across MCP / plugins / skills).
 
 use crate::gateway::handlers::parse_params;
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
+use crate::gateway::protocol::{INTERNAL_ERROR, JsonRpcRequest, JsonRpcResponse};
 use crate::hub::cache::{CatalogCache, CatalogFilter};
 use crate::hub::reconcile::{collect_installed, mark_installed_state};
 use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind};
@@ -45,7 +45,8 @@ pub async fn handle_catalog(
     };
     match cache.query(&filter).await {
         Ok(mut entries) => {
-            let installed = collect_installed(mcp).await;
+            let access = crate::gateway::handlers::plugins::current_plugin_access();
+            let installed = collect_installed(mcp, &access).await;
             // Best-effort, like every other backend read here: a ledger read
             // failure costs the update badge, never the catalog.
             let origins = cache.origins().await.unwrap_or_else(|e| {
@@ -98,14 +99,13 @@ async fn stamp_updates_from_ledger(installed: &mut [ExtensionEntry], cache: &Cat
             }
         };
     for e in installed.iter_mut() {
-        let Some((kind, backend)) =
+        let Some((kind, _)) =
             crate::gateway::handlers::extensions::lifecycle::parse_local_id(&e.id)
         else {
             continue;
         };
         let Some(origin) = origins.iter().find(|o| {
-            o.kind.as_str() == kind
-                && crate::hub::origin::local_ref_addresses(&o.local_ref, backend)
+            o.kind.as_str() == kind && crate::hub::origin::local_ref_addresses(&o.local_ref, &e.id)
         }) else {
             continue;
         };
@@ -122,7 +122,8 @@ pub async fn handle_installed(
     mcp: Option<McpManagerHandle>,
     cache: Arc<CatalogCache>,
 ) -> JsonRpcResponse {
-    let mut out = collect_installed(mcp).await;
+    let access = crate::gateway::handlers::plugins::current_plugin_access();
+    let mut out = collect_installed(mcp, &access).await;
     stamp_updates_from_ledger(&mut out, &cache).await;
     JsonRpcResponse::success(req.id, json!({ "extensions": out }))
 }

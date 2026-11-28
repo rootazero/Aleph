@@ -4,9 +4,16 @@ This suite opens real macOS native windows hosting the production Panel. The det
 
 ## Inputs and ownership / 输入与所有权
 
-Build the debug binaries `aleph-server`, `aleph-desktop-shell` and `aleph-nsh-shell` into the same task target. Tauri must use `--no-default-features --features aleph-desktop-shell/qa-owned-root`; this is the debug lite baseline. Before **every Cargo command**, require `python3 qa/browser_live/check_memory.py --required-bytes 4294967296` to return exit 0 / ALLOW, then use `--offline --locked --jobs 1` and the task-specific `CARGO_TARGET_DIR`. / Cargo 必须逐次过内存闸门，构建与测试由同一个 owner 串行执行，不隐式联网。
+Build the NSH host and `aleph-server` into the same task target on macOS. Use the memory gate before each Cargo command, and use `--offline --locked --jobs 1` with the task-specific `CARGO_TARGET_DIR`. / 在 macOS 上把 NSH 宿主和 `aleph-server` 构建到同一任务目录。每次 Cargo 调用先过内存门禁，并使用任务专用目录离线串行构建。
 
-The old-receipt challenge requires an explicitly separate Panel bundle: build the canonical recipe with `ALEPH_PANEL_RUNTIME_QA=1 just wasm`, then embed that bundle in the Gateway used by this suite. The optional `runtime-qa` feature retains the current and previous connection receipts and calls the same production notification ingress. Normal `just wasm` keeps this feature off. The task's Cargo wrapper still enforces the memory gate and `--offline --locked --jobs 1` for both the build and metadata invocations; send gate output to stderr so Cargo metadata remains JSON. / 旧 receipt 实验使用显式 QA 产物；默认生产构建不包含 JS 注入入口。两种产物必须分别记录来源与摘要。
+The old-receipt challenge requires an explicitly separate Panel bundle: build it with `ALEPH_PANEL_RUNTIME_QA=1 just wasm` before building the Gateway used by this suite. The optional `runtime-qa` feature retains the current and previous connection receipts and calls the production notification ingress. Normal `just wasm` keeps this feature off. Record both bundles' sources and digests separately. / 先单独构建带旧 receipt 探针的 QA Panel，再构建 Gateway。默认生产构建关闭该注入入口，两种产物分别记录来源与摘要。
+
+```sh
+ALEPH_PANEL_RUNTIME_QA=1 just wasm
+python3 qa/browser_live/check_memory.py --required-bytes 4294967296 &&
+  CARGO_TARGET_DIR="$PWD/.phase9-target" cargo build --offline --locked --jobs 1 \
+    -p alephcore --bin aleph-server -p aleph-nsh-shell --bin aleph-nsh-shell
+```
 
 The Python schema dependency is `jsonschema==4.25.1`. Once explicitly fetched, use the offline environment:
 
@@ -21,7 +28,7 @@ uv run --offline --no-project --with jsonschema==4.25.1 python qa/nsh_panel_laun
 
 `--gateway-binary` owns a new loopback Gateway, a model endpoint and their private filesystem root. Both children are joined during cleanup. An alternative `--gateway-receipt` must identify an already isolated loopback Gateway and its binary digest; it does not transfer lifecycle ownership of that external process. / 自动模式只管理本次新建的子进程；传入现有回执不会接管外部 daemon。
 
-Tauri receives its existing `--qa-root` / `--qa-nonce` argv. The root is an OS-temp direct `aleph-shell-qa-*` child with a 32-byte lowercase-hex nonce and `.qa-owned` containing nonce plus newline. NSH receives debug-only `ALEPH_NSH_QA_URL` / `ALEPH_NSH_QA_NONCE`; no NSH QA CLI is invented. Both use nonce-bound stdout observations. / 两个壳保留各自真实边界，不能伪造 NSH CLI。
+NSH receives debug-only `ALEPH_NSH_QA_URL` and `ALEPH_NSH_QA_NONCE`. The collector binds stdout observations to the nonce. / NSH 通过仅调试构建支持的环境变量接收隔离地址和 nonce，采集器用 nonce 关联标准输出。
 
 ## Evidence boundaries / 证据边界
 
@@ -31,7 +38,7 @@ After a real disconnect/reconnect and fresh snapshots, the old-epoch challenge i
 
 The Gateway fixture also retains the actual identity-encoded HTTP bytes for `index.html`, `aleph_panel.js`, `aleph_panel_bg.wasm` and `tailwind.css`, then verifies the same digests after the native runs. This is required because a debug RustEmbed Gateway serves worktree assets rather than binding them exclusively into the executable. The live verifier checks those retained payload hashes in addition to binary/log hashes. Raw served payloads are local evidence, not a downloadable release bundle. / debug Gateway 的二进制摘要不能替代实际 HTTP 产物摘要；运行前后资源变化必须失败。
 
-The collector launches each surface through public NSWorkspace into a separate application coalition, saves each raw LaunchServices listing and the exact per-PID RSS/thread measurements, and verifies aggregate sums. Bare coalition IDs denote singleton membership; a controlled fork/join experiment must precede accepting that output shape. Host identity is published through a nonce-bound QA PID rendezvous and independently matched to the NSWorkspace result. A first real resource sample releases the debug-only startup gate; native events and samples use public `CLOCK_MONOTONIC` nanoseconds so startup and terminal coverage share one time axis. Samples remain subject to the unchanged 50–175ms interval/coverage checks. / 两端通过公开 NSWorkspace 独立启动；coalition 决定归属，名称只检查角色完整性。保留原始成员、逐 PID 数值和统一单调时间轴，不以全机差值或父进程树替代 WebKit 归属。
+The collector launches the NSH host through public NSWorkspace in its own application coalition, saves each raw LaunchServices listing and the exact per-PID RSS/thread measurements, and verifies aggregate sums. Bare coalition IDs denote singleton membership; a controlled fork/join experiment must precede accepting that output shape. Host identity is published through a nonce-bound QA PID rendezvous and independently matched to the NSWorkspace result. A first real resource sample releases the debug-only startup gate; native events and samples use public `CLOCK_MONOTONIC` nanoseconds so startup and terminal coverage share one time axis. Samples remain subject to the unchanged 50–175ms interval/coverage checks. / NSH 宿主通过公开 NSWorkspace 独立启动；coalition 决定归属，名称只检查角色完整性。保留原始成员、逐 PID 数值和统一单调时间轴，不以全机差值或父进程树替代 WebKit 归属。
 
 Public kqueue `NOTE_EXITSTATUS` records the actual native host status, separately from helper exit. All observed coalition PIDs must reach terminal state; settlement is observed immediately after native closure, before waiting for the helper's own bookkeeping. The helper, owned Gateway/provider, and fixture root must also settle normally. Native capture files are written to local OS temp and archived after shutdown to avoid external-volume I/O blocking the application. Saved events must exactly match nonce/run-bound markers reparsed from verified stdout. / 宿主的真实退出码、全部已观测成员终态、helper 和 fixture 清理分别验真；不把 helper 成功当宿主成功，也不回填假终态采样。
 
@@ -39,4 +46,6 @@ Public kqueue `NOTE_EXITSTATUS` records the actual native host status, separatel
 
 ## Metrics / 指标
 
-Use `qa/nsh_panel_matrix.py --runs 40` (with `--repo-root`, `--target-dir`, `--gateway-binary` and `--receipt`) for acceptance: it creates a fresh Gateway/provider/session fixture for every iteration, collects Tauri first and NSH second, and retains 10 warmups plus 30 measured samples for each. The lower-level launcher's multi-run mode is not the fresh-fixture acceptance matrix. Reconnect timing ends only after the production history application witness and subsequent rendered frames. Each run retains peak aggregate RSS and maximum aggregate threads; close timing includes all-member settlement. Export requires every runtime gate and complete resource ownership. The value-only metric files then enter the existing `nsh_panel_parity.py` reducer. Its p95 is one-based rank 29; latency median/p95 limits are 1.10/1.20, RSS median 1.10, and median threads baseline+2. A valid threshold miss remains `VALID / NOT_ACCEPTED`, exit 3. Debug evidence never proves release-profile performance. / 正式矩阵每轮重置服务与会话；运行事件、原始资源、指标值与既有阈值 reducer 分层验真。无效整块保留，不拼接成功轮。
+The current launcher records reconnect timing through the history application witness and subsequent rendered frames, peak aggregate RSS, maximum aggregate threads, and time to all-member settlement. Use one isolated run for smoke verification. For release acceptance, use the [R7 cutover receipt](../docs/superpowers/runs/2026-11-27-nsh-r7-cutover-receipt.md). / 单次隔离运行适用于冒烟检查，采集历史应用与渲染见证、RSS 峰值、线程峰值和全成员退出用时。发布验收见 R7 回执。
+
+The retired dual-host comparison used 10 warmups and 30 measured iterations per host. The [archived Phase 9 guide](https://github.com/rootazero/Aleph/blob/fe979a1d7e4dea2653698df6443e6e138a065434/qa/phase9_runtime.md) preserves the matrix procedure and original performance thresholds. / 历史双宿主对比为每端 10 轮预热和 30 轮测量，归档指南保留原流程与阈值。

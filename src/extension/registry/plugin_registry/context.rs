@@ -9,7 +9,7 @@ use crate::context::fabric::{
 };
 use crate::extension::capability::{ContextGrant, ContextGrantAudit, ContextGrantError};
 use crate::extension::registry::{
-    namespaced_component_key, ContextRegistration, ContextRegistryError, ContextStats,
+    ContextRegistration, ContextRegistryError, ContextStats, namespaced_component_key,
 };
 use std::collections::{HashSet, VecDeque};
 
@@ -37,7 +37,7 @@ fn record_context_audit(
 impl PluginRegistry {
     fn context_owner_active(&self, registration: &ContextRegistration) -> bool {
         let id = &registration.plugin_id;
-        id.is_empty() || self.plugins.get(id).is_some_and(|p| p.status.is_active())
+        id.is_empty() || self.active_plugin(id).is_some()
     }
 
     fn check_context_registration(

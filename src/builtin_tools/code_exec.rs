@@ -54,7 +54,7 @@ use super::command_ledger::command_ledger;
 /// 170s (10s under the budget, room for the kill + 2s drain) means an
 /// over-long foreground `timeout` instead yields a clean `exit_code = 124`
 /// with partial output. Background jobs escape the budget wrapper entirely and
-/// are NOT clamped (see `BashExecTool::spawn_background` → `call_unclamped`);
+/// are NOT clamped (see `BashExecTool::spawn_background` → `call_controlled`);
 /// for anything longer than this, background mode is the right tool. Mirrors
 /// the `wait`-window clamp (`WAIT_MAX_TIMEOUT_SECS`) in `bash_exec`.
 const FOREGROUND_MAX_TIMEOUT_SECS: u64 = 170;
@@ -324,12 +324,19 @@ out.
     /// run up to the background ceiling (1h default, or an explicit `timeout`).
     /// The clamp applied in [`AlephTool::call`] would otherwise cut every
     /// backgrounded build/install off at 170s.
-    pub(crate) async fn call_unclamped(&self, args: CodeExecArgs) -> Result<CodeExecOutput> {
-        self.execute(args).await
+    pub(crate) async fn call_controlled(
+        &self,
+        args: CodeExecArgs,
+        lifecycle: &crate::sandbox::shell_lifecycle::ShellLifecycle,
+    ) -> Result<CodeExecOutput> {
+        self.execute(args, Some(lifecycle)).await
     }
 
-    /// Execute code and return result
-    async fn execute(&self, args: CodeExecArgs) -> Result<CodeExecOutput> {
+    async fn execute(
+        &self,
+        args: CodeExecArgs,
+        lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
+    ) -> Result<CodeExecOutput> {
         let sandbox = match self.sandbox.as_ref() {
             Some(s) => s,
             None => {
@@ -444,6 +451,12 @@ out.
         // byte-identical to its pre-justification form. Setting it innermost
         // (right around `execute`) means the background path inherits it too,
         // since `spawn_background` re-enters this method inside its task.
+        let launch = async {
+            match lifecycle {
+                Some(control) => sandbox.execute_controlled(cmd, control).await,
+                None => sandbox.execute(cmd).await,
+            }
+        };
         let result = match args
             .justification
             .as_deref()
@@ -452,10 +465,10 @@ out.
         {
             Some(why) => {
                 crate::sandbox::context::EXEC_JUSTIFICATION
-                    .scope(why.to_string(), sandbox.execute(cmd))
+                    .scope(why.to_string(), launch)
                     .await
             }
-            None => sandbox.execute(cmd).await,
+            None => launch.await,
         };
         Ok(sandbox_result_to_output(
             result,
@@ -811,7 +824,14 @@ fn denial_advisory(hint: Option<&SandboxDenialHint>, exit_code: i32) -> Option<S
     ))
 }
 
-fn sandbox_result_to_output(
+fn drain_advisory(incomplete: bool) -> Option<String> {
+    incomplete.then(|| {
+        "Output capture ended before both pipes reached EOF; additional output may be missing."
+            .to_owned()
+    })
+}
+
+pub(crate) fn sandbox_result_to_output(
     result: std::result::Result<SandboxOutput, SandboxError>,
     language: String,
     timeout_secs: u64,
@@ -861,13 +881,17 @@ fn sandbox_result_to_output(
                 truncated: if out.truncated { Some(true) } else { None },
                 stdout_truncated_bytes: out.stdout_truncated_bytes,
                 stderr_truncated_bytes: out.stderr_truncated_bytes,
-                advisory: denial_advisory(out.denial_hint.as_ref(), exit_code),
+                advisory: merge_advisory(
+                    denial_advisory(out.denial_hint.as_ref(), exit_code),
+                    drain_advisory(out.drain_incomplete),
+                ),
             }
         }
         Err(SandboxError::Timeout {
             elapsed_ms,
             partial_stdout,
             partial_stderr,
+            drain_incomplete,
         }) => {
             warn!(
                 timeout_secs = timeout_secs,
@@ -882,17 +906,13 @@ fn sandbox_result_to_output(
                 sanitize_command_output(&String::from_utf8_lossy(&partial_stdout)).into_owned();
             let partial_stderr_text =
                 sanitize_command_output(&String::from_utf8_lossy(&partial_stderr)).into_owned();
-            // Frame the human-readable banner so the model can see _that_
-            // it timed out, and inline the captured partial stderr (if
-            // any) so it knows _what the script printed_ on its way out.
+            let notice = format!(
+                "Execution timed out after {timeout_secs}s (exit code 124, POSIX timeout convention)."
+            );
             let stderr = if partial_stderr_text.is_empty() {
-                format!(
-                    "Execution timed out after {timeout_secs}s (exit code 124, POSIX timeout convention). Partial stdout above was captured before the kill; partial stderr was empty."
-                )
+                format!("{notice} No stderr was captured.")
             } else {
-                format!(
-                    "Execution timed out after {timeout_secs}s (exit code 124, POSIX timeout convention). Partial stderr captured before kill:\n{partial_stderr_text}"
-                )
+                format!("{notice} Captured partial stderr:\n{partial_stderr_text}")
             };
             CodeExecOutput {
                 success: false,
@@ -906,7 +926,7 @@ fn sandbox_result_to_output(
                 truncated: None,
                 stdout_truncated_bytes: 0,
                 stderr_truncated_bytes: 0,
-                advisory: None,
+                advisory: drain_advisory(drain_incomplete),
             }
         }
         Err(SandboxError::CapabilityDenied { reason }) => CodeExecOutput {
@@ -958,18 +978,18 @@ impl AlephTool for CodeExecTool {
         // over-long value yields a clean exit-124 (with partial output) from
         // the sandbox's own timeout, not a "no result" budget-overrun abort.
         // The background path escapes the budget wrapper and calls
-        // `call_unclamped` directly, keeping its generous ceiling.
+        // `call_controlled` directly, keeping its generous ceiling.
         let mut args = args;
         args.timeout_seconds = clamp_foreground_timeout(args.timeout_seconds);
 
         // Advisory repeat-detection for shell commands (foreground only — the
-        // background path uses `call_unclamped`, and a deliberate long-running
+        // background path uses `call_controlled`, and a deliberate long-running
         // background job is not a wasteful re-run). Recorded BEFORE execute so
         // the submission timestamp reflects when the model asked; it never
         // gates execution — the command always runs regardless (R7).
         let advisory = recent_shell_advisory(&args.language, &args.code);
 
-        let mut out = self.execute(args).await?;
+        let mut out = self.execute(args, None).await?;
         // `execute` may already have attached a sandbox-denial label. The two
         // notes answer different questions — what happened to THIS result vs.
         // what this session already ran — so neither may displace the other.
@@ -1639,6 +1659,7 @@ mod tests {
                     elapsed_ms: 1234,
                     partial_stdout: b"started step 1\n".to_vec(),
                     partial_stderr: b"warning: foo\n".to_vec(),
+                    drain_incomplete: true,
                 })
             }
         }
@@ -1681,6 +1702,11 @@ mod tests {
             out.stderr
         );
         assert_eq!(out.duration_ms, 1234);
+        assert!(out
+            .advisory
+            .unwrap()
+            .contains("before both pipes reached EOF"));
+        assert_eq!(out.truncated, None);
     }
 
     #[tokio::test]
@@ -1696,6 +1722,7 @@ mod tests {
                     elapsed_ms: 500,
                     partial_stdout: Vec::new(),
                     partial_stderr: Vec::new(),
+                    drain_incomplete: false,
                 })
             }
         }
@@ -1721,7 +1748,7 @@ mod tests {
         assert_eq!(out.exit_code, 124);
         assert!(out.stdout.is_empty());
         assert!(
-            out.stderr.contains("partial stderr was empty"),
+            out.stderr.contains("No stderr was captured"),
             "drain-empty banner missing: {}",
             out.stderr
         );
@@ -2257,9 +2284,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn call_unclamped_preserves_long_timeout_for_background() {
+    async fn call_controlled_preserves_long_timeout_for_background() {
         // The background entry point must NOT clamp — a backgrounded build may
-        // run for the full ceiling. `call_unclamped` hands the sandbox the raw
+        // run for the full ceiling. `call_controlled` hands the sandbox the raw
         // 600s value.
         let mock = MockSandbox::new(ok_output(""));
         let sandbox: Arc<dyn Sandbox> = mock.clone();
@@ -2267,16 +2294,19 @@ mod tests {
 
         SESSION_ID
             .scope(sid(), async {
-                tool.call_unclamped(CodeExecArgs {
-                    language: Language::Shell,
-                    code: "sleep 999".to_string(),
-                    working_dir: None,
-                    timeout_seconds: Some(600),
-                    allow_network: false,
-                    allow_subprocess: false,
-                    extra_writable_paths: Vec::new(),
-                    justification: None,
-                })
+                tool.call_controlled(
+                    CodeExecArgs {
+                        language: Language::Shell,
+                        code: "sleep 999".to_string(),
+                        working_dir: None,
+                        timeout_seconds: Some(600),
+                        allow_network: false,
+                        allow_subprocess: false,
+                        extra_writable_paths: Vec::new(),
+                        justification: None,
+                    },
+                    &crate::sandbox::shell_lifecycle::ShellLifecycle::default(),
+                )
                 .await
                 .unwrap()
             })

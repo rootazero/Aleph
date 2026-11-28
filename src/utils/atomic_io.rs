@@ -144,6 +144,25 @@ pub(crate) fn is_lock_contended(err: &std::io::Error) -> bool {
     err.raw_os_error() == fs2::lock_contended_error().raw_os_error()
 }
 
+/// Acquire an already provisioned lock without waiting or replacing it.
+#[cfg(target_os = "linux")]
+pub(crate) fn try_existing_file_lock(lock_path: &Path) -> std::io::Result<FileLockGuard> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(lock_path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "lock path is not a regular file",
+        ));
+    }
+    FileExt::try_lock_exclusive(&file)?;
+    Ok(FileLockGuard { _file: file })
+}
+
 pub fn with_file_lock<T, F>(lock_path: &Path, f: F) -> std::io::Result<T>
 where
     F: FnOnce(&FileLockGuard) -> std::io::Result<T>,

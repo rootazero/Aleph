@@ -115,7 +115,10 @@ impl ApprovalGate {
 /// *absence* of a decision (see [`ApprovalOutcome::Unavailable`]); filing
 /// them as `ApprovalDenied` would be the same lie that variant exists to
 /// prevent.
-async fn record_gate_decision(action: &ApprovalAction, response: &ApprovalResponse) {
+pub(in crate::sandbox) async fn record_gate_decision(
+    action: &ApprovalAction,
+    response: &ApprovalResponse,
+) {
     use crate::identity::{LedgerAction, LedgerOutcome, NewRecord};
 
     if crate::identity::global().is_none() {

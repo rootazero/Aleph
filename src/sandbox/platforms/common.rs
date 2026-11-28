@@ -1,18 +1,19 @@
+use std::collections::VecDeque;
+use std::io;
+use std::process::ExitStatus;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use tokio::io::AsyncReadExt;
-use tokio::process::Child;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::process::{Child, ChildStdin};
+use tokio::time::Instant;
 
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 use crate::sandbox::live_tail::{LiveStream, LiveTail};
 
-/// How long to wait for the stdout/stderr reader tasks to drain after we
-/// kill a child that hit its wall-clock timeout. Matches codex's
-/// `IO_DRAIN_TIMEOUT_MS = 2_000` — a grandchild process inheriting our
-/// pipes can hold them open indefinitely, so we cap how long we'll wait
-/// for "real" output before giving up and returning what we have.
-const KILL_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+// Inherited pipes may remain open after the direct child exits.
+const POST_EXIT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+const REAP_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     "/bin",
@@ -233,7 +234,7 @@ struct Drained {
     head: Vec<u8>,
     /// The most recent bytes past the head, oldest first, at most `tail_cap`.
     /// Empty exactly when the whole stream fit in `head`.
-    tail: Vec<u8>,
+    tail: VecDeque<u8>,
     /// Every byte the loop read, retained or not.
     total: u64,
 }
@@ -263,10 +264,12 @@ impl Drained {
         }
         let (head_budget, tail_budget) = head_tail_budgets(max_bytes);
         let head_end = back_off_to_boundary(&head, head_budget);
+        let mut tail = tail;
+        let tail = tail.make_contiguous();
         // The tail window starts at an arbitrary byte offset in the stream, so
         // its own front can already be mid-codepoint; advancing covers both
         // that and the budget cut in one walk.
-        let tail_from = advance_to_boundary(&tail, tail.len().saturating_sub(tail_budget));
+        let tail_from = advance_to_boundary(tail, tail.len().saturating_sub(tail_budget));
         let kept = head_end + (tail.len() - tail_from);
         let dropped = total.saturating_sub(kept as u64);
         let marker = elision_marker(dropped);
@@ -315,99 +318,162 @@ async fn drain_bounded<R>(
     head_cap: usize,
     tail_cap: usize,
     tee: Option<(Arc<LiveTail>, LiveStream)>,
-) -> Drained
+    captured: &mut Drained,
+) -> io::Result<()>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
     let Some(mut pipe) = pipe else {
-        return Drained::default();
+        return Ok(());
     };
-    let mut head: Vec<u8> = Vec::new();
-    let mut tail: std::collections::VecDeque<u8> = std::collections::VecDeque::new();
-    let mut total: u64 = 0;
     let mut chunk = [0u8; 16 * 1024];
-    // A read error ends the loop just like EOF: the pipe is unusable either
-    // way, and what was already read stays valid (matches the previous
-    // `let _ = ...read_to_end(...)`).
-    while let Ok(n) = pipe.read(&mut chunk).await {
+    loop {
+        let n = pipe.read(&mut chunk).await?;
         if n == 0 {
-            break;
+            return Ok(());
         }
         let bytes = chunk.get(..n).unwrap_or(&chunk);
-        if let Some((live, stream)) = &tee {
-            live.push(*stream, bytes);
-        }
-        total = total.saturating_add(n as u64);
-        // Fill the head first; only what will not fit there reaches the
-        // rolling window, so the two never hold the same byte twice and
-        // `total - head - tail` is the exact size of the hole between them.
-        let take = head_cap.saturating_sub(head.len()).min(n);
-        head.extend_from_slice(bytes.get(..take).unwrap_or(bytes));
-        let overflow = bytes.get(take..).unwrap_or(&[]);
-        if !overflow.is_empty() && tail_cap > 0 {
-            tail.extend(overflow.iter().copied());
-            if tail.len() > tail_cap {
-                tail.drain(..tail.len() - tail_cap);
-            }
-        }
-    }
-    Drained {
-        head,
-        tail: tail.into(),
-        total,
+        capture_output(bytes, head_cap, tail_cap, tee.as_ref(), captured);
     }
 }
 
-/// Spawn stdout/stderr reader tasks, optionally pipe `stdin_data`, then
-/// race the child's `wait()` against `timeout`.
-///
-/// On natural exit: returns a `SandboxOutput` with both streams truncated
-/// to `max_output_bytes` and the dropped byte counts surfaced.
-///
-/// On timeout: kills the child explicitly (so we don't rely on the
-/// caller's `kill_on_drop` flag firing later), drains the reader tasks
-/// for up to `KILL_DRAIN_TIMEOUT`, and returns
-/// `SandboxError::Timeout { elapsed_ms, partial_stdout, partial_stderr }`.
-/// Partial buffers may be empty if a grandchild was holding the pipes
-/// open longer than the drain budget.
-///
-/// While the child runs, both drain loops tee what they read into the
-/// [`LIVE_TAIL`](crate::sandbox::context::LIVE_TAIL) task-local's ring when one
-/// is in scope, so a backgrounded job can be polled for partial output instead
-/// of staying opaque until it exits. Those bytes are PRE-scrub — see
-/// [`LiveTail`] — and every reader owes them the same scrub-and-gate floor the
-/// finished path runs below.
-///
-/// Used by every platform driver (seatbelt / bwrap / windows) so the
-/// kill-and-drain logic only lives in one place.
+fn capture_output(
+    bytes: &[u8],
+    head_cap: usize,
+    tail_cap: usize,
+    tee: Option<&(Arc<LiveTail>, LiveStream)>,
+    captured: &mut Drained,
+) {
+    if let Some((live, stream)) = tee {
+        live.push(*stream, bytes);
+    }
+    let Drained { head, tail, total } = captured;
+    *total = total.saturating_add(bytes.len() as u64);
+    // The head and rolling tail never hold the same byte twice.
+    let take = head_cap.saturating_sub(head.len()).min(bytes.len());
+    let (opening, overflow) = bytes.split_at(take);
+    head.extend_from_slice(opening);
+    if !overflow.is_empty() && tail_cap > 0 {
+        tail.extend(overflow.iter().copied());
+        if tail.len() > tail_cap {
+            tail.drain(..tail.len() - tail_cap);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn drain_fixed_jsonl<R: tokio::io::AsyncRead + Unpin>(
+    mut pipe: R,
+    head_cap: usize,
+    tail_cap: usize,
+    tee: Option<(Arc<LiveTail>, LiveStream)>,
+    captured: &mut Drained,
+) -> io::Result<()> {
+    let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid fixed JSONL result");
+    let mut chunk = [0u8; 1024];
+    let mut line = Vec::with_capacity(64);
+    loop {
+        let count = pipe.read(&mut chunk).await?;
+        if count == 0 {
+            return if line.is_empty() {
+                Ok(())
+            } else {
+                Err(invalid())
+            };
+        }
+        for &byte in &chunk[..count] {
+            if byte == b'\n' {
+                let result = fixed_jsonl_result(&line).ok_or_else(invalid)?;
+                capture_output(
+                    result.as_bytes(),
+                    head_cap,
+                    tail_cap,
+                    tee.as_ref(),
+                    captured,
+                );
+                line.clear();
+            } else if line.len() < 64 {
+                line.push(byte);
+            } else {
+                return Err(invalid());
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn fixed_jsonl_result(bytes: &[u8]) -> Option<String> {
+    use serde_json::Value;
+
+    let parsed: Value = serde_json::from_slice(bytes).ok()?;
+    let fields = parsed.as_object().filter(|fields| fields.len() == 2)?;
+    let kind = fields.get("kind")?.as_str()?;
+    let count = fields.get("count")?;
+    let count = match kind {
+        "array" | "object" => count.as_u64().filter(|count| *count <= 4096)?.to_string(),
+        "boolean" | "null" | "number" | "string" if count.is_null() => "null".into(),
+        _ => return None,
+    };
+    Some(format!("{{\"kind\":\"{kind}\",\"count\":{count}}}\n"))
+}
+
+/// Drive initial stdin, both output pipes and the wall clock concurrently.
+/// Retain captured bytes even if an inherited descriptor prevents EOF.
+/// The optional live tail remains pre-scrub and must be gated by its readers.
+/// Only the direct child is reaped here; this is not a process-tree guarantee.
 pub async fn run_child_with_drain(
+    child: Child,
+    stdin_data: Option<&[u8]>,
+    timeout: Duration,
+    max_output_bytes: usize,
+    lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
+) -> Result<SandboxOutput, SandboxError> {
+    run_child(
+        child,
+        stdin_data,
+        timeout,
+        max_output_bytes,
+        lifecycle,
+        ChildTeardown::Direct,
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+pub(super) async fn run_strict_shell_child(
+    child: Child,
+    timeout: Duration,
+    max_output_bytes: usize,
+    lifecycle: &crate::sandbox::shell_lifecycle::ShellLifecycle,
+    scope: crate::sandbox::cgroup_v2::StrictShellCgroup,
+) -> Result<SandboxOutput, SandboxError> {
+    run_child(
+        child,
+        None,
+        timeout,
+        max_output_bytes,
+        Some(lifecycle),
+        ChildTeardown::StrictShell(scope),
+    )
+    .await
+}
+
+enum ChildTeardown {
+    Direct,
+    #[cfg(target_os = "linux")]
+    StrictShell(crate::sandbox::cgroup_v2::StrictShellCgroup),
+}
+
+async fn run_child(
     mut child: Child,
     stdin_data: Option<&[u8]>,
     timeout: Duration,
     max_output_bytes: usize,
+    lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
+    teardown: ChildTeardown,
 ) -> Result<SandboxOutput, SandboxError> {
-    // Always close the child's stdin so a non-interactive command that tries
-    // to READ from stdin — a git credential prompt, `sudo -S`, an `apt`
-    // confirmation, a bare `read`/`cat` — gets an immediate EOF instead of
-    // blocking on a pipe nothing will ever write to until the wall-clock
-    // timeout SIGKILLs it (turning a 1 ms command into a full-timeout stall).
-    // The drivers all spawn with `Stdio::piped()`, so absent this the parent
-    // holds the write end open for the child's whole life. When `stdin_data`
-    // is present we feed it first; the trailing drop closes the pipe either
-    // way, so the child always sees a clean EOF. (pi wires stdin from
-    // /dev/null; kimi closes it explicitly — same guarantee, one place.)
-    if let Some(mut child_stdin) = child.stdin.take() {
-        if let Some(data) = stdin_data {
-            use tokio::io::AsyncWriteExt;
-            child_stdin
-                .write_all(data)
-                .await
-                .map_err(|e| SandboxError::Io(format!("stdin write failed: {e}")))?;
-        }
-        // Drop closes stdin so the child sees EOF (an empty stdin when no data).
-        drop(child_stdin);
-    }
-
+    let start = Instant::now();
+    let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
@@ -437,77 +503,189 @@ pub async fn run_child_with_drain(
     if let (Some(tail), Some(pid)) = (&live, child.id()) {
         tail.set_child_pid(pid);
     }
-    let stdout_task = tokio::spawn(drain_bounded(
-        stdout,
-        head_cap,
-        tail_cap,
-        live.clone().map(|t| (t, LiveStream::Stdout)),
-    ));
-    let stderr_task = tokio::spawn(drain_bounded(
-        stderr,
-        head_cap,
-        tail_cap,
-        live.map(|t| (t, LiveStream::Stderr)),
-    ));
+    let mut captured_stdout = Drained::default();
+    let mut captured_stderr = Drained::default();
+    // `None` is cancellation, which has a distinct winning event from
+    // wall timeout, I/O failure and natural exit.
+    let (exit, elapsed_ms, drain_incomplete) = {
+        #[cfg(target_os = "linux")]
+        let fixed_jsonl = matches!(&teardown, ChildTeardown::StrictShell(_));
+        let drain = async {
+            #[cfg(target_os = "linux")]
+            if fixed_jsonl {
+                let Some(stdout) = stdout else { return true };
+                let result = drain_fixed_jsonl(
+                    stdout,
+                    head_cap,
+                    tail_cap,
+                    live.map(|tail| (tail, LiveStream::Stdout)),
+                    &mut captured_stdout,
+                )
+                .await;
+                if result.is_err() {
+                    if let Some(control) = lifecycle {
+                        control.request_cancel();
+                    }
+                }
+                return result.is_err();
+            }
+            let (out, err) = tokio::join!(
+                drain_bounded(
+                    stdout,
+                    head_cap,
+                    tail_cap,
+                    live.clone().map(|tail| (tail, LiveStream::Stdout)),
+                    &mut captured_stdout,
+                ),
+                drain_bounded(
+                    stderr,
+                    head_cap,
+                    tail_cap,
+                    live.map(|tail| (tail, LiveStream::Stderr)),
+                    &mut captured_stderr,
+                ),
+            );
+            out.is_err() || err.is_err()
+        };
+        let supervise = async {
+            let cancel = async {
+                match lifecycle {
+                    Some(control) => control.cancelled().await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            let exit = tokio::select! {
+                biased;
+                exit = tokio::time::timeout_at(
+                    start + timeout,
+                    wait_with_startup_stdin(&mut child, stdin, stdin_data),
+                ) => Some(exit),
+                _ = cancel => None,
+            };
+            let elapsed_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+            let forced = !matches!(exit, Some(Ok(Ok(_))));
+            match teardown {
+                ChildTeardown::Direct => {
+                    if forced {
+                        kill_and_reap(&mut child).await?;
+                    }
+                }
+                #[cfg(target_os = "linux")]
+                ChildTeardown::StrictShell(scope) => {
+                    // Close the writer before any lingering wrapper is drained.
+                    // The terminal phase is not published until the group is empty.
+                    if let Some(control) = lifecycle {
+                        control.retire_input();
+                    }
+                    reap_strict_shell_child(&mut child, scope, forced).await?;
+                }
+            }
+            Ok::<_, SandboxError>((exit, elapsed_ms))
+        };
+        tokio::pin!(drain, supervise);
+        let ((exit, elapsed_ms), incomplete) = tokio::select! {
+            result = &mut supervise => (
+                result?,
+                tokio::time::timeout(POST_EXIT_DRAIN_TIMEOUT, &mut drain).await.unwrap_or(true),
+            ),
+            incomplete = &mut drain => (supervise.await?, incomplete),
+        };
+        (exit, elapsed_ms, incomplete)
+    };
 
-    let start = Instant::now();
-    let wait_result = tokio::time::timeout(timeout, child.wait()).await;
-    let elapsed_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+    let (stdout, stdout_dropped) = captured_stdout.assemble(max_output_bytes);
+    let (stderr, stderr_dropped) = captured_stderr.assemble(max_output_bytes);
+    if let Some(control) = lifecycle {
+        control.reaped(exit.is_none());
+    }
+    match exit {
+        Some(Ok(Ok(status))) => Ok(SandboxOutput {
+            stdout,
+            stderr,
+            exit_code: status.code(),
+            signal: termination_signal_xplat(&status),
+            truncated: stdout_dropped > 0 || stderr_dropped > 0,
+            stdout_truncated_bytes: stdout_dropped,
+            stderr_truncated_bytes: stderr_dropped,
+            drain_incomplete,
+            duration_ms: elapsed_ms,
+            denial_hint: None,
+        }),
+        Some(Ok(Err(error))) => Err(error),
+        Some(Err(_)) => Err(SandboxError::Timeout {
+            elapsed_ms,
+            partial_stdout: stdout,
+            partial_stderr: stderr,
+            drain_incomplete,
+        }),
+        None => Err(SandboxError::ExecutionFailed(
+            "shell child cancelled and reaped".into(),
+        )),
+    }
+}
 
-    match wait_result {
-        Ok(Ok(status)) => {
-            // `assemble` reports against the stream total, so the count the
-            // model reads is the whole overflow — the bytes elided between the
-            // retained fragments AND the ones that never fit in either window.
-            let (stdout, stdout_dropped) = stdout_task
-                .await
-                .unwrap_or_default()
-                .assemble(max_output_bytes);
-            let (stderr, stderr_dropped) = stderr_task
-                .await
-                .unwrap_or_default()
-                .assemble(max_output_bytes);
-            Ok(SandboxOutput {
-                stdout,
-                stderr,
-                exit_code: status.code(),
-                signal: termination_signal_xplat(&status),
-                truncated: stdout_dropped > 0 || stderr_dropped > 0,
-                stdout_truncated_bytes: stdout_dropped,
-                stderr_truncated_bytes: stderr_dropped,
-                duration_ms: elapsed_ms,
-                // The shared drain serves all three OS drivers, so it does
-                // not know which backend is enforcing. `WorkspaceSandbox` labels this after the
-                // driver returns, where the active driver is in hand.
-                denial_hint: None,
-            })
+#[cfg(target_os = "linux")]
+pub(super) async fn reap_strict_shell_child(
+    child: &mut Child,
+    scope: crate::sandbox::cgroup_v2::StrictShellCgroup,
+    forced: bool,
+) -> Result<(), SandboxError> {
+    if forced {
+        // Always try to reap the direct child, including if group signalling fails.
+        let signal = scope.kill();
+        kill_and_reap(child).await?;
+        signal.map_err(strict_shell_teardown_error)?;
+    }
+    scope.finish().await.map_err(strict_shell_teardown_error)
+}
+
+#[cfg(target_os = "linux")]
+fn strict_shell_teardown_error(error: io::Error) -> SandboxError {
+    SandboxError::ExecutionFailed(format!("strict shell group teardown unconfirmed: {error}"))
+}
+
+async fn wait_with_startup_stdin(
+    child: &mut Child,
+    stdin: Option<ChildStdin>,
+    data: Option<&[u8]>,
+) -> Result<ExitStatus, SandboxError> {
+    let wait_error = |error| SandboxError::ExecutionFailed(format!("wait error: {error}"));
+    let feed = async move {
+        if let (Some(mut pipe), Some(data)) = (stdin, data) {
+            pipe.write_all(data).await?;
         }
-        Ok(Err(e)) => Err(SandboxError::ExecutionFailed(format!("wait error: {e}"))),
-        Err(_) => {
-            // Wall-clock fired. Force-kill the child immediately rather
-            // than relying on `kill_on_drop` firing when we return.
-            let _ = child.start_kill();
-            let drain = tokio::time::timeout(KILL_DRAIN_TIMEOUT, async {
-                let out = stdout_task.await.unwrap_or_default();
-                let err = stderr_task.await.unwrap_or_default();
-                (out, err)
-            })
-            .await;
-            let (partial_stdout, partial_stderr) =
-                drain.unwrap_or_else(|_| (Drained::default(), Drained::default()));
-            // Cap partial output too — a runaway loop can fill the pipe with
-            // megabytes before the kill takes effect. The tail matters most
-            // here: a script killed at its wall clock was doing something at
-            // the moment it died, and that is the last thing it printed.
-            let (partial_stdout, _) = partial_stdout.assemble(max_output_bytes);
-            let (partial_stderr, _) = partial_stderr.assemble(max_output_bytes);
-            Err(SandboxError::Timeout {
-                elapsed_ms,
-                partial_stdout,
-                partial_stderr,
-            })
+        // Dropping the writer also gives commands without input immediate EOF.
+        Ok::<_, io::Error>(())
+    };
+    let fed = tokio::select! {
+        biased;
+        status = child.wait() => return status.map_err(wait_error),
+        fed = feed => fed,
+    };
+    if let Err(error) = fed {
+        // A child can close stdin while exiting. Do not turn an observable
+        // exit into a feed error or kill before its exit code is available.
+        if let Some(status) = child.try_wait().map_err(wait_error)? {
+            return Ok(status);
+        }
+        if error.kind() != io::ErrorKind::BrokenPipe {
+            return Err(SandboxError::Io(format!("stdin write failed: {error}")));
         }
     }
+    child.wait().await.map_err(wait_error)
+}
+
+pub(crate) async fn kill_and_reap(child: &mut Child) -> Result<ExitStatus, SandboxError> {
+    let kill_error = child.start_kill().err();
+    let reason = match tokio::time::timeout(REAP_TIMEOUT, child.wait()).await {
+        Ok(Ok(status)) => return Ok(status),
+        Ok(Err(error)) => error.to_string(),
+        Err(_) => "reap deadline elapsed".to_owned(),
+    };
+    let kill_note = kill_error.map_or_else(String::new, |error| format!("; kill: {error}"));
+    Err(SandboxError::ExecutionFailed(format!(
+        "direct child teardown unconfirmed: {reason}{kill_note}"
+    )))
 }
 
 #[cfg(test)]
@@ -638,7 +816,7 @@ mod tests {
         let total = buf.len() as u64;
         let drained = Drained {
             head: buf.clone(),
-            tail: Vec::new(),
+            tail: VecDeque::new(),
             total,
         };
         let (out, dropped) = drained.assemble(1000);
@@ -655,7 +833,7 @@ mod tests {
     fn assemble_reports_the_whole_hole_and_keeps_the_real_tail() {
         let drained = Drained {
             head: vec![b'H'; 4096],
-            tail: vec![b'T'; 4096],
+            tail: vec![b'T'; 4096].into(),
             // 4096 head + 4096 tail retained out of a 1,000,000-byte stream:
             // 991,808 bytes never touched either window.
             total: 1_000_000,
@@ -697,7 +875,7 @@ mod tests {
         tail.remove(0);
         let drained = Drained {
             head: euro.iter().copied().cycle().take(3000).collect(),
-            tail,
+            tail: tail.into(),
             total: 500_000,
         };
         let (out, _) = drained.assemble(1000);
@@ -712,7 +890,7 @@ mod tests {
     fn assemble_with_a_tiny_budget_keeps_the_head_and_still_counts_everything() {
         let drained = Drained {
             head: vec![b'H'; 4096],
-            tail: vec![b'T'; 4096],
+            tail: vec![b'T'; 4096].into(),
             total: 100_000,
         };
         let (out, dropped) = drained.assemble(64);
@@ -762,7 +940,7 @@ mod tests {
             .spawn()
             .expect("spawn bash");
 
-        let out = run_child_with_drain(child, None, Duration::from_secs(5), 1024)
+        let out = run_child_with_drain(child, None, Duration::from_secs(5), 1024, None)
             .await
             .expect("natural exit");
         assert_eq!(out.exit_code, Some(0));
@@ -802,7 +980,7 @@ mod tests {
             .spawn()
             .expect("spawn bash");
 
-        let err = run_child_with_drain(child, None, Duration::from_secs(3), 1024)
+        let err = run_child_with_drain(child, None, Duration::from_secs(3), 1024, None)
             .await
             .expect_err("should time out");
         match err {
@@ -810,7 +988,9 @@ mod tests {
                 elapsed_ms,
                 partial_stdout,
                 partial_stderr,
+                drain_incomplete,
             } => {
+                assert!(!drain_incomplete);
                 assert!(elapsed_ms >= 400, "elapsed_ms = {elapsed_ms}");
                 // The drain captured the buffered stream prefix (truncated to
                 // max_output_bytes); every line is "started".
@@ -829,6 +1009,95 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn fixed_jsonl_drain_keeps_only_complete_structural_lines() {
+        let stdout = b"{\"count\":2,\"kind\":\"array\"}\n{\"kind\":\"string\",\"count\":null,\"raw\":\"OUTPUT_CANARY\"}\n";
+        let mut captured = Drained::default();
+        let result = drain_fixed_jsonl(&stdout[..], 4096, 0, None, &mut captured).await;
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(captured.head, b"{\"kind\":\"array\",\"count\":2}\n");
+        for truncated in [
+            b"{\"kind\":\"null\",\"count\":null}".as_slice(),
+            b"OUTPUT_CANARY",
+        ] {
+            let mut captured = Drained::default();
+            assert!(drain_fixed_jsonl(truncated, 4096, 0, None, &mut captured)
+                .await
+                .is_err());
+            assert!(captured.head.is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    fn spawn_piped(script: &str) -> Child {
+        tokio::process::Command::new("bash")
+            .args(["-c", script])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn bash fixture")
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn startup_input_and_output_make_progress_together() {
+        let child =
+            spawn_piped("head -c 1048576 /dev/zero; printf 'ready\\n' >&2; wc -c | tr -d ' '");
+        let input = vec![b'x'; 1024 * 1024];
+        let output = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_child_with_drain(child, Some(&input), Duration::from_secs(3), 1024, None),
+        )
+        .await
+        .expect("both pipe directions must progress")
+        .expect("the child should exit naturally");
+        assert_eq!(output.exit_code, Some(0));
+        assert!(output.stdout.ends_with(b"1048576\n"));
+        assert_eq!(output.stderr, b"ready\n");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn natural_exit_with_inherited_pipe_returns_captured_bytes() {
+        // The descriptor holder is finite even when testing the old runner.
+        let child = spawn_piped("printf 'captured\\n'; sleep 4 & exit 7");
+        let output = tokio::time::timeout(
+            Duration::from_secs(3),
+            run_child_with_drain(child, None, Duration::from_secs(10), 1024, None),
+        )
+        .await
+        .expect("inherited pipes must not delay the recorded exit")
+        .expect("the direct child did exit naturally");
+        assert_eq!(output.exit_code, Some(7));
+        assert_eq!(output.stdout, b"captured\n");
+        assert_eq!(output.stdout_truncated_bytes, 0);
+        assert!(!output.truncated);
+        assert!(output.drain_incomplete);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn startup_stdin_is_inside_execution_deadline() {
+        let child = spawn_piped("printf 'started\\n'; exec sleep 7");
+        let pid = child.id().expect("spawned child has a pid");
+        let input = vec![b'x'; 1024 * 1024];
+        let error = tokio::time::timeout(
+            Duration::from_secs(4),
+            run_child_with_drain(child, Some(&input), Duration::from_millis(500), 1024, None),
+        )
+        .await
+        .expect("an unread input pipe must not outlive the wall clock")
+        .expect_err("the child should time out");
+        let SandboxError::Timeout { partial_stdout, .. } = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert_eq!(partial_stdout, b"started\n");
+        assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn run_child_with_drain_stdin_pipe_works() {
@@ -843,7 +1112,7 @@ mod tests {
             .expect("spawn bash");
 
         let script = b"echo from-stdin\n";
-        let out = run_child_with_drain(child, Some(script), Duration::from_secs(5), 1024)
+        let out = run_child_with_drain(child, Some(script), Duration::from_secs(5), 1024, None)
             .await
             .expect("natural exit");
         assert_eq!(out.exit_code, Some(0));
@@ -871,7 +1140,7 @@ mod tests {
             .spawn()
             .expect("spawn bash");
 
-        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024)
+        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024, None)
             .await
             .expect("stdin-reading command must exit on EOF, not hang to timeout");
         assert_eq!(out.exit_code, Some(0), "cat exits 0 on a clean EOF");
@@ -893,7 +1162,7 @@ mod tests {
             .spawn()
             .expect("spawn bash");
 
-        let out = run_child_with_drain(child, None, Duration::from_secs(5), 50)
+        let out = run_child_with_drain(child, None, Duration::from_secs(5), 50, None)
             .await
             .expect("natural exit");
         assert_eq!(out.stdout.len(), 50);
@@ -926,7 +1195,7 @@ mod tests {
         let scoped = tail.clone();
         LIVE_TAIL
             .scope(scoped, async {
-                run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024)
+                run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024, None)
                     .await
                     .expect("natural exit");
             })
@@ -939,7 +1208,7 @@ mod tests {
 
         // No scope ⇒ no tee: the foreground path must not pay for this.
         let untouched = Arc::new(LiveTail::new());
-        run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024)
+        run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024, None)
             .await
             .expect("natural exit");
         assert!(untouched.snapshot().is_empty());
@@ -973,14 +1242,14 @@ mod tests {
         let tail = Arc::new(LiveTail::new());
         LIVE_TAIL
             .scope(tail.clone(), async {
-                run_child_with_drain(child, None, Duration::from_secs(20), 1024)
+                run_child_with_drain(child, None, Duration::from_secs(20), 1024, None)
                     .await
                     .expect("exit");
             })
             .await;
         assert_eq!(tail.child_pid(), Some(expected));
         // No scope ⇒ foreground untouched: nothing to publish into.
-        run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024)
+        run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024, None)
             .await
             .expect("exit");
     }
@@ -1009,7 +1278,7 @@ mod tests {
             .spawn()
             .expect("spawn bash");
 
-        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024)
+        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024, None)
             .await
             .expect("natural exit");
         let text = String::from_utf8_lossy(&out.stdout);
@@ -1053,7 +1322,7 @@ mod tests {
         let scoped = tail.clone();
         let out = LIVE_TAIL
             .scope(scoped, async {
-                run_child_with_drain(child, None, Duration::from_secs(20), 64)
+                run_child_with_drain(child, None, Duration::from_secs(20), 64, None)
                     .await
                     .expect("natural exit")
             })
@@ -1093,7 +1362,7 @@ mod tests {
             .spawn()
             .expect("spawn bash");
 
-        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024)
+        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024, None)
             .await
             .expect("a loud command still exits naturally");
         assert_eq!(

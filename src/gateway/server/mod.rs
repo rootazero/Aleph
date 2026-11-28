@@ -107,6 +107,8 @@ pub struct ConnectionState {
     /// Unlike `caller_user` it never carries the implicit-owner compat identity.
     /// Cleared together with `caller_user` by [`invalidate_device_sessions`].
     pub verified_user: Option<String>,
+    /// Non-secret row ID from the exact credential revalidated at handshake.
+    pub(crate) verified_device_token_id: Option<String>,
 }
 
 impl ConnectionState {
@@ -147,6 +149,7 @@ impl ConnectionState {
             device_id: None,
             caller_user: None,
             verified_user: None,
+            verified_device_token_id: None,
         }
     }
 }
@@ -191,6 +194,7 @@ pub(crate) fn invalidate_device_sessions_locked(
             // The verified identity dies with the role: a revoked/deactivated
             // device must not keep proving a user to per-user capabilities.
             state.verified_user = None;
+            state.verified_device_token_id = None;
             state.permissions.clear();
             hit += 1;
         }
@@ -267,7 +271,7 @@ pub struct GatewaySharedState {
     /// those metrics monotonic and drops a per-connect allocation.
     pub middleware_chain: MiddlewareChain,
     /// Cross-origin policy enforced at the `/ws` upgrade. Rejects browser
-    /// pages whose `Origin` is neither same-origin, loopback, `tauri:`, nor
+    /// pages whose `Origin` is neither same-origin on an IP literal or loopback host, nor
     /// operator-allow-listed — the DNS-rebinding / cross-origin-WebSocket
     /// guard. Native clients (no `Origin` header) are unaffected.
     pub origin_policy: Arc<crate::gateway::origin_policy::OriginPolicy>,
@@ -326,7 +330,7 @@ pub struct GatewayConfig {
     /// dispatch. See `GatewayServerConfig::require_idempotency_key`.
     pub require_idempotency_key: bool,
     /// Extra browser origins allowed on the `/ws` upgrade, in addition to the
-    /// built-in same-origin / loopback / `tauri:` rules. Populated by the
+    /// built-in same-origin rules. Populated by the
     /// binary from the TOML `[gateway] allowed_origins`. Empty (default)
     /// ⇒ only same-origin and same-machine clients may open a WebSocket. See
     /// [`crate::gateway::origin_policy::OriginPolicy`].
@@ -483,9 +487,6 @@ pub struct GatewayServer {
     device_token_mgr: Option<Arc<crate::gateway::security::DeviceTokenManager>>,
     /// One device selection map shared by RPC discovery and HTTP delivery.
     panel_projects: Option<Arc<crate::gateway::panel_project_context::PanelProjectSelector>>,
-    /// Optional QA-only after-auth observer for the isolated native project helper.
-    #[cfg(feature = "native-qa")]
-    native_qa_observer: Option<crate::gateway::native_qa::NativeQaRpcObserverHandle>,
     /// Security store handle for the node `last_seen_at` stamping in the
     /// WS connect/disconnect paths. See `GatewaySharedState::security_store`.
     security_store: Option<Arc<crate::gateway::security::SecurityStore>>,
@@ -586,8 +587,6 @@ impl GatewayServer {
             shared_token_mgr: None,
             device_token_mgr: None,
             security_store: None,
-            #[cfg(feature = "native-qa")]
-            native_qa_observer: None,
             canvas_store: None,
             mcp_face: None,
             browser_viewer: None,
@@ -655,8 +654,6 @@ impl GatewayServer {
             shared_token_mgr: None,
             device_token_mgr: None,
             security_store: None,
-            #[cfg(feature = "native-qa")]
-            native_qa_observer: None,
             canvas_store: None,
             mcp_face: None,
             browser_viewer: None,
@@ -762,17 +759,6 @@ impl GatewayServer {
             ),
         ));
         self.device_token_mgr = Some(manager);
-    }
-
-    /// Install the QA-only after-auth observer used by the isolated native
-    /// project acceptance helper. It receives only typed redacted facts after
-    /// normal Gateway authorization and contextual dispatch return.
-    #[cfg(feature = "native-qa")]
-    pub fn set_native_qa_observer(
-        &mut self,
-        observer: crate::gateway::native_qa::NativeQaRpcObserverHandle,
-    ) {
-        self.native_qa_observer = Some(observer);
     }
 
     /// Install the `SecurityStore` so the WS node connect/disconnect paths
@@ -977,9 +963,6 @@ impl GatewayServer {
         let middleware_chain =
             MiddlewareChain::new(self.handlers.clone(), self.rate_limiter.clone())
                 .with_panel_projects(self.panel_projects.clone());
-        #[cfg(feature = "native-qa")]
-        let middleware_chain =
-            middleware_chain.with_native_qa_observer(self.native_qa_observer.clone());
 
         // Wire the embedded-PTY subsystem only when the live application
         // policy admits Terminal runtime effects. A missing or locked Config

@@ -478,3 +478,41 @@ fn panel_host_inline_transcribe_queued_before_hide_show_never_reaches_wire() {
         }).await.unwrap();
     });
 }
+
+#[test]
+fn panel_host_rpc_forwards_structured_error_data_and_preserves_generic_errors() {
+    let host = host();
+    host.runtime.as_ref().unwrap().block_on(async {
+        timeout(Duration::from_secs(5), async {
+            let shared = &host.shared;
+            let (_client, mut peer, _binding) = install(shared).await;
+            let data = json!({
+                "reconciliation_required": true,
+                "address": "agent/default/notes/example",
+                "revision": 7
+            });
+            for error in [
+                json!({"code": -32000, "message": "reconcile", "data": data}),
+                json!({"code": -32601, "message": "method unavailable"}),
+            ] {
+                let mut call = std::pin::pin!(shared.rpc(json!({
+                    "method": "memory.graph.update", "params": {}
+                })));
+                assert!(poll!(&mut call).is_pending());
+                let id = wire(&mut peer, "memory.graph.update").await;
+                peer.send(Message::Text(
+                    json!({
+                        "jsonrpc": "2.0", "id": id, "error": error
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+                assert_eq!(call.await, json!({"error": error}));
+            }
+        })
+        .await
+        .unwrap();
+    });
+}

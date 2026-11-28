@@ -57,13 +57,26 @@ impl AgentManager {
         Ok(())
     }
 
+    fn config_lock_path(&self) -> std::path::PathBuf {
+        let mut lock_path = self.config_path.as_os_str().to_os_string();
+        lock_path.push(".lock");
+        lock_path.into()
+    }
+
     /// Serialize the complete read/modify/save transaction across manager instances.
     /// Other config writers must use this same sidecar to participate.
     pub(super) fn with_config_write<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
-        let mut lock_path = self.config_path.as_os_str().to_os_string();
-        lock_path.push(".lock");
-        crate::utils::atomic_io::with_file_lock(std::path::Path::new(&lock_path), |_| Ok(f()))
+        crate::utils::atomic_io::with_file_lock(&self.config_lock_path(), |_| Ok(f()))
             .map_err(|e| AlephError::IoError(format!("Failed to lock config: {e}")))?
+    }
+
+    /// The persisted agent delete archives directories under this same lock,
+    /// before the live registry learns about the removal.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn try_workspace_archive_guard(
+        &self,
+    ) -> std::io::Result<crate::utils::atomic_io::FileLockGuard> {
+        crate::utils::atomic_io::try_existing_file_lock(&self.config_lock_path())
     }
 
     /// Find the index of an agent in the [[agents.list]] array by ID

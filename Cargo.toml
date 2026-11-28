@@ -10,7 +10,6 @@ members = [
     "desktop/linux",
     "desktop/windows",
     "desktop/nsh-shell",
-    "desktop/shell",
     "shared/logging",
     "shared/protocol",
     "shared/ui_logic",
@@ -56,6 +55,7 @@ serde_json = "1.0"
 # 1.1 lineage: bare `yes` / `no` / `on` / `off` come back as strings, only
 # `true` / `false` as booleans. `src/skill/manifest.rs` pins that.
 yaml_serde = "0.10"
+libyaml-rs = "0.3"
 toml = "1.1"
 
 # Error handling
@@ -119,7 +119,7 @@ lru = "0.18"
 # mDNS service discovery
 mdns-sd = "0.21"
 
-# Crypto / cert parsing (shared with desktop/shell cert_trust)
+# Crypto / cert parsing
 sha2 = "0.11"
 hex = "0.4"
 x509-parser = "0.18"
@@ -170,7 +170,6 @@ loom = ["dep:loom"]
 # feature does not compile it and does not need the fake peer. The integration
 # tests get `aleph-cdp/testkit` through the dev-dependency, as before.
 test-helpers = []
-native-qa = []
 # Control plane UI (Leptos/WASM dashboard)
 control-plane = []
 # Disabled test modules awaiting rewrite
@@ -250,6 +249,7 @@ futures = "0.3"
 async-stream = "0.3"
 once_cell = "1.19"
 yaml_serde.workspace = true
+libyaml-rs.workspace = true
 zip = "9"
 # Archive handling for `InstallStrategy::GithubRelease`, which extracts ONE
 # member from a release asset. Pure Rust rather than shelling out to `tar` /
@@ -417,13 +417,6 @@ path = "src/bin/aleph-migrate/main.rs"
 test = false
 bench = false
 
-[[bin]]
-name = "aleph-panel-native-qa-gateway"
-path = "src/bin/aleph-panel-native-qa-gateway/main.rs"
-required-features = ["native-qa"]
-test = false
-bench = false
-
 [dev-dependencies]
 # Task9 independent source import guard only. Never used by normal library code.
 syn = { version = "=3.0.9", default-features = false, features = ["full", "parsing", "printing", "visit"] }
@@ -494,6 +487,10 @@ harness = false
 [[bench]]
 name = "markdown_projection_bench"
 harness = false
+
+[[test]]
+name = "paired_shell_gateway"
+required-features = ["test-helpers"]
 
 [[test]]
 name = "cron_probe"

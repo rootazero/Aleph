@@ -18,12 +18,15 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::code_exec::{CodeExecArgs, CodeExecOutput, CodeExecTool, Language};
+use super::code_exec::{
+    clamp_foreground_timeout, CodeExecArgs, CodeExecOutput, CodeExecTool, Language,
+};
 use super::partial_output::{self, PartialView};
 use super::process_completion;
 use super::process_journal::{self, JobPhase, RecoveredJob, Tombstone, Verdict};
 use super::process_registry::{
-    process_registry, KillOutcome, PollOutcome, RegisterOutcome, WaitOutcome,
+    encode_session_label, process_registry, KillOutcome, LiveProcessState, PollOutcome,
+    ReadOutcome, RegisterOutcome, WaitOutcome,
 };
 use crate::error::Result;
 use crate::sandbox::context::{LIVE_TAIL, SESSION_ID};
@@ -97,16 +100,22 @@ pub struct BashExecArgs {
     /// of blocking until it finishes. Poll/kill it later with `process_action`.
     #[serde(default)]
     pub background: bool,
-    /// Manage a background process instead of running a command:
-    /// `"poll"` (fetch status/output once), `"wait"` (block until it finishes,
-    /// up to `timeout`), `"kill"` (terminate), or `"list"` (enumerate this
-    /// session's background processes). When set, `cmd` is ignored;
-    /// `poll`/`wait`/`kill` require `process_id`.
+    /// Initial observation window in milliseconds (1–10000, launch only).
+    /// This does not change the command timeout.
+    #[serde(default)]
+    #[schemars(range(min = 1, max = 10000))]
+    pub yield_ms: Option<u64>,
+    /// Manage a shell job instead of accepting `cmd`: `poll` for status,
+    /// `wait` up to `timeout`, `read` from a cursor, `kill` to request stop,
+    /// or `list` for this session. All except `list` require `process_id`.
     #[serde(default)]
     pub process_action: Option<String>,
-    /// Target background process id for `process_action` = `poll` | `wait` | `kill`.
+    /// Target background process id for `poll`, `wait`, `read`, or `kill`.
     #[serde(default)]
     pub process_id: Option<u64>,
+    /// Opaque continuation cursor returned by `read`. Omit to start from zero.
+    #[serde(default)]
+    pub cursor: Option<String>,
     /// Optional natural-language reason for *why* an escalation
     /// (`allow_network` / `allow_subprocess` / `extra_writable_paths`) is
     /// needed. Forwarded to the human approver alongside the requested
@@ -347,7 +356,7 @@ installs, long test runs). Set `background: true` and the call returns a
 `process_id` immediately. Background jobs escape the 180s foreground
 ceiling: with no explicit `timeout` they get a generous 1-hour default
 (pass `timeout` to raise or lower it), and you can stop one anytime with
-`process_action: "kill"`. Manage it with `process_action`:
+`process_action: "kill"`. `yield_ms` (1–10000) optionally returns when the first observation window ends, without changing the execution timeout. Manage a returned process ID with `process_action`:
 - `{"process_action": "poll", "process_id": N}` → status + an 8 KB
   `partial_stdout`/`partial_stderr` tail while running, or the full
   {exit_code, stdout, stderr} once finished.
@@ -356,7 +365,8 @@ ceiling: with no explicit `timeout` they get a generous 1-hour default
   after the wait window (default 60s, set `timeout` to extend up to 170s).
   Prefer `wait` over a tight `poll` loop — it costs no round-trips while
   the job runs.
-- `{"process_action": "kill", "process_id": N}` → terminate it.
+- `{"process_action": "read", "process_id": N, "cursor": "..."}` → read bounded output without consuming it. Omit the cursor initially, then pass `next_cursor`. Inspect each stream's `lost`, `withheld`, and `pending` fields.
+- `{"process_action": "kill", "process_id": N}` → request cancellation. `stopping` is not cleanup confirmation.
 - `{"process_action": "list"}` → enumerate this session's background processes.
 Background processes are scoped to your session; you cannot see or kill
 another session's processes, and each session may have at most 8 running at
@@ -391,7 +401,35 @@ impl AlephTool for BashExecTool {
     type Args = BashExecArgs;
     type Output = super::code_exec::CodeExecOutput;
 
+    fn validate_json_args(&self, args: &serde_json::Value) -> Result<()> {
+        if super::bash_jsonl::is_private(Self::NAME, args) {
+            return Err(crate::error::AlephError::Validation(
+                "fixed JSONL input requires an eligible paired Bash call".into(),
+            ));
+        }
+        Ok(())
+    }
+
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        let yield_window = match args.yield_ms {
+            None => None,
+            Some(1..=10_000) if args.process_action.is_none() => {
+                args.yield_ms.map(Duration::from_millis)
+            }
+            Some(_) => {
+                return Ok(error_output(
+                    "bash: `yield_ms` must be 1–10000 and is only accepted on launch",
+                ))
+            }
+        };
+        if args.cursor.is_some() && args.process_action.as_deref() != Some("read") {
+            return Ok(error_output(
+                "bash: `cursor` is only accepted by `process_action: read`",
+            ));
+        }
+        if args.process_action.as_deref() == Some("read") {
+            return Ok(read_process(args.process_id, args.cursor.as_deref()));
+        }
         // Background-process management never runs a command — handle first.
         if let Some(action) = args.process_action.as_deref() {
             return Ok(handle_process_action(action, args.process_id, args.timeout_seconds).await);
@@ -414,41 +452,55 @@ impl AlephTool for BashExecTool {
             justification: args.justification,
         };
 
-        if args.background {
+        if args.background || yield_window.is_some() {
             if crate::sandbox::context::current_exec_workspace_binding()
                 .is_some_and(|workspace| workspace.is_owned_worktree())
             {
                 return Ok(error_output(
-                    "bash: background commands cannot outlive an owned worktree; run in the foreground",
+                    "bash: background commands cannot outlive an owned worktree; run without background or yield_ms",
                 ));
             }
-            // Background escapes the 180s foreground budget wrapper, so the
-            // foreground 60s default would prematurely SIGKILL long builds.
-            // Substitute a generous default only when the caller left `timeout`
-            // unset; an explicit value (longer or shorter) is always honoured.
-            if code_exec_args.timeout_seconds.is_none() {
-                code_exec_args.timeout_seconds = Some(BACKGROUND_DEFAULT_TIMEOUT_SECS);
-            }
-            // Defence in depth (audit-2026-08-26 BTT-3): background escapes
-            // the budget wrapper entirely, so a runaway LLM passing
-            // `u64::MAX` would register a job the registry never reaps
-            // (kill requires the same session to come back and call
-            // `process_action: "kill"`). Cap the worst case at 4 hours so
-            // the daemon cannot be wedged indefinitely on a single bad
-            // call; the 1h default still wins when the caller leaves the
-            // field unset.
-            const BACKGROUND_MAX_TIMEOUT_SECS: u64 = 4 * 3600;
-            if let Some(t) = code_exec_args.timeout_seconds {
-                if t > BACKGROUND_MAX_TIMEOUT_SECS {
-                    tracing::warn!(
-                        original = t,
-                        capped_to = BACKGROUND_MAX_TIMEOUT_SECS,
-                        "bash_exec: background timeout above ceiling, clamping"
-                    );
-                    code_exec_args.timeout_seconds = Some(BACKGROUND_MAX_TIMEOUT_SECS);
-                }
-            }
-            return Ok(self.spawn_background(code_exec_args));
+            // The observation window is independent of execution policy.
+            code_exec_args.timeout_seconds = if args.background {
+                const BACKGROUND_MAX_TIMEOUT_SECS: u64 = 4 * 3600;
+                Some(
+                    code_exec_args
+                        .timeout_seconds
+                        .unwrap_or(BACKGROUND_DEFAULT_TIMEOUT_SECS)
+                        .min(BACKGROUND_MAX_TIMEOUT_SECS),
+                )
+            } else {
+                clamp_foreground_timeout(code_exec_args.timeout_seconds)
+            };
+            let id = match self.spawn_background(code_exec_args) {
+                Ok(id) => id,
+                Err(output) => return Ok(output),
+            };
+            let Some(window) = yield_window else {
+                return Ok(info_output(serde_json::json!({
+                    "process_id": id,
+                    "status": "starting",
+                    "background": true,
+                    "message": format!("Reserved shell process {id}. Poll or wait for its status."),
+                })));
+            };
+            let caller = session_label();
+            return Ok(
+                match process_registry().wait(id, caller.as_deref(), window).await {
+                    WaitOutcome::Done(output) => *output,
+                    WaitOutcome::Killed => {
+                        info_output(serde_json::json!({ "process_id": id, "status": "killed" }))
+                    }
+                    WaitOutcome::TimedOut {
+                        state,
+                        elapsed_ms,
+                        partial,
+                    } => info_output(running_payload(id, state, elapsed_ms, partial, None)),
+                    WaitOutcome::NotFound => {
+                        error_output("bash: the shell result is no longer retained")
+                    }
+                },
+            );
         }
 
         // Foreground (default) — delegate to CodeExecTool, blocking.
@@ -457,167 +509,114 @@ impl AlephTool for BashExecTool {
 }
 
 impl BashExecTool {
-    /// Drive `code_exec_args` inside a detached task and return a `process_id`
-    /// immediately. The task re-enters the current `SESSION_ID` scope (task
-    /// locals don't propagate into `tokio::spawn`) so the sandbox still targets
-    /// the right per-session workspace, and re-enters the ambient
-    /// `CallIdentity` so a sandbox-elevation approval raised by the detached
-    /// command still stamps the bash call that spawned it (otherwise the card
-    /// reverts to the uncorrelated pre-identity state for exactly this path),
-    /// and enters a fresh `LIVE_TAIL` scope so the platform driver's drain
-    /// loops tee a rolling tail that `poll` / `wait` can show mid-run.
-    fn spawn_background(&self, code_exec_args: CodeExecArgs) -> CodeExecOutput {
-        let registry = process_registry();
-        let caller = session_label();
-        let sid = current_session();
-        // Captured on the CALLER's task: the authorised jail root is a
-        // task-local like the rest, so reading it inside the detached task
-        // would find nothing and the job would silently run in a different
-        // directory than the foreground call that spawned it.
-        let exec_workspace = crate::sandbox::context::current_exec_workspace_binding();
-        let identity = crate::approval::current_call_identity();
-        let inner = self.inner.clone();
-        let preview = code_exec_args.code.clone();
-        // A second copy for the completion announce: `preview` moves into
-        // `register_running` on this task, and the notice is built inside the
-        // detached one.
-        let command_for_announce = preview.clone();
-        // One tail per background job: the detached task scopes it (so the
-        // drivers can tee into it) and the registry holds it (so `poll` can
-        // read it) until the entry retires.
-        let live = Arc::new(LiveTail::new());
-        let live_for_task = live.clone();
+    /// Reserve before launching so even a fast command settles the same row.
+    fn spawn_background(
+        &self,
+        code_exec_args: CodeExecArgs,
+    ) -> std::result::Result<u64, CodeExecOutput> {
+        use crate::tools::turn_context::{
+            current_originator, current_turn_context, with_originator, TURN_CONTEXT,
+        };
 
-        // The task must not record completion before it has been registered
-        // (a fast command could otherwise finish before `register_running`
-        // inserts its slot, dropping the output). Gate the task on a oneshot
-        // carrying its id; the foreground sends it only after registration.
-        let (id_tx, id_rx) = tokio::sync::oneshot::channel::<u64>();
-        let reg = registry.clone();
-        let join = tokio::spawn(async move {
-            let id = match id_rx.await {
-                Ok(id) => id,
-                // Foreground dropped the sender (registration failed) — nothing
-                // to report against; abandon quietly.
-                Err(_) => return,
-            };
-            // Cloned before `sid` moves into the exec scope below: the announce
-            // must be addressed with the captured `SessionId` itself. The
-            // registry's owner label is NOT a substitute — it is a serialized
-            // `SessionId`, which `SessionKey::from_key_string` does not read.
-            let announce_sid = sid.clone();
-            // Background escapes the 180s per-tool budget wrapper (the spawn
-            // call returned a process_id already), so it must NOT inherit the
-            // foreground timeout clamp — a backgrounded `cargo build` may
-            // legitimately run for the full 1h ceiling. `call_unclamped` runs
-            // `execute` directly, bypassing the clamp in `AlephTool::call`.
-            let result = crate::approval::with_call_identity(identity, async move {
-                // Task-locals do NOT cross `tokio::spawn`, so the session
-                // scope, the live-tail scope and the authorised exec workspace
-                // all have to be re-entered HERE, in the spawned task —
-                // entering them around `tokio::spawn` on the caller's task
-                // would leave the driver seeing none of them. The guard that
-                // catches a forgotten member is behavioural, not a name list:
-                // `background_lands_in_the_same_directory_as_foreground`.
+        let registry = process_registry();
+        let sid = current_session();
+        let workspace = crate::sandbox::context::current_exec_workspace_binding();
+        let identity = crate::approval::current_call_identity();
+        let turn = current_turn_context();
+        let originator = current_originator();
+        let command = code_exec_args.code.clone();
+        let control = Arc::new(crate::sandbox::shell_lifecycle::ShellLifecycle::default());
+        let id = match registry.reserve_shell(command.clone(), session_label(), control.clone()) {
+            RegisterOutcome::Registered(id) => id,
+            RegisterOutcome::TooManyRunning { limit } => {
+                return Err(error_output(format!(
+                    "bash: the active process cap ({limit}) was reached; wait for an existing process to finish or stop before retrying"
+                )));
+            }
+            RegisterOutcome::AdmissionClosed => {
+                return Err(error_output("bash: shell launch is closed during shutdown"));
+            }
+        };
+        let live = Arc::new(LiveTail::for_shell());
+        registry.attach_live(id, live.clone());
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            // Task locals do not cross tokio::spawn. These are for admission
+            // of the original launch only, not authority for later calls.
+            let launch = async {
+                let execute = inner.call_controlled(code_exec_args, &control);
+                let execute = async {
+                    match sid.clone() {
+                        Some(session) => SESSION_ID.scope(session, execute).await,
+                        None => execute.await,
+                    }
+                };
                 LIVE_TAIL
-                    .scope(live_for_task, async move {
-                        crate::sandbox::context::with_exec_workspace_binding(
-                            exec_workspace,
-                            async move {
-                                match sid {
-                                    Some(sid) => {
-                                        SESSION_ID
-                                            .scope(sid, inner.call_unclamped(code_exec_args))
-                                            .await
-                                    }
-                                    None => inner.call_unclamped(code_exec_args).await,
-                                }
-                            },
-                        )
-                        .await
-                    })
+                    .scope(
+                        live,
+                        crate::sandbox::context::with_exec_workspace_binding(workspace, execute),
+                    )
                     .await
-            })
-            .await;
-            let output = result
-                .unwrap_or_else(|e| error_output(format!("bash: background task error: {e}")));
-            // Built before `output` moves into the registry, broadcast after —
-            // an announce-driven parent turn must find the job already `Done`
-            // when it polls, the same ordering `subagent_tool::spawn` keeps
-            // around `mark_completed`.
-            let announcement = announce_sid.as_ref().map(|_| {
+            };
+            let launch =
+                crate::approval::with_call_identity(identity, with_originator(originator, launch));
+            let result = match turn {
+                Some(turn) => TURN_CONTEXT.scope(turn, launch).await,
+                None => launch.await,
+            };
+            let output = result.unwrap_or_else(|error| {
+                error_output(format!("bash: background task error: {error}"))
+            });
+            let announcement = sid.as_ref().map(|_| {
                 process_completion::completion_event(
                     id,
-                    &command_for_announce,
+                    &command,
                     output.exit_code,
                     &output.stdout,
                     &output.stderr,
                 )
             });
-            // R5 proactive arrival: without this, a job that outlives the run
-            // that started it is only ever seen if the model happens to poll —
-            // and once that run ends, nobody looks. Guarded on the *effect*,
-            // not the call: a completion landing after a `kill` changes nothing
-            // in the registry, and announcing it would tell the session a job
-            // finished that it had already stopped. No session (CLI / direct
-            // callers) means nobody to announce to.
-            let settled_now = reg.complete(id, output);
-            if let (true, Some(sid), Some(event)) = (settled_now, announce_sid, announcement) {
+            if let (true, Some(sid), Some(event)) =
+                (registry.complete(id, output), sid, announcement)
+            {
                 process_completion::broadcast(&sid, event).await;
             }
         });
+        Ok(id)
+    }
+}
 
-        match registry.register_running(preview, caller, join.abort_handle()) {
-            RegisterOutcome::Registered(id) => {
-                registry.attach_live(id, live);
-                // Defence in depth (audit-2026-08-26 BTT-4): the registry
-                // accepted the slot and the foreground path returned
-                // "running" to the model. If the spawned task already exited
-                // (panic before the oneshot receive), the model would be
-                // told the job is running while the registry holds an
-                // orphan. Today the gate awaits the oneshot inside the
-                // spawned task, so this cannot happen — but the pattern is
-                // one refactor away from a real silent orphan. Log loudly
-                // so any future semantic change surfaces in tests / logs
-                // instead of leaking the slot.
-                if id_tx.send(id).is_err() {
-                    tracing::warn!(
-                        process_id = id,
-                        "bash_exec: background task abandoned before handoff — \
-                         registry slot may be orphaned"
-                    );
-                }
-                info_output(serde_json::json!({
-                    "process_id": id,
-                    "status": "running",
-                    "background": true,
-                    "message": format!(
-                        "Started background process {id}. Poll with {{\"process_action\":\"poll\",\"process_id\":{id}}}."
-                    ),
-                }))
-            }
-            RegisterOutcome::TooManyRunning { limit } => {
-                // Refuse without a slot. Dropping `id_tx` makes the gated task
-                // exit on its `id_rx.await` error without ever touching the
-                // sandbox; abort it too so the detached task is reaped promptly
-                // rather than lingering until the channel drop is observed.
-                drop(id_tx);
-                join.abort();
-                error_output(format!(
-                    "bash: this session already has {limit} background processes running (the per-session cap). \
-                     Poll or kill an existing one before starting another — \
-                     {{\"process_action\":\"list\"}} to see them, then \
-                     {{\"process_action\":\"kill\",\"process_id\":N}} to free a slot."
-                ))
-            }
+fn read_process(id: Option<u64>, cursor: Option<&str>) -> CodeExecOutput {
+    let Some(id) = id else {
+        return error_output("bash: process_action=read requires `process_id`");
+    };
+    let Some(session) = current_session() else {
+        return error_output("bash: no readable shell process with that id");
+    };
+    match process_registry().read(id, &session, cursor) {
+        ReadOutcome::View {
+            status,
+            next_cursor,
+            stdout,
+            stderr,
+        } => info_output(serde_json::json!({
+            "process_id": id,
+            "status": status,
+            "next_cursor": next_cursor,
+            "stdout": stdout,
+            "stderr": stderr,
+        })),
+        ReadOutcome::InvalidCursor => {
+            error_output("bash: invalid shell cursor; omit it to restart the read")
         }
+        ReadOutcome::NotFound => error_output("bash: no readable shell process with that id"),
     }
 }
 
 /// Session label used to scope the process registry. Mirrors the JSON form the
 /// sandbox uses for its workspace key so the value is stable for a session.
 pub(crate) fn session_label() -> Option<String> {
-    current_session().map(|sid| serde_json::to_string(&sid).unwrap_or_else(|_| format!("{sid:?}")))
+    current_session().as_ref().map(encode_session_label)
 }
 
 /// Recover the owning session from a label [`session_label`] wrote.
@@ -633,26 +632,19 @@ pub(crate) fn session_key_from_label(label: &str) -> Option<crate::session::serv
     serde_json::from_str(label).ok()
 }
 
-/// Abort every still-running background job in the global process registry.
-///
-/// Wired into the daemon's graceful-shutdown path so background bash / build
-/// jobs do not outlive the core when an operator runs `daemon.shutdown`, hits
-/// `Ctrl-C`, or the process receives `SIGTERM`. The registry is the
-/// authoritative reaper — `tokio::process::Child::kill_on_drop` is best-effort
-/// once the runtime itself is tearing down, and the only way to guarantee no
-/// orphaned `cargo build` keeps writing into the workspace after the core has
-/// gone is to ask every tracked task to abort up front. Returns the number of
-/// processes that were signalled (purely informational; logging is fine).
-pub fn kill_all_running_background() -> usize {
-    use crate::builtin_tools::process_registry::process_registry;
-    let n = process_registry().shutdown();
-    if n > 0 {
+/// Seal new shell launches and await verified settlement of existing jobs.
+/// Return the number without confirmation; leave their journal rows unsettled.
+pub async fn shutdown_background_jobs() -> usize {
+    let registry = process_registry();
+    let unconfirmed = registry.shutdown_shells(Duration::from_secs(5)).await;
+    let aborted = registry.shutdown();
+    if aborted > 0 {
         tracing::info!(
-            killed = n,
-            "aborted background bash processes during daemon shutdown"
+            aborted,
+            "aborted legacy installer jobs during daemon shutdown"
         );
     }
-    n
+    unconfirmed
 }
 
 /// Dispatch a `poll` / `wait` / `kill` / `list` management action against the
@@ -702,9 +694,10 @@ async fn handle_process_action(
                 // Surface the captured tool output verbatim once finished.
                 PollOutcome::Done(out) => *out,
                 PollOutcome::Running {
+                    state,
                     elapsed_ms,
                     partial,
-                } => info_output(running_payload(id, elapsed_ms, partial, None)),
+                } => info_output(running_payload(id, state, elapsed_ms, partial, None)),
                 PollOutcome::Killed => info_output(serde_json::json!({
                     "process_id": id,
                     "status": "killed",
@@ -742,17 +735,18 @@ async fn handle_process_action(
                     // go — the same reason the registry's own timeout arm
                     // re-polls instead of extrapolating.
                     match registry.poll(id, caller.as_deref()) {
-                        PollOutcome::Running { elapsed_ms, partial } => {
+                        PollOutcome::Running { state, elapsed_ms, partial } => {
                             return info_output(running_payload(
                                 id,
+                                state,
                                 elapsed_ms,
                                 partial,
                                 Some(format!(
                                     "The user sent new input, so this wait returned early \
                                      instead of using its full {secs}s window — their \
                                      message is in your context, read it before deciding \
-                                     what to do next. The process was NOT killed; it is \
-                                     still running and can be waited on again with \
+                                     what to do next. This wait did not cancel the process. \
+                                     Wait again with \
                                      {{\"process_action\":\"wait\",\"process_id\":{id}}}."
                                 )),
                             ));
@@ -776,14 +770,16 @@ async fn handle_process_action(
                     "status": "killed",
                 })),
                 WaitOutcome::TimedOut {
+                    state,
                     elapsed_ms,
                     partial,
                 } => info_output(running_payload(
                     id,
+                    state,
                     elapsed_ms,
                     partial,
                     Some(format!(
-                        "Still running after waiting {secs}s. Wait again or poll later with \
+                        "No terminal result after waiting {secs}s. Wait again or poll later with \
                          {{\"process_action\":\"poll\",\"process_id\":{id}}}."
                     )),
                 )),
@@ -798,6 +794,11 @@ async fn handle_process_action(
                 KillOutcome::Killed => info_output(serde_json::json!({
                     "process_id": id,
                     "status": "killed",
+                })),
+                KillOutcome::Stopping => info_output(serde_json::json!({
+                    "process_id": id,
+                    "status": "stopping",
+                    "message": "Cancellation requested; poll or wait for cleanup confirmation."
                 })),
                 KillOutcome::AlreadyFinished => info_output(serde_json::json!({
                     "process_id": id,
@@ -840,7 +841,7 @@ async fn handle_process_action(
             }
         }
         other => error_output(format!(
-            "bash: unknown process_action '{other}' (expected poll|wait|kill|list)"
+            "bash: unknown process_action '{other}' (expected poll|wait|read|kill|list)"
         )),
     }
 }
@@ -1042,7 +1043,7 @@ fn advisory(job: &RecoveredJob) -> String {
     .to_string()
 }
 
-/// Assemble the `status: "running"` payload for `poll` / `wait`.
+/// Assemble a nonterminal `poll` / `wait` response.
 ///
 /// The partial bytes go under their own `partial_stdout` / `partial_stderr`
 /// keys and are deliberately NOT promoted into the envelope's `stdout` /
@@ -1052,13 +1053,14 @@ fn advisory(job: &RecoveredJob) -> String {
 /// replaces.
 fn running_payload(
     id: u64,
+    state: LiveProcessState,
     elapsed_ms: u64,
     partial: Option<LiveSnapshot>,
     message: Option<String>,
 ) -> serde_json::Value {
     let mut obj = serde_json::Map::new();
     obj.insert("process_id".into(), serde_json::json!(id));
-    obj.insert("status".into(), serde_json::json!("running"));
+    obj.insert("status".into(), serde_json::json!(state.label()));
     obj.insert("elapsed_ms".into(), serde_json::json!(elapsed_ms));
     if let Some(msg) = message {
         obj.insert("message".into(), serde_json::json!(msg));
@@ -1338,6 +1340,7 @@ mod tests {
             stderr: stderr.to_vec(),
             stdout_total: out_total,
             stderr_total: err_total,
+            withhold: false,
         }
     }
 
@@ -1345,6 +1348,7 @@ mod tests {
     fn running_payload_carries_partial_under_its_own_keys() {
         let v = running_payload(
             7,
+            LiveProcessState::Running,
             1234,
             Some(snapshot(b"Compiling\n", b"warning: x\n", 10, 11)),
             None,
@@ -1370,7 +1374,13 @@ mod tests {
 
     #[test]
     fn running_payload_reports_how_much_scrolled_past_the_ring() {
-        let v = running_payload(1, 0, Some(snapshot(b"tail", b"", 4096, 0)), None);
+        let v = running_payload(
+            1,
+            LiveProcessState::Running,
+            0,
+            Some(snapshot(b"tail", b"", 4096, 0)),
+            None,
+        );
         assert_eq!(v["bytes_so_far"]["stdout"], 4096);
         assert_eq!(v["partial_elided_bytes"]["stdout"], 4092);
         assert_eq!(v["partial_elided_bytes"]["stderr"], 0);
@@ -1378,7 +1388,13 @@ mod tests {
 
     #[test]
     fn running_payload_with_no_output_yet_says_zero_not_nothing() {
-        let v = running_payload(1, 5, Some(snapshot(b"", b"", 0, 0)), None);
+        let v = running_payload(
+            1,
+            LiveProcessState::Running,
+            5,
+            Some(snapshot(b"", b"", 0, 0)),
+            None,
+        );
         assert_eq!(v["bytes_so_far"]["stdout"], 0);
         assert!(v.get("partial_stdout").is_none());
         assert!(v.get("partial_withheld").is_none());
@@ -1389,7 +1405,7 @@ mod tests {
     /// `partial_stdout` would claim the child printed nothing.
     #[test]
     fn running_payload_without_a_tail_omits_every_partial_key() {
-        let v = running_payload(1, 5, None, None);
+        let v = running_payload(1, LiveProcessState::Running, 5, None, None);
         assert!(v.get("bytes_so_far").is_none());
         assert!(v.get("partial_stdout").is_none());
     }
@@ -1399,7 +1415,13 @@ mod tests {
     #[test]
     fn partial_output_is_scrubbed_like_the_finished_path() {
         let raw = b"token=ghp_0123456789abcdefghijklmnopqrstuvwx\n";
-        let v = running_payload(1, 0, Some(snapshot(raw, b"", raw.len() as u64, 0)), None);
+        let v = running_payload(
+            1,
+            LiveProcessState::Running,
+            0,
+            Some(snapshot(raw, b"", raw.len() as u64, 0)),
+            None,
+        );
         let shown = v["partial_stdout"].as_str().expect("partial shown");
         assert!(
             !shown.contains("ghp_0123456789abcdefghijklmnopqrstuvwx"),
@@ -1414,7 +1436,13 @@ mod tests {
     #[test]
     fn block_class_secret_withholds_the_partial_instead_of_redacting_it() {
         let raw = b"-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n";
-        let v = running_payload(1, 0, Some(snapshot(raw, b"", raw.len() as u64, 0)), None);
+        let v = running_payload(
+            1,
+            LiveProcessState::Running,
+            0,
+            Some(snapshot(raw, b"", raw.len() as u64, 0)),
+            None,
+        );
         assert!(v.get("partial_stdout").is_none(), "must not render it");
         assert!(
             v["partial_withheld"]
@@ -1433,7 +1461,13 @@ mod tests {
     #[test]
     fn partial_output_is_ansi_sanitized() {
         let raw = b"\x1b[32mok\x1b[0m\n";
-        let v = running_payload(1, 0, Some(snapshot(raw, b"", raw.len() as u64, 0)), None);
+        let v = running_payload(
+            1,
+            LiveProcessState::Running,
+            0,
+            Some(snapshot(raw, b"", raw.len() as u64, 0)),
+            None,
+        );
         assert_eq!(v["partial_stdout"], "ok\n");
     }
 
@@ -1451,8 +1485,10 @@ mod tests {
             allow_subprocess: false,
             extra_writable_paths: Vec::new(),
             background: false,
+            yield_ms: None,
             process_action: Some(action.to_string()),
             process_id: id,
+            cursor: None,
             justification: None,
         }
     }
@@ -1544,8 +1580,10 @@ mod tests {
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
                     background: false,
+                    yield_ms: None,
                     process_action: None,
                     process_id: None,
+                    cursor: None,
                     justification: None,
                 };
                 let first = tool.call(mk()).await.unwrap();
@@ -1570,8 +1608,10 @@ mod tests {
             allow_subprocess: false,
             extra_writable_paths: Vec::new(),
             background: false,
+            yield_ms: None,
             process_action: None,
             process_id: None,
+            cursor: None,
             justification: None,
         })
         .await;
@@ -1610,6 +1650,15 @@ mod tests {
             .await;
     }
 
+    fn active_shell_output(stdout: &str) -> bool {
+        serde_json::from_str::<serde_json::Value>(stdout).is_ok_and(|payload| {
+            matches!(
+                payload["status"].as_str(),
+                Some("starting" | "running" | "stopping")
+            )
+        })
+    }
+
     /// End-to-end background round-trip with no sandbox wired: the spawned task
     /// completes with `CodeExecTool`'s structured "sandbox not configured"
     /// error, which `poll` then surfaces verbatim. Scoped under a unique
@@ -1630,8 +1679,10 @@ mod tests {
                         allow_subprocess: false,
                         extra_writable_paths: Vec::new(),
                         background: true,
+                        yield_ms: None,
                         process_action: None,
                         process_id: None,
+                        cursor: None,
                         justification: None,
                     })
                     .await
@@ -1651,8 +1702,10 @@ mod tests {
                             allow_subprocess: false,
                             extra_writable_paths: Vec::new(),
                             background: false,
+                            yield_ms: None,
                             process_action: Some("poll".to_string()),
                             process_id: Some(id),
+                            cursor: None,
                             justification: None,
                         })
                         .await
@@ -1660,7 +1713,7 @@ mod tests {
                     // While running the poll envelope reports status=running in
                     // stdout; once done, the captured tool output surfaces (here
                     // a structured error because no sandbox is wired).
-                    if !polled.stdout.contains("\"status\":\"running\"") {
+                    if !active_shell_output(&polled.stdout) {
                         return polled;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -1674,6 +1727,58 @@ mod tests {
             "poll should surface the captured task output verbatim: {}",
             out.stderr
         );
+    }
+
+    #[tokio::test]
+    async fn yield_keeps_foreground_execution_budget_and_returns_completion() {
+        use crate::sandbox::{test_util::MockSandbox, SandboxOutput};
+        let sandbox = MockSandbox::new(SandboxOutput {
+            stdout: b"done\n".to_vec(),
+            exit_code: Some(0),
+            ..Default::default()
+        });
+        let tool = BashExecTool::new().with_sandbox(sandbox.clone());
+        let session = crate::routing::session_key::SessionKey::ephemeral("bash-yield-budget");
+        SESSION_ID
+            .scope(session, async {
+                for (background, timeout_seconds) in [
+                    (false, None),
+                    (false, Some(600)),
+                    (true, None),
+                    (true, Some(u64::MAX)),
+                ] {
+                    let mut args = args_background("echo done");
+                    args.background = background;
+                    args.timeout_seconds = timeout_seconds;
+                    args.yield_ms = Some(1_000);
+                    let output = tool.call(args).await.unwrap();
+                    assert_eq!(output.stdout.trim(), "done", "{output:?}");
+                }
+            })
+            .await;
+        let actual: Vec<_> = sandbox
+            .calls
+            .lock()
+            .await
+            .iter()
+            .map(|cmd| cmd.timeout.unwrap().as_secs())
+            .collect();
+        assert_eq!(actual, [60, 170, 3600, 14400]);
+    }
+
+    #[tokio::test]
+    async fn yield_rejects_invalid_values_and_management_before_effects() {
+        let tool = BashExecTool::new();
+        for requested in [0, 10_001] {
+            let mut args = args_background("echo not run");
+            args.yield_ms = Some(requested);
+            let result = tool.call(args).await.unwrap();
+            assert!(!result.success && result.stderr.contains("yield_ms"));
+        }
+        let mut args = args_action("list", None);
+        args.yield_ms = Some(1);
+        let result = tool.call(args).await.unwrap();
+        assert!(!result.success && result.stderr.contains("yield_ms"));
     }
 
     /// A sandbox that writes into whatever live tail is in scope and then
@@ -1699,6 +1804,25 @@ mod tests {
                 exit_code: Some(0),
                 ..Default::default()
             })
+        }
+
+        async fn execute_controlled(
+            &self,
+            cmd: crate::sandbox::SandboxCommand,
+            control: &crate::sandbox::shell_lifecycle::ShellLifecycle,
+        ) -> std::result::Result<crate::sandbox::SandboxOutput, crate::sandbox::SandboxError>
+        {
+            control.spawn(|| Ok(()))?;
+            control.ready();
+            let result = tokio::select! {
+                result = self.execute(cmd) => result,
+                () = control.cancelled() => {
+                    control.reaped(true);
+                    return Err(crate::sandbox::SandboxError::ExecutionFailed("cancelled".into()));
+                }
+            };
+            control.reaped(false);
+            result
         }
     }
 
@@ -1726,8 +1850,10 @@ mod tests {
                         allow_subprocess: false,
                         extra_writable_paths: Vec::new(),
                         background: true,
+                        yield_ms: None,
                         process_action: None,
                         process_id: None,
+                        cursor: None,
                         justification: None,
                     })
                     .await
@@ -1741,8 +1867,12 @@ mod tests {
                 for _ in 0..400 {
                     let polled = tool.call(args_action("poll", Some(id))).await.unwrap();
                     let v: serde_json::Value = serde_json::from_str(&polled.stdout).unwrap();
-                    assert_eq!(v["status"], "running", "the job must still be blocked");
+                    assert!(matches!(v["status"].as_str(), Some("starting" | "running")));
                     if v.get("partial_stdout").is_some() {
+                        assert_eq!(
+                            v["status"], "running",
+                            "output must follow native readiness"
+                        );
                         partial = Some(v);
                         break;
                     }
@@ -1757,7 +1887,7 @@ mod tests {
                 release.notify_one();
                 for _ in 0..400 {
                     let polled = tool.call(args_action("poll", Some(id))).await.unwrap();
-                    if !polled.stdout.contains("\"status\":\"running\"") {
+                    if !active_shell_output(&polled.stdout) {
                         assert_eq!(polled.exit_code, 0);
                         assert_eq!(polled.stdout, "Finished\n");
                         assert!(!polled.stdout.contains("partial_stdout"));
@@ -1817,8 +1947,10 @@ mod tests {
                         allow_subprocess: false,
                         extra_writable_paths: Vec::new(),
                         background: true,
+                        yield_ms: None,
                         process_action: None,
                         process_id: None,
+                        cursor: None,
                         justification: None,
                     })
                     .await
@@ -1857,8 +1989,8 @@ mod tests {
                      reads as 'everything finished': {msg}"
                 );
                 assert!(
-                    msg.contains("NOT killed"),
-                    "the report must say the process survived: {msg}"
+                    msg.contains("This wait did not cancel the process"),
+                    "the report must distinguish ending the wait from cancelling the process: {msg}"
                 );
                 release.notify_one();
             })
@@ -1891,8 +2023,10 @@ mod tests {
                         allow_subprocess: false,
                         extra_writable_paths: Vec::new(),
                         background: true,
+                        yield_ms: None,
                         process_action: None,
                         process_id: None,
+                        cursor: None,
                         justification: None,
                     })
                     .await
@@ -1907,7 +2041,7 @@ mod tests {
                     v["message"]
                         .as_str()
                         .unwrap_or_default()
-                        .contains("Still running after waiting"),
+                        .contains("No terminal result after waiting"),
                     "an unscoped wait must report its own timeout, not a steer: {}",
                     out.stdout
                 );
@@ -2036,7 +2170,7 @@ mod tests {
 
                 let killed = tool.call(args_action("kill", Some(id))).await.unwrap();
                 assert!(
-                    killed.stdout.contains("\"status\":\"killed\""),
+                    killed.stdout.contains("\"status\":\"stopping\""),
                     "{killed:?}"
                 );
 
@@ -2124,8 +2258,10 @@ mod tests {
             allow_subprocess: false,
             extra_writable_paths: Vec::new(),
             background: true,
+            yield_ms: None,
             process_action: None,
             process_id: None,
+            cursor: None,
             justification: None,
         }
     }
@@ -2158,8 +2294,10 @@ mod tests {
                         allow_subprocess: false,
                         extra_writable_paths: Vec::new(),
                         background: true,
+                        yield_ms: None,
                         process_action: None,
                         process_id: None,
+                        cursor: None,
                         justification: None,
                     })
                     .await
@@ -2169,7 +2307,7 @@ mod tests {
                 // Poll until the detached task has invoked the sandbox + finished.
                 for _ in 0..200 {
                     let polled = tool.call(args_action("poll", Some(id))).await.unwrap();
-                    if !polled.stdout.contains("\"status\":\"running\"") {
+                    if !active_shell_output(&polled.stdout) {
                         break;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(5)).await;

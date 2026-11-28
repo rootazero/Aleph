@@ -709,7 +709,9 @@ async fn execute_chat_run_cancels_at_ticket_handoff_and_while_waiting_for_a_perm
     let wait = std::time::Duration::from_secs(3);
 
     for (run_id, block_registration) in [("exact-handoff", true), ("exact-parked", false)] {
-        let _ticket = busy_queue::register(&key, 8, run_id).unwrap();
+        let request = gate_test_request(&session, run_id);
+        let _ticket =
+            busy_queue::register_run(&request.session_key, &request.metadata, 8, run_id).unwrap();
         let registration_lock = if block_registration {
             Some(engine.active_runs.write().await)
         } else {
@@ -721,7 +723,6 @@ async fn execute_chat_run_cancels_at_ticket_handoff_and_while_waiting_for_a_perm
             let engine = engine.clone();
             let agent = agent.clone();
             let emitter = emitter.clone();
-            let request = gate_test_request(&session, run_id);
             let cancellation = cancellation.clone();
             async move {
                 engine

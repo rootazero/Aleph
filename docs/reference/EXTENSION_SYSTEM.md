@@ -13,6 +13,10 @@ Aleph's extension system allows third-party tools via:
 
 **Location**: `src/extension/`
 
+发现、暂存安装、设置校验和重载共享 `AdapterRegistry` 的规范化声明。当前支持的 Claude Code、Pi、DeepSeek Harness 和 Aleph 包格式，以及实例选择与导入诊断，见[插件系统](PLUGIN_SYSTEM.md)。
+
+Discovery, staged installation, settings validation, and reload share the normalized `AdapterRegistry` declarations. The [Plugin System reference](PLUGIN_SYSTEM.md) covers current Claude Code, Pi, DeepSeek Harness, and Aleph package formats, instance selection, and import diagnostics.
+
 ---
 
 ## Architecture
@@ -428,14 +432,11 @@ impl AlephToolDyn for SkillTool {
 
 The V2 SDK introduces enhanced manifest format, hook system, and prompt scopes for building powerful extensions.
 
-### Manifest Format (aleph_plugin.toml)
+### 原生 TOML 清单示例 / Native TOML manifest example
 
-V2 plugins use TOML format for better readability and Rust ecosystem alignment. The manifest priority order is:
+下例使用仍受支持的 `aleph.plugin.toml` 原生布局。当前格式与优先级见[插件系统](PLUGIN_SYSTEM.md)。
 
-1. `aleph_plugin.toml` (V2 TOML format) - **Preferred**
-2. `aleph_plugin.json` (V2 JSON format)
-3. `package.json` with `alephPlugin` section
-4. Legacy manifest formats
+This example uses the supported native `aleph.plugin.toml` layout. See the [Plugin System reference](PLUGIN_SYSTEM.md) for current formats and precedence.
 
 #### Complete Example
 

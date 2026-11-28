@@ -16,7 +16,7 @@
 
 ## Aleph 是什么？
 
-Aleph 是一款运行在**你自己设备上**的自托管个人 AI 助手。它以**原生桌面 App** 的形式发布，支持 macOS、Windows、Linux —— 下载 `.dmg` / `.msi` / `.deb`，双击安装，一分钟之内就有一个会话式、多模态的 AI 助手常驻在你的系统托盘里。
+Aleph 是一款运行在**你自己设备上**的自托管个人 AI 助手。它以**原生桌面 App** 的形式发布，支持 macOS、Windows、Linux —— 下载并解压桌面整包，打开应用，一分钟之内就有一个会话式、多模态的 AI 助手常驻在你的系统托盘里。
 
 桌面 App 内置 `aleph-server`（你的私有 AI 大脑）。因为大脑一直在线，Aleph 也能从你已经在用的渠道找到你 —— Telegram、Discord、Slack、WhatsApp、iMessage、Matrix、IRC、邮件，以及十几种其他通道 —— 让你在手机、手表、任何浏览器上都能继续和它对话。
 
@@ -98,7 +98,7 @@ Aleph 最初是一个 headless server。我们围绕真实的桌面 App 重新�
 ```
                 ┌─────────────────────────────────────────┐
                 │      🖥  桌面宿主（WebView 外壳）          │
-                │  遗留 Tauri · 目标形态 NSH                │
+                │  NSH WebView 宿主                        │
                 │  聊天面板 · 托盘 · 热键 · 系统通知         │
                 └──────────────────┬──────────────────────┘
                                    │  JSON-RPC（本地）
@@ -126,25 +126,19 @@ Aleph 最初是一个 headless server。我们围绕真实的桌面 App 重新�
 
 完整设计：[docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) · [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md)
 
-> **两个桌面宿主，一份 Panel。** Panel UI 只有一份代码（`interfaces/webchat` → Leptos + WASM），
-> 由 `aleph-server` 自己提供服务；桌面宿主只是包在外面的 WebView 外壳，而且正在迁移中：
-> 目前发布的安装包仍由遗留 Tauri 宿主（`desktop/shell`）构建，目标形态是 NSH 宿主
-> （`desktop/nsh-shell`）。切换由门禁控制 —— 见
-> [Phase 11 切换计划](docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md)。
+> NSH 桌面宿主（`desktop/nsh-shell`）打开由 `aleph-server` 提供的同一份 Leptos/WASM Panel，浏览器也使用该界面。[桌面宿主](docs/reference/DESKTOP_SHELL.md)
 
 ---
 
 ## 安装
 
-从 [最新 release](https://github.com/rootazero/Aleph/releases/latest) 下载你所在平台的安装包：
+| 平台 | NSH 整包 |
+|---|---|
+| macOS 14+，Apple Silicon | `Aleph-<version>-macos-aarch64.tar.gz` |
+| Windows x64 | `Aleph-<version>-windows-x86_64.zip` |
+| Linux x64 | `Aleph-<version>-linux-x86_64.tar.gz` |
 
-| 平台 | 安装包 |
-|------|--------|
-| macOS | `.dmg`（Apple Silicon + Intel） |
-| Windows | `.msi` |
-| Linux | `.deb` · `.AppImage` |
-
-App 已内置 `aleph-server`。首次启动会拉起守护进程、注册开机自启，并常驻系统托盘。点托盘图标或按下全局热键即可呼出聊天面板。
+从 [GitHub Releases](https://github.com/rootazero/Aleph/releases) 下载已发布的整包，完整解压后打开 Aleph。Local 会启动包内服务，Remote 连接已有 Gateway。服务器或 NAS 可以单独安装 `aleph-server`。[切换与回退](docs/reference/RELEASE.md)
 
 > 需要 Node.js / Python 运行时的技能：**设置 → Runtime** 一次性引导安装。
 
@@ -179,7 +173,7 @@ just shell-dev       # 以开发模式启动桌面 App（自动构建 WASM）
 | 命令 | 说明 |
 |------|------|
 | `just shell-dev` | 以开发模式启动桌面 App |
-| `just shell-build` | 构建已签名的桌面安装包（`.dmg` / `.msi` / `.deb`） |
+| `just shell-build` | 构建本机 NSH 桌面整包 |
 | `just dev` | 仅启动 `aleph-server`（headless，调试模式） |
 | `just build` | Release 构建（WASM + Server） |
 | `just test-all` | 跑全部测试（core + desktop + proptest） |
@@ -214,7 +208,6 @@ Aleph/
 │   ├── extension/       # WASM + Node.js 插件系统
 │   └── ...              # session · approval · scheduler · daemon · ...
 ├── desktop/
-│   ├── shell/           # 遗留 Tauri 桌面宿主（托盘、热键、通知 ...）
 │   ├── nsh-shell/       # 目标形态 NSH 桌面宿主（窗口、托盘、热键、面板桥）
 │   ├── shared/          # DesktopCapability trait + IPC 协议
 │   ├── macos/ + bridge/ # macOS 原生（AppKit、Vision、Swift bridge）

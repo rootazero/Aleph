@@ -1,196 +1,226 @@
-//! Session lifecycle: ensure / prompt / cancel / control RPCs / shutdown.
+//! Native session admission, operations and retirement.
 
-use tracing::{debug, info, warn};
+use std::time::Duration;
 
-use super::{AcpAdapterManager, SessionEntry, SessionKey};
-use crate::acp::adapter::AdapterMode;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, warn};
+
+use super::{session_closed, AcpAdapterManager, SessionEntry, SessionKey, SlotReservation};
+use crate::acp::adapter::{AcpAdapter, AdapterMode};
 use crate::acp::protocol::{AcpErrorCode, AcpOperationError};
-use crate::acp::session::CancelDispatch;
-use crate::acp::AcpChunkCallback;
-use crate::error::Result;
+use crate::acp::session::{AcpSession, CancelDispatch};
+use crate::acp::{AcpChunkCallback, AcpSessionEvent};
+use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 
+const CANCEL_GRACE: Duration = Duration::from_millis(100);
+const REAP_DEADLINE: Duration = Duration::from_secs(2);
+
 impl AcpAdapterManager {
-    /// Ensure a live ACP session exists for the given `NativeAcp` harness + cwd.
-    ///
-    /// - If a session exists and is alive, this is a no-op.
-    /// - If a session exists but is dead, it is removed and respawned.
-    /// - If no session exists, a new one is spawned.
-    ///
-    /// Only meaningful for `NativeAcp` harnesses; oneshot harnesses don't need sessions.
-    ///
-    /// Race safety: after spawning (which happens without holding the session lock),
-    /// we re-check whether another task already inserted a live session for the same
-    /// key. If so, we drop our freshly spawned session instead of overwriting.
+    /// Start the native connection. An existing remote association is loaded
+    /// here. A first prompt normally establishes a new remote session ID.
     pub async fn ensure_session(&self, harness_id: &str, cwd: &str) -> Result<()> {
         self.ensure_session_named(harness_id, cwd, None).await
     }
 
-    /// Like `ensure_session`, but with an explicit session name so callers
-    /// can keep multiple parallel sessions in the same repo
-    /// (mirrors acpx's `-s backend` / `-s frontend`). `None` is the
-    /// default/unnamed session.
     pub async fn ensure_session_named(
         &self,
         harness_id: &str,
         cwd: &str,
         session_name: Option<&str>,
     ) -> Result<()> {
-        let _ = self
-            .acquire_live_entry(harness_id, cwd, session_name)
-            .await?;
+        let adapter = self.admitted_adapter(harness_id).await?;
+        require_mode(&*adapter, harness_id, AdapterMode::NativeAcp)?;
+        let key = SessionKey::with_name(harness_id, cwd, session_name);
+        self.acquire_owner(key, adapter, false, false, None).await?;
         Ok(())
     }
 
-    /// Look up or spawn a live `SessionEntry` for the given harness + cwd
-    /// + optional session name.
-    ///
-    /// Race-safe: if two tasks call simultaneously, one wins the spawn and
-    /// the other's spawned session is killed. A dead/errored entry is
-    /// evicted and replaced with a fresh `SessionEntry` (new Arc + new
-    /// cancel handle), so callers always get a live session.
-    ///
-    /// Returned entry's inner session mutex is NOT held — caller may lock it.
-    async fn acquire_live_entry(
+    pub(super) async fn acquire_owner(
         &self,
-        harness_id: &str,
-        cwd: &str,
-        session_name: Option<&str>,
-    ) -> Result<SessionEntry> {
-        let key = SessionKey::with_name(harness_id, cwd, session_name);
-
-        // Fast path: clone the entry under a READ lock, then run the liveness
-        // probe WITHOUT holding the map lock. Holding `sessions.write()` across
-        // `entry.session.lock().await` would pin the global sessions lock for
-        // the entire duration of any in-flight prompt that owns the per-session
-        // mutex (up to the request timeout), stalling every other harness/cwd.
-        let existing = { self.sessions.read().await.get(&key).cloned() };
-        if let Some(entry) = existing {
-            let is_live = {
-                let mut s = entry.session.lock().await;
-                s.is_alive() && s.state() != crate::acp::protocol::AcpSessionState::Error
+        key: SessionKey,
+        adapter: Arc<dyn AcpAdapter>,
+        establish_id: bool,
+        replace: bool,
+        restore_epoch: Option<&Arc<CancellationToken>>,
+    ) -> Result<Arc<SessionEntry>> {
+        let reservation = {
+            let mut state = self.state();
+            Self::check_registration(&state, &key.harness_id, &adapter)?;
+            if restore_epoch.is_some_and(|expected| {
+                !state
+                    .slots
+                    .get(&key)
+                    .is_some_and(|slot| Arc::ptr_eq(&slot.epoch, expected))
+            }) {
+                return Err(session_closed());
+            }
+            let slot = state.slots.entry(key.clone()).or_default();
+            if slot.retiring {
+                return Err(session_closed());
+            }
+            if !replace {
+                let reusable = slot.live.as_ref().filter(|entry| {
+                    entry.healthy() && (!establish_id || entry.cancel.has_session_id())
+                });
+                if let Some(entry) = reusable {
+                    return Ok(Arc::clone(entry));
+                }
+            }
+            let event = if replace {
+                slot.withdraw();
+                forget_association(slot, &key)
+            } else {
+                None
             };
-            if is_live {
+            let reservation = self.reservation(&key, slot);
+            if let Some(event) = event {
+                state.publish(Some(event));
+            }
+            reservation
+        };
+
+        // The task owns the transition even if the request is dropped. The
+        // reservation keeps the same gate visible to close, update and stop.
+        let manager = self.clone();
+        tokio::spawn(async move {
+            manager
+                .acquire_reserved(reservation, adapter, establish_id, replace)
+                .await
+        })
+        .await
+        .map_err(transition_task_error)?
+    }
+
+    async fn acquire_reserved(
+        &self,
+        reservation: SlotReservation,
+        adapter: Arc<dyn AcpAdapter>,
+        establish_id: bool,
+        replace: bool,
+    ) -> Result<Arc<SessionEntry>> {
+        let key = &reservation.key;
+        let _guard = reservation.transition.lock().await;
+        let epoch = if replace {
+            self.retire_reserved(&reservation)
+                .await?
+                .ok_or_else(session_closed)?
+        } else {
+            Arc::clone(&reservation.epoch)
+        };
+        let (existing, saved_id) = {
+            let state = self.state();
+            Self::check_registration(&state, &key.harness_id, &adapter)?;
+            if epoch.is_cancelled() {
+                return Err(session_closed());
+            }
+            let slot = &state.slots[key];
+            (slot.live.clone(), slot.saved_id.clone())
+        };
+        let cwd = key.cwd.to_string_lossy();
+        let config = adapter.build_native_config(Some(&cwd));
+        let timeout = config.timeout;
+
+        if let Some(entry) = existing {
+            if entry.healthy() {
+                if establish_id && !entry.cancel.has_session_id() {
+                    let mut session = entry.lock_for_operation().await?;
+                    let result = tokio::select! {
+                        biased;
+                        () = epoch.cancelled() => return Err(session_closed()),
+                        result = session.create_acp_session(&cwd, timeout) => result,
+                    };
+                    match result {
+                        Ok(id) => self.publish_owner(key, &adapter, &epoch, &entry, Some(id))?,
+                        Err(error) => {
+                            entry.closed.cancel();
+                            return Err(error);
+                        }
+                    }
+                }
                 return Ok(entry);
             }
-            // Dead — evict, but only if the slot still holds THIS entry; another
-            // task may have already respawned a replacement. Notify outside the
-            // lock so the (blocking) persistence hook never runs under it.
-            let evicted = {
-                let mut sessions = self.sessions.write().await;
-                match sessions.get(&key) {
-                    Some(cur) if Arc::ptr_eq(&cur.session, &entry.session) => {
-                        sessions.remove(&key);
-                        true
-                    }
-                    _ => false,
+            entry.closed.cancel();
+            retire_owner(&entry).await?;
+            let mut state = self.state();
+            state.slots.get_mut(key).expect("reserved slot").live = None;
+            state.publish(None);
+        }
+
+        if epoch.is_cancelled() {
+            return Err(session_closed());
+        }
+        let mut session = AcpSession::spawn(adapter.id(), &config).await?;
+        let result = tokio::select! {
+            biased;
+            () = epoch.cancelled() => Err(session_closed()),
+            result = async {
+                session.initialize(timeout).await?;
+                match &saved_id {
+                    Some(id) => session.load_acp_session(id, &cwd, timeout).await.map(Some),
+                    None if establish_id => session.create_acp_session(&cwd, timeout).await.map(Some),
+                    None => Ok(None),
                 }
-            };
-            if evicted {
-                warn!(
-                    harness_id,
-                    "ACP session died or entered error state, respawning"
-                );
-                self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                    harness_id: harness_id.to_string(),
-                    cwd: key.cwd.to_string_lossy().into_owned(),
-                    session_name: session_name.map(str::to_string),
-                })
-                .await;
-            }
-        }
-
-        // Slow path: spawn outside any lock, then double-check.
-        let harness = {
-            let adapters = self.adapters.read().await;
-            Arc::clone(adapters.get(harness_id).ok_or_else(|| {
-                AcpOperationError::new(
-                    AcpErrorCode::HarnessNotFound,
-                    format!("Unknown ACP harness: '{harness_id}'"),
-                )
-            })?)
+            } => result,
         };
-        let mut new_session = harness.spawn_session(Some(cwd)).await?;
+        let entry = Arc::new(SessionEntry::new(session, timeout));
+        let error = match result {
+            Ok(id) => match self.publish_owner(key, &adapter, &epoch, &entry, id) {
+                Ok(()) => return Ok(entry),
+                Err(error) => error,
+            },
+            Err(error) => error,
+        };
 
-        let mut sessions = self.sessions.write().await;
-        if let Some(existing) = sessions.get(&key).cloned() {
-            // Race lost — drop our extra session.
-            debug!(
-                harness_id,
-                "ACP session race: another task spawned first, dropping ours"
-            );
-            new_session.kill().await;
-            return Ok(existing);
+        entry.closed.cancel();
+        let reap = retire_owner(&entry).await;
+        let mut state = self.state();
+        let slot = state.slots.get_mut(key).expect("reserved slot");
+        if let Err(reap_error) = reap {
+            // Keep ownership until an explicit or subsequent retirement can
+            // join this child. A replacement cannot start while it remains.
+            warn!(error = %reap_error, harness = %key.harness_id, "ACP startup cleanup failed");
+            slot.live = Some(entry);
         }
-
-        info!(harness_id, "ACP session started");
-        let entry = SessionEntry::new(new_session);
-        sessions.insert(key, entry.clone());
-        Ok(entry)
+        if !epoch.is_cancelled() && saved_id.is_some() {
+            slot.load_failure = Some(error.to_string());
+            state.publish(None);
+        }
+        Err(error)
     }
 
-    /// Look up an existing `SessionEntry` WITHOUT spawning a new subprocess.
-    ///
-    /// Returns `Ok(Some(entry))` if a live entry exists in the pool,
-    /// `Ok(None)` if no entry is registered for this (harness, cwd, name)
-    /// tuple, and an error only if the pool lookup itself fails.
-    ///
-    /// `set_mode` / `set_model` / `set_config_option` / `authenticate` use
-    /// this instead of `acquire_live_entry` so that a missing session does
-    /// NOT silently leak a child process that the next call to
-    /// `require_session_id` is going to reject anyway (see ACP-01).
-    async fn lookup_existing_entry(
+    fn publish_owner(
         &self,
-        harness_id: &str,
-        cwd: &str,
-        session_name: Option<&str>,
-    ) -> Result<Option<SessionEntry>> {
-        let key = SessionKey::with_name(harness_id, cwd, session_name);
-        let existing = self.sessions.read().await.get(&key).cloned();
-        let Some(entry) = existing else {
-            return Ok(None);
-        };
-        let is_live = {
-            let mut s = entry.session.lock().await;
-            s.is_alive() && s.state() != crate::acp::protocol::AcpSessionState::Error
-        };
-        if !is_live {
-            // Evict the dead entry so the next caller (or a `prompt_named`
-            // with `reuse_session: false`) starts cleanly. Match the eviction
-            // policy of `acquire_live_entry` AND mirror its Removed emit so
-            // the panel sees a consistent lifecycle when set_mode / set_model /
-            // set_config_option / authenticate find a dead pool entry
-            // (ACP-R4-04).
-            let mut sessions = self.sessions.write().await;
-            let evicted = match sessions.get(&key) {
-                Some(cur) if Arc::ptr_eq(&cur.session, &entry.session) => {
-                    sessions.remove(&key);
-                    true
-                }
-                _ => false,
-            };
-            drop(sessions);
-            if evicted {
-                self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                    harness_id: harness_id.to_string(),
-                    cwd: key.cwd.to_string_lossy().into_owned(),
-                    session_name: session_name.map(str::to_string),
-                })
-                .await;
-            }
-            return Ok(None);
+        key: &SessionKey,
+        adapter: &Arc<dyn AcpAdapter>,
+        epoch: &Arc<CancellationToken>,
+        entry: &Arc<SessionEntry>,
+        id: Option<String>,
+    ) -> Result<()> {
+        let mut state = self.state();
+        Self::check_registration(&state, &key.harness_id, adapter)?;
+        let slot = state.slots.get_mut(key).expect("reserved slot");
+        if epoch.is_cancelled() {
+            return Err(session_closed());
         }
-        Ok(Some(entry))
+        let event = id.and_then(|id| {
+            if slot.saved_id.as_ref() == Some(&id) {
+                return None;
+            }
+            slot.saved_id = Some(id.clone());
+            Some(AcpSessionEvent::Created {
+                harness_id: key.harness_id.clone(),
+                acp_session_id: id,
+                cwd: key.cwd.to_string_lossy().into_owned(),
+                session_name: key.session_name_opt().map(str::to_owned),
+            })
+        });
+        slot.live = Some(Arc::clone(entry));
+        slot.load_failure = None;
+        state.publish(event);
+        Ok(())
     }
 
-    /// Send a prompt to the specified harness, using the appropriate mode.
-    ///
-    /// - **`NativeAcp`**: Extracts session from pool (brief lock), uses it, re-inserts if alive.
-    /// - **Oneshot**: Spawns a fresh process, waits for output.
-    ///
-    /// `mode`: Override the harness default mode. `None` uses `harness.mode()`.
-    /// `reuse_session`: If `false`, kills any existing session and starts fresh.
-    /// `on_chunk`: Streaming callback (wired in Task 7).
     pub async fn prompt(
         &self,
         harness_id: &str,
@@ -212,8 +242,6 @@ impl AcpAdapterManager {
         .await
     }
 
-    /// Like `prompt`, but with an explicit session name. `None` is the
-    /// default/unnamed session and is equivalent to `prompt()`.
     #[allow(clippy::too_many_arguments)]
     pub async fn prompt_named(
         &self,
@@ -225,215 +253,46 @@ impl AcpAdapterManager {
         reuse_session: bool,
         on_chunk: Option<AcpChunkCallback>,
     ) -> Result<String> {
-        // Resolve effective mode and validate
-        let (effective_mode, timeout) = {
-            let adapters = self.adapters.read().await;
-            let harness = adapters.get(harness_id).ok_or_else(|| {
-                AcpOperationError::new(
-                    AcpErrorCode::HarnessNotFound,
-                    format!("Unknown ACP harness: '{harness_id}'"),
-                )
-            })?;
-
-            let effective = mode.unwrap_or_else(|| harness.mode());
-
-            // Validate mode is supported
-            if !harness.supported_modes().contains(&effective) {
-                return Err(AcpOperationError::new(
-                    AcpErrorCode::ModeUnsupported,
-                    format!("Harness '{harness_id}' does not support {effective:?} mode"),
-                )
-                .into());
-            }
-
-            let timeout = harness.build_config(Some(cwd)).timeout;
-            (effective, timeout)
-        };
-        // harnesses read lock dropped here
-
-        match effective_mode {
+        let adapter = self.admitted_adapter(harness_id).await?;
+        let mode = mode.unwrap_or_else(|| adapter.mode());
+        require_mode(&*adapter, harness_id, mode)?;
+        match mode {
             AdapterMode::NativeAcp => {
                 let key = SessionKey::with_name(harness_id, cwd, session_name);
-
-                // If not reusing, evict any existing session first so the
-                // next acquire_live_entry spawns a fresh one.
-                if !reuse_session {
-                    // Bind the removed entry first so the `sessions` write guard
-                    // is dropped at the `;` — an `if let` scrutinee would keep it
-                    // alive across `lock()`/`kill()` (edition-2021 temporary
-                    // lifetime), pinning the whole map while we kill the child.
-                    let old = self.sessions.write().await.remove(&key);
-                    if let Some(old) = old {
-                        let mut s = old.session.lock().await;
-                        s.kill().await;
-                    }
-                }
-
                 let entry = self
-                    .acquire_live_entry(harness_id, cwd, session_name)
+                    .acquire_owner(key, adapter, true, !reuse_session, None)
                     .await?;
-
-                // Lock the inner mutex — concurrent prompts to the same
-                // (harness, cwd) queue here. The cancel handle (held outside
-                // this lock by the manager) can still fire `session/cancel`.
-                let mut session = entry.session.lock().await;
-
-                let result = session
-                    .prompt(prompt_text, cwd, timeout, on_chunk.as_ref())
-                    .await;
-
-                match result {
-                    Ok((text, _notifications)) => {
-                        // Read liveness + id, then release the per-session mutex
-                        // BEFORE emitting — the persistence hook performs blocking
-                        // disk I/O and must never run under the session lock
-                        // (matches the Removed paths above and the Err arm below).
-                        let alive = session.is_alive();
-                        let sid = if alive {
-                            session.acp_session_id()
-                        } else {
-                            None
-                        };
-                        drop(session);
-                        if alive {
-                            if let Some(sid) = sid {
-                                // Idempotent Created: ensure_session can't fire
-                                // it because session_id is None at spawn time.
-                                self.emit_persistence_event(crate::acp::AcpSessionEvent::Created {
-                                    harness_id: harness_id.to_string(),
-                                    acp_session_id: sid,
-                                    cwd: key.cwd.to_string_lossy().into_owned(),
-                                    session_name: session_name.map(str::to_string),
-                                })
-                                .await;
-                            }
-                        } else {
-                            // Process died — evict the entry only if it is still
-                            // the same session we locked (a concurrent caller may
-                            // have already respawned a replacement).
-                            if self.remove_if_same(&key, &entry).await {
-                                self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                                    harness_id: harness_id.to_string(),
-                                    cwd: key.cwd.to_string_lossy().into_owned(),
-                                    session_name: session_name.map(str::to_string),
-                                })
-                                .await;
-                                warn!(harness_id, "ACP session died after prompt, evicted");
-                            }
-                        }
-                        Ok(text)
-                    }
-                    Err(e) => {
-                        // Only kill + evict on retryable errors
-                        // (`SessionDead`, `Timeout`, `SpawnFailed`). Application-
-                        // level rejections (`ModeUnsupported`,
-                        // `SessionControlUnsupported`, `AuthRequired`, ...) are
-                        // NOT a sign the subprocess is broken — leave it alive
-                        // so the next retry can succeed without respawning.
-                        // The `From<AcpOperationError> for AlephError` impl
-                        // preserves the `is_retryable()` bit on
-                        // `AlephError::AcpError { retryable, .. }`, so we
-                        // read it back here without downcasting. See ACP-04.
-                        let retryable = match &e {
-                            crate::error::AlephError::AcpError { retryable, .. } => *retryable,
-                            _ => false,
-                        };
-                        if retryable && session.is_alive() {
-                            session.kill().await;
-                        }
-                        drop(session);
-                        // Only remove the entry if it is still the same session
-                        // we used; a concurrent caller may have respawned it.
-                        if retryable && self.remove_if_same(&key, &entry).await {
-                            self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                                harness_id: harness_id.to_string(),
-                                cwd: key.cwd.to_string_lossy().into_owned(),
-                                session_name: session_name.map(str::to_string),
-                            })
-                            .await;
-                        }
-                        Err(e)
-                    }
+                let mut session = entry.lock_for_operation().await?;
+                tokio::select! {
+                    biased;
+                    () = entry.abort.cancelled() => Err(session_closed()),
+                    result = session.prompt(prompt_text, cwd, entry.timeout, on_chunk.as_ref()) =>
+                        result.map(|(text, _)| text),
                 }
             }
-            AdapterMode::Oneshot => {
-                // Clone Arc ref under brief read lock; execute_oneshot may take minutes.
-                let harness = {
-                    let adapters = self.adapters.read().await;
-                    Arc::clone(adapters.get(harness_id).ok_or_else(|| {
-                        AcpOperationError::new(
-                            AcpErrorCode::HarnessNotFound,
-                            format!("Unknown ACP harness: '{harness_id}'"),
-                        )
-                    })?)
-                };
-                harness.execute_oneshot(prompt_text, cwd).await
-            }
+            AdapterMode::Oneshot => adapter.execute_oneshot(prompt_text, cwd).await,
         }
     }
 
-    /// Cooperatively cancel the in-flight prompt on the specified harness + cwd.
-    ///
-    /// Uses the pre-cloned `CancelHandle` so the cancel notification can
-    /// race ahead of an in-flight prompt that currently holds the
-    /// per-session mutex. The agent will respond with a `stopReason`
-    /// notification, the prompt resolves, and the next caller sees the
-    /// session in `Idle` state again.
-    ///
-    /// Returns `SessionDead` if no entry exists for this harness/cwd.
+    /// Cancel the captured peer without queuing behind its active prompt.
     pub async fn cancel(&self, harness_id: &str, cwd: &str) -> Result<()> {
         self.cancel_named(harness_id, cwd, None).await.map(|_| ())
     }
 
-    /// Like `cancel`, but targets a specific named session.
     pub async fn cancel_named(
         &self,
         harness_id: &str,
         cwd: &str,
         session_name: Option<&str>,
     ) -> Result<CancelDispatch> {
-        let key = SessionKey::with_name(harness_id, cwd, session_name);
-        let entry = self
-            .sessions
-            .read()
-            .await
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| {
-                AcpOperationError::new(
-                    AcpErrorCode::SessionDead,
-                    format!(
-                        "No active ACP session for '{}' in '{}'{}",
-                        harness_id,
-                        cwd,
-                        session_name
-                            .map(|n| format!(" (session '{n}')"))
-                            .unwrap_or_default()
-                    ),
-                )
-            })?;
-        entry.cancel.send_cancel().await
-    }
-
-    /// Remove `key` from the session map only if the stored entry still refers
-    /// to the same `SessionEntry` we used. This prevents a concurrent
-    /// `acquire_live_entry` respawn from being evicted after we dropped the
-    /// per-session lock.
-    async fn remove_if_same(&self, key: &SessionKey, entry: &SessionEntry) -> bool {
-        let mut sessions = self.sessions.write().await;
-        match sessions.get(key) {
-            Some(cur) if Arc::ptr_eq(&cur.session, &entry.session) => {
-                sessions.remove(key);
-                true
-            }
-            _ => false,
+        let entry = self.current_owner(harness_id, cwd, session_name)?;
+        tokio::select! {
+            biased;
+            () = entry.closed.cancelled() => Err(session_closed()),
+            result = entry.cancel.send_cancel() => result,
         }
     }
 
-    /// Run a session-control RPC against the existing session for
-    /// (harness, cwd). Returns `SessionDead` if the session is gone.
-    /// Inner errors are normalized to `SessionControlUnsupported` when
-    /// the adapter doesn't implement the method.
     pub async fn set_mode(
         &self,
         harness_id: &str,
@@ -441,11 +300,13 @@ impl AcpAdapterManager {
         session_name: Option<&str>,
         mode_id: &str,
     ) -> Result<()> {
-        let (entry, timeout) = self
-            .entry_and_timeout(harness_id, cwd, session_name)
-            .await?;
-        let mut s = entry.session.lock().await;
-        s.set_mode(mode_id, timeout).await
+        let entry = self.current_owner(harness_id, cwd, session_name)?;
+        let mut session = entry.lock_for_operation().await?;
+        tokio::select! {
+            biased;
+            () = entry.abort.cancelled() => Err(session_closed()),
+            result = session.set_mode(mode_id, entry.timeout) => result,
+        }
     }
 
     pub async fn set_model(
@@ -455,11 +316,13 @@ impl AcpAdapterManager {
         session_name: Option<&str>,
         model_id: &str,
     ) -> Result<()> {
-        let (entry, timeout) = self
-            .entry_and_timeout(harness_id, cwd, session_name)
-            .await?;
-        let mut s = entry.session.lock().await;
-        s.set_model(model_id, timeout).await
+        let entry = self.current_owner(harness_id, cwd, session_name)?;
+        let mut session = entry.lock_for_operation().await?;
+        tokio::select! {
+            biased;
+            () = entry.abort.cancelled() => Err(session_closed()),
+            result = session.set_model(model_id, entry.timeout) => result,
+        }
     }
 
     pub async fn set_config_option(
@@ -470,15 +333,15 @@ impl AcpAdapterManager {
         key: &str,
         value: serde_json::Value,
     ) -> Result<()> {
-        let (entry, timeout) = self
-            .entry_and_timeout(harness_id, cwd, session_name)
-            .await?;
-        let mut s = entry.session.lock().await;
-        s.set_config_option(key, value, timeout).await
+        let entry = self.current_owner(harness_id, cwd, session_name)?;
+        let mut session = entry.lock_for_operation().await?;
+        tokio::select! {
+            biased;
+            () = entry.abort.cancelled() => Err(session_closed()),
+            result = session.set_config_option(key, value, entry.timeout) => result,
+        }
     }
 
-    /// Authenticate the existing session. `credential` is opaque — typically
-    /// pulled from env `ACP_AUTH_<METHOD_ID>` by the caller.
     pub async fn authenticate(
         &self,
         harness_id: &str,
@@ -487,52 +350,30 @@ impl AcpAdapterManager {
         method_id: &str,
         credential: &str,
     ) -> Result<()> {
-        let (entry, timeout) = self
-            .entry_and_timeout(harness_id, cwd, session_name)
-            .await?;
-        let mut s = entry.session.lock().await;
-        s.authenticate(method_id, credential, timeout).await
+        let entry = self.current_owner(harness_id, cwd, session_name)?;
+        let mut session = entry.lock_for_operation().await?;
+        tokio::select! {
+            biased;
+            () = entry.abort.cancelled() => Err(session_closed()),
+            result = session.authenticate(method_id, credential, entry.timeout) => result,
+        }
     }
 
-    async fn entry_and_timeout(
+    fn current_owner(
         &self,
         harness_id: &str,
         cwd: &str,
         session_name: Option<&str>,
-    ) -> Result<(SessionEntry, std::time::Duration)> {
-        let timeout = {
-            let adapters = self.adapters.read().await;
-            let harness = adapters.get(harness_id).ok_or_else(|| {
-                AcpOperationError::new(
-                    AcpErrorCode::HarnessNotFound,
-                    format!("Unknown ACP harness: '{harness_id}'"),
-                )
-            })?;
-            harness.build_config(Some(cwd)).timeout
-        };
-        // Use `lookup_existing_entry` (NOT `acquire_live_entry`) so a missing
-        // session returns `Ok(None)` instead of silently spawning a fresh
-        // subprocess that the next `require_session_id` is going to reject.
-        // See ACP-01.
-        let entry = self
-            .lookup_existing_entry(harness_id, cwd, session_name)
-            .await?
-            .ok_or_else(|| {
-                AcpOperationError::new(
-                    AcpErrorCode::SessionDead,
-                    format!(
-                        "ACP session for harness '{harness_id}' (cwd '{cwd}') was not started; \
-                         call prompt_named first"
-                    ),
-                )
-            })?;
-        Ok((entry, timeout))
+    ) -> Result<Arc<SessionEntry>> {
+        let key = SessionKey::with_name(harness_id, cwd, session_name);
+        self.state()
+            .slots
+            .get(&key)
+            .and_then(|slot| slot.live.clone())
+            .ok_or_else(session_closed)
     }
 
-    /// Shut down a single named session. Cancels any in-flight prompt,
-    /// removes the entry from the pool, kills the subprocess, then emits
-    /// `Removed` so panels and persistence stay in sync. Idempotent — no
-    /// error when the session is already gone.
+    /// Withdraw and close the owner and saved association for this key.
     pub async fn shutdown_named(
         &self,
         harness_id: &str,
@@ -540,96 +381,162 @@ impl AcpAdapterManager {
         session_name: Option<&str>,
     ) -> Result<()> {
         let key = SessionKey::with_name(harness_id, cwd, session_name);
-
-        // Fire cancel first so the agent gets a chance to flush partial
-        // output before we evict. Best-effort — a missing session is fine.
-        let cancel_handle = self
-            .sessions
-            .read()
-            .await
-            .get(&key)
-            .map(|entry| entry.cancel.clone());
-        if let Some(handle) = cancel_handle {
-            // Best-effort pre-fire so the harness can shut down its turn
-            // cleanly, but log if the cancel channel is already closed or
-            // the receiver has been dropped — the caller otherwise sees
-            // `Ok(())` while the agent keeps running, which is exactly
-            // the silent failure that makes "why won't it stop?" tickets
-            // undebuggable.
-            if let Err(e) = handle.send_cancel().await {
-                tracing::warn!(
-                    error = %e,
-                    "shutdown_named: pre-fire cancel failed; agent may not stop promptly"
-                );
+        let reservation = {
+            let mut state = self.state();
+            let Some(slot) = state.slots.get_mut(&key) else {
+                return Ok(());
+            };
+            slot.withdraw();
+            let event = forget_association(slot, &key);
+            let reservation = self.reservation(&key, slot);
+            if let Some(event) = event {
+                state.publish(Some(event));
             }
-        }
-
-        // Now evict + kill. Drop the write lock before locking the inner
-        // session mutex to avoid holding both at once.
-        let entry = self.sessions.write().await.remove(&key);
-        if let Some(entry) = entry {
-            let mut s = entry.session.lock().await;
-            s.kill().await;
-            drop(s);
-            self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                harness_id: harness_id.to_string(),
-                cwd: key.cwd.to_string_lossy().into_owned(),
-                session_name: session_name.map(str::to_string),
-            })
-            .await;
-        }
-        Ok(())
-    }
-
-    /// Kill all active sessions.
-    pub async fn shutdown_all(&self) {
-        let entries: Vec<(SessionKey, SessionEntry)> = {
-            let mut sessions = self.sessions.write().await;
-            sessions.drain().collect::<Vec<_>>()
+            reservation
         };
-        for (key, _) in &entries {
-            info!(harness_id = %key.harness_id, cwd = ?key.cwd, "Shutting down ACP session");
-        }
-        // Best-effort pre-fire cancel on every entry before the kill pass.
-        // Mirrors `shutdown_named` so global shutdown gives in-flight prompts
-        // a chance to flush partial output instead of interrupting them
-        // mid-stream (ACP-R4-05). A failed cancel is logged but never
-        // blocks the teardown.
-        futures::future::join_all(entries.iter().map(|(_, entry)| async move {
-            if let Err(e) = entry.cancel.send_cancel().await {
-                tracing::debug!(
-                    error = %e,
-                    "shutdown_all: pre-fire cancel failed; proceeding to kill"
-                );
-            }
-        }))
-        .await;
-        // Small grace period for the cancel notification to flush before
-        // the kill pass interrupts the harness's stdin/stdout pipes.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        // Kill all sessions concurrently. A single wedged session
-        // (e.g. one whose child is stuck in uninterruptible IO) used
-        // to block every other session's teardown behind it because
-        // the kill loop was sequential. With `join_all` the wall-clock
-        // cost is bounded by the slowest session, not the sum.
-        futures::future::join_all(entries.iter().map(|(_, entry)| async move {
-            let mut session = entry.session.lock().await;
-            session.kill().await;
-        }))
-        .await;
-        for (key, _) in entries {
-            // Compute all fields before any partial move so the borrow
-            // checker doesn't see key as half-moved when session_name_opt
-            // borrows the name field.
-            let session_name = key.session_name_opt().map(str::to_owned);
-            let harness_id = key.harness_id;
-            let cwd = key.cwd.to_string_lossy().into_owned();
-            self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                harness_id,
-                cwd,
-                session_name,
-            })
-            .await;
+        self.finish_retirements(vec![reservation]).await
+    }
+
+    /// Stop admission permanently and reap live children while preserving IDs.
+    pub async fn shutdown_all(&self) {
+        let reservations = {
+            let mut state = self.state();
+            state.stopped = true;
+            self.withdraw_slots(&mut state, None, false)
+        };
+        if let Err(error) = self.finish_retirements(reservations).await {
+            warn!(%error, "ACP server shutdown could not reap every child");
         }
     }
+
+    pub(super) fn withdraw_slots(
+        &self,
+        state: &mut super::ManagerState,
+        harness: Option<&str>,
+        forget: bool,
+    ) -> Vec<SlotReservation> {
+        let mut reservations = Vec::new();
+        let mut events = Vec::new();
+        for (key, slot) in &mut state.slots {
+            if harness.is_none_or(|harness| key.harness_id == harness) {
+                slot.withdraw();
+                reservations.push(self.reservation(key, slot));
+                if forget {
+                    events.extend(forget_association(slot, key));
+                }
+            }
+        }
+        for event in events {
+            state.publish(Some(event));
+        }
+        reservations
+    }
+
+    pub(super) async fn finish_retirements(
+        &self,
+        reservations: Vec<SlotReservation>,
+    ) -> Result<()> {
+        if reservations.is_empty() {
+            return Ok(());
+        }
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let results = futures::future::join_all(reservations.into_iter().map(|reservation| {
+                let manager = &manager;
+                async move {
+                    let _guard = reservation.transition.lock().await;
+                    manager.retire_reserved(&reservation).await
+                }
+            }))
+            .await;
+            results
+                .into_iter()
+                .try_for_each(|result| result.map(|_| ()))
+        })
+        .await
+        .map_err(transition_task_error)?
+    }
+
+    // The slot's transition guard is held for the whole retirement. Keep
+    // the retiring entry registered until process exit has been observed.
+    async fn retire_reserved(
+        &self,
+        target: &SlotReservation,
+    ) -> Result<Option<Arc<CancellationToken>>> {
+        let key = &target.key;
+        let live = {
+            let state = self.state();
+            let slot = &state.slots[key];
+            if !slot.retiring {
+                return Ok(None);
+            }
+            slot.live.clone()
+        };
+        if let Some(entry) = &live {
+            retire_owner(entry).await?;
+        }
+        let mut state = self.state();
+        let slot = state.slots.get_mut(key).expect("reserved slot");
+        slot.live = None;
+        let current = Arc::ptr_eq(&slot.epoch, &target.epoch);
+        if current {
+            slot.retiring = false;
+        }
+        if live.is_some() {
+            state.publish(None);
+        }
+        Ok(current.then(|| Arc::clone(&target.epoch)))
+    }
+}
+
+fn forget_association(slot: &mut super::SessionSlot, key: &SessionKey) -> Option<AcpSessionEvent> {
+    slot.load_failure = None;
+    slot.saved_id.take()?;
+    Some(AcpSessionEvent::Removed {
+        harness_id: key.harness_id.clone(),
+        cwd: key.cwd.to_string_lossy().into_owned(),
+        session_name: key.session_name_opt().map(str::to_owned),
+    })
+}
+
+pub(super) fn require_mode(
+    adapter: &dyn AcpAdapter,
+    harness_id: &str,
+    mode: AdapterMode,
+) -> Result<()> {
+    if !adapter.supported_modes().contains(&mode) {
+        return Err(AcpOperationError::new(
+            AcpErrorCode::ModeUnsupported,
+            format!("Harness '{harness_id}' does not support {mode:?} mode"),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+async fn retire_owner(entry: &SessionEntry) -> Result<()> {
+    let cooperative = async {
+        match entry.cancel.send_cancel().await? {
+            CancelDispatch::Sent => drop(entry.session.lock().await),
+            CancelDispatch::NoSession => {}
+        }
+        Ok::<(), AlephError>(())
+    };
+    if let Ok(Err(error)) = tokio::time::timeout(CANCEL_GRACE, cooperative).await {
+        debug!(%error, "ACP cancel during retirement could not be sent");
+    }
+    entry.abort.cancel();
+    tokio::time::timeout(REAP_DEADLINE, async {
+        entry.session.lock().await.reap().await
+    })
+    .await
+    .map_err(|_| AcpOperationError::new(AcpErrorCode::Timeout, "Timed out reaping ACP session"))?
+}
+
+fn transition_task_error(error: tokio::task::JoinError) -> AlephError {
+    AcpOperationError::new(
+        AcpErrorCode::SessionDead,
+        format!("ACP session transition task failed: {error}"),
+    )
+    .into()
 }

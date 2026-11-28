@@ -4,8 +4,8 @@
 //! helpers build lifecycle hook contexts and the project-context / project-skill
 //! `<system-reminder>` blocks that the agent loop injects each turn.
 
-use crate::extension::hooks::{join_messages, HookContext, HookExecutor};
 use crate::extension::HookEvent;
+use crate::extension::hooks::{HookContext, HookExecutor, join_messages};
 use crate::gateway::agent_instance::AgentInstance;
 
 /// Build a `HookContext` for an agent/session lifecycle event. Carries the
@@ -151,31 +151,27 @@ pub(crate) fn collect_project_skill_block(workspace: &std::path::Path) -> Option
     let mut lines: Vec<String> = Vec::new();
 
     'outer: for dir in dirs.iter().filter(|d| !is_global(d)) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let skill_dir = entry.path();
-            if !skill_dir.is_dir() {
+        for skill_md in crate::utils::paths::skill_manifest_files(dir) {
+            let Ok(manifest) =
+                crate::skill::parse_skill_file(&skill_md, crate::skill::guess_source(&skill_md))
+            else {
+                continue;
+            };
+            let id = if dir == &skill_md {
+                manifest.id().as_str()
+            } else {
+                let Some(id) = skill_md
+                    .parent()
+                    .and_then(|path| path.file_name())
+                    .and_then(|name| name.to_str())
+                else {
+                    continue;
+                };
+                id
+            };
+            if !seen.insert(id.to_owned()) {
                 continue;
             }
-            let Some(id) = skill_dir.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            if id.starts_with('.') || seen.contains(id) {
-                continue;
-            }
-            let skill_md = skill_dir.join("SKILL.md");
-            let Ok(content) = std::fs::read_to_string(&skill_md) else {
-                continue;
-            };
-            let Ok(manifest) = crate::skill::parse_skill_content(
-                &content,
-                crate::domain::skill::SkillSource::Workspace,
-            ) else {
-                continue;
-            };
-            seen.insert(id.to_string());
             let mut desc = manifest.description().trim().replace(['\n', '\r'], " ");
             if desc.chars().count() > PROJECT_SKILL_DESC_MAX_CHARS {
                 desc = desc

@@ -12,7 +12,7 @@
 //! fresh snapshot and emits [`CapabilityChange::Invalidated`] rather than
 //! pretending it delivered every event.
 
-use crate::capability::backend::{CapabilityBackend, ToolBackendAdapter, TOOL_NAMESPACE};
+use crate::capability::backend::{CapabilityBackend, TOOL_NAMESPACE, ToolBackendAdapter};
 use crate::capability::descriptor::{
     CapabilityDescriptor, CapabilityId, CapabilityKind, CapabilityRevision, ProjectionMetadata,
     ServiceRelation,
@@ -1383,7 +1383,7 @@ impl ZahirFacade {
         let mut stream = CapabilityChangeStream::from_snapshot(snapshot);
         loop {
             match receiver.try_recv() {
-                Ok(publication) => {
+                Ok(mut publication) => {
                     let publication_cursor = Cursor(publication.revision);
                     // Already-reflected notifications are harmless replay, not
                     // evidence of a gap. Reject them before checking the live
@@ -1403,6 +1403,16 @@ impl ZahirFacade {
                         }
                         break;
                     }
+                    let visibility =
+                        crate::extension::visibility::VisibilityCtx::for_authorized_run();
+                    publication.tool_changes.retain(|change| {
+                        let source = match change {
+                            RegistryChange::Registered { source, .. }
+                            | RegistryChange::Replaced { source, .. }
+                            | RegistryChange::Unregistered { source, .. } => source,
+                        };
+                        ToolBackendAdapter::source_allowed(source, &visibility)
+                    });
                     let (cursor, changes) = self.map_registry_publication(publication);
                     for change in &changes {
                         if let Some(id) = change_id(change) {
@@ -1495,6 +1505,12 @@ impl ZahirFacade {
         }
         if canonical_entry.entry().descriptor.name != reference.id.name {
             return Err(ResolveError::Unknown);
+        }
+        if !ToolBackendAdapter::source_allowed(
+            &canonical_entry.entry().descriptor.source,
+            &crate::extension::visibility::VisibilityCtx::for_authorized_run(),
+        ) {
+            return Err(ResolveError::NotVisible);
         }
         self.reconcile_entry_binding(&reference.id.name);
         let provider_generation = canonical_entry.provider_generation();
@@ -1733,6 +1749,49 @@ impl ZahirFacade {
         }
     }
 
+    /// Commit one Shell pipe operation without calling a handler under the
+    /// provider, registry, or ownership guards.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn commit_shell_pipe_attempt(
+        &self,
+        lease: &BackendLease,
+        attempt: crate::sandbox::shell_input::ShellPipeAttempt,
+    ) -> Result<
+        crate::sandbox::shell_input::ShellEffectResult,
+        crate::sandbox::shell_input::ShellEffectDenied,
+    > {
+        use crate::sandbox::shell_input::ShellEffectDenied;
+        let BackendSourceEvidence::Tool {
+            canonical_entry,
+            provider_generation,
+        } = &lease.source
+        else {
+            return Err(ShellEffectDenied::Stale);
+        };
+        let descriptor = &canonical_entry.entry().descriptor;
+        if lease.descriptor.id != tool_id("bash")
+            || descriptor.source != crate::tools::service::ToolSource::Builtin
+            || !lease.required_resources.is_empty()
+            || canonical_entry.provider_generation() != *provider_generation
+            || crate::capability::backend::to_descriptor(descriptor) != lease.descriptor
+        {
+            return Err(ShellEffectDenied::Stale);
+        }
+        // This private profile does not consume a domain policy attachment.
+        // Do not treat the absence of an attachment as permission to bypass it.
+        if self.policy.is_configured(&lease.descriptor.id)
+            || canonical_entry.entry().domain_policy.is_some()
+        {
+            return Err(ShellEffectDenied::UnverifiedPolicy);
+        }
+        self.adapter.registry.commit_shell_pipe_attempt(
+            canonical_entry,
+            &self.tree,
+            &Self::binding(lease),
+            attempt,
+        )
+    }
+
     /// Commit one admission with both captured bindings under the same tree gate.
     pub(crate) fn admit_memory(
         &self,
@@ -1774,6 +1833,12 @@ impl ZahirFacade {
         else {
             return Err(ResolveError::Unknown);
         };
+        if !ToolBackendAdapter::source_allowed(
+            &canonical_entry.entry().descriptor.source,
+            &crate::extension::visibility::VisibilityCtx::for_authorized_run(),
+        ) {
+            return Err(ResolveError::NotVisible);
+        }
         if canonical_entry.provider_generation() != *provider_generation {
             return Err(ResolveError::StaleProvider);
         }
@@ -1930,6 +1995,12 @@ impl Zahir for ZahirFacade {
             return None;
         }
         let entry = self.adapter.registry.capture_entry(&reference.id.name)?;
+        if !ToolBackendAdapter::source_allowed(
+            &entry.entry().descriptor.source,
+            &crate::extension::visibility::VisibilityCtx::for_authorized_run(),
+        ) {
+            return None;
+        }
         self.reconcile_entry_binding(&reference.id.name);
         self.tree.generation(&reference.id, &reference.visibility)?;
         Some(CapabilityRevision(entry.entry().descriptor.revision))
@@ -1962,7 +2033,13 @@ impl Zahir for ZahirFacade {
             self.adapter
                 .registry
                 .capture_entry(&reference.id.name)
-                .filter(|_| {
+                .filter(|entry| {
+                    if !ToolBackendAdapter::source_allowed(
+                        &entry.entry().descriptor.source,
+                        &crate::extension::visibility::VisibilityCtx::for_authorized_run(),
+                    ) {
+                        return false;
+                    }
                     self.reconcile_entry_binding(&reference.id.name);
                     self.tree
                         .generation(&reference.id, &reference.visibility)
@@ -2021,9 +2098,13 @@ impl Zahir for ZahirFacade {
             .iter()
             .map(|descriptor| descriptor.id.clone())
             .collect();
+        let visibility = crate::extension::visibility::VisibilityCtx::for_authorized_run();
         let mut capabilities: Vec<_> = source_snapshot
             .entries()
             .values()
+            .filter(|entry| {
+                ToolBackendAdapter::source_allowed(&entry.descriptor.source, &visibility)
+            })
             .map(|entry| crate::capability::backend::to_descriptor(entry.descriptor.as_ref()))
             .map(|mut descriptor| {
                 descriptor.visibility = scope.visibility.clone();
@@ -2182,7 +2263,7 @@ mod tests {
     use crate::tools::handlers::ToolHandler;
     use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource};
     use async_trait::async_trait;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     fn fake_def(name: &str) -> ToolDefinition {
         ToolDefinition {
@@ -2326,10 +2407,12 @@ mod tests {
             kind: Some(CapabilityKind::Resource),
             ..Default::default()
         });
-        assert!(snapshot
-            .capabilities
-            .iter()
-            .any(|entry| entry.id == provider_id));
+        assert!(
+            snapshot
+                .capabilities
+                .iter()
+                .any(|entry| entry.id == provider_id)
+        );
 
         let lease = host
             .resolve(ref_for(&provider_id))
@@ -2616,6 +2699,75 @@ mod tests {
         assert_eq!(host.validate_lease(&lease), Err(ResolveError::StaleOwner));
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shell_effect_rejects_same_descriptor_replacement() {
+        use crate::sandbox::shell_input::{
+            JsonlFrame, ShellEffectDenied, ShellEffectResult, ShellInputAction, ShellPipeAttempt,
+            nonblocking_test_pipe,
+        };
+        use crate::sandbox::shell_lifecycle::ShellLifecycle;
+        use std::io::{ErrorKind, Read};
+        use std::time::{Duration, Instant};
+
+        let (host, registry, tree) = host_parts(&["bash", "other"]);
+        let id = tool_id("bash");
+        let original = host.resolve(ref_for(&id)).unwrap();
+        let unrelated = host.resolve(ref_for(&tool_id("other"))).unwrap();
+        let (mut reader, writer) = nonblocking_test_pipe();
+        let job = Arc::new(ShellLifecycle::default());
+        job.spawn(|| Ok(())).unwrap();
+        job.ready_with_input(writer).unwrap();
+        let attempt = || {
+            ShellPipeAttempt::new_for_test(
+                job.clone(),
+                0,
+                Instant::now() + Duration::from_secs(10),
+                ShellInputAction::Write(JsonlFrame::from_record(&Value::Null).unwrap()),
+            )
+        };
+        let mut bytes = [0; 5];
+        assert_eq!(
+            host.commit_shell_pipe_attempt(&unrelated, attempt()),
+            Err(ShellEffectDenied::Stale)
+        );
+        assert_eq!(
+            reader.read(&mut bytes).unwrap_err().kind(),
+            ErrorKind::WouldBlock
+        );
+        registry
+            .replace(
+                ToolCapabilityDescriptor::from_definition(&fake_def("bash"), 0),
+                Arc::new(fake_handler("bash")),
+            )
+            .unwrap();
+        assert_eq!(
+            host.commit_shell_pipe_attempt(&original, attempt()),
+            Err(ShellEffectDenied::Stale)
+        );
+        assert_eq!(
+            reader.read(&mut bytes).unwrap_err().kind(),
+            ErrorKind::WouldBlock
+        );
+        let current = host.resolve(ref_for(&id)).unwrap();
+        tree.bump(LifetimeScope::Runtime).unwrap();
+        assert_eq!(
+            host.commit_shell_pipe_attempt(&current, attempt()),
+            Err(ShellEffectDenied::Stale)
+        );
+        assert_eq!(
+            reader.read(&mut bytes).unwrap_err().kind(),
+            ErrorKind::WouldBlock
+        );
+        let current = host.resolve(ref_for(&id)).unwrap();
+        assert_eq!(
+            host.commit_shell_pipe_attempt(&current, attempt()),
+            Ok(ShellEffectResult::Written(5))
+        );
+        reader.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes, b"null\n");
+    }
+
     #[test]
     fn validate_lease_detects_descriptor_freshness_after_replace() {
         let (host, reg, _tree) = host_parts(&["a"]);
@@ -2646,10 +2798,12 @@ mod tests {
         let snapshot = host.describe(scope_all());
         assert_eq!(snapshot.committed_cursor, Cursor(2));
         assert_eq!(snapshot.capabilities.len(), 2);
-        assert!(snapshot
-            .capabilities
-            .iter()
-            .all(|d| d.kind == crate::capability::descriptor::CapabilityKind::Tool));
+        assert!(
+            snapshot
+                .capabilities
+                .iter()
+                .all(|d| d.kind == crate::capability::descriptor::CapabilityKind::Tool)
+        );
     }
 
     #[test]
@@ -2954,9 +3108,10 @@ mod tests {
         assert_eq!(tree.claim_state(&claim, &id, &vis), ClaimState::Active);
         // The incumbent can still claim; the Runtime reconcile owner cannot.
         assert!(tree.claim(&id, &vis, incumbent, "r2".to_string()).is_some());
-        assert!(tree
-            .claim(&id, &vis, OwnerRef::Runtime, "r3".to_string())
-            .is_none());
+        assert!(
+            tree.claim(&id, &vis, OwnerRef::Runtime, "r3".to_string())
+                .is_none()
+        );
     }
 
     #[test]
@@ -3076,10 +3231,11 @@ mod tests {
             facet: None,
             visibility: VisibilityScope::default(),
         };
-        assert!(host
-            .snapshot_entries_in_scope(&skill_scope)
-            .entries
-            .is_empty());
+        assert!(
+            host.snapshot_entries_in_scope(&skill_scope)
+                .entries
+                .is_empty()
+        );
 
         // Foreign namespace → no entries.
         let foreign = Scope {

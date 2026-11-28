@@ -60,6 +60,8 @@ pub struct WorkspaceSandbox {
     default_timeout: Duration,
     max_output_bytes: usize,
     hooks: SandboxHooks,
+    #[cfg(target_os = "linux")]
+    shell_policy: Option<Arc<super::shell_policy::ShellPolicy>>,
 }
 
 /// Per-session workspace state: cwd on disk plus the capability baseline and
@@ -87,7 +89,18 @@ impl WorkspaceSandbox {
             default_timeout: Duration::from_secs(60),
             max_output_bytes: 1024 * 1024, // 1 MB total budget (512 KB per stream)
             hooks,
+            #[cfg(target_os = "linux")]
+            shell_policy: None,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn with_shell_policy(
+        mut self,
+        policy: Option<super::shell_policy::ShellPolicy>,
+    ) -> Self {
+        self.shell_policy = policy.map(Arc::new);
+        self
     }
 
     /// Override the default 60s per-command timeout.
@@ -206,31 +219,194 @@ impl Sandbox for WorkspaceSandbox {
         })
     }
 
-    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn execute(&self, cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
+        self.execute_in_mode(cmd, WorkspaceExecution::Foreground)
+            .await
+    }
+
+    async fn execute_controlled(
+        &self,
+        cmd: SandboxCommand,
+        lifecycle: &super::shell_lifecycle::ShellLifecycle,
+    ) -> Result<SandboxOutput, SandboxError> {
+        if !self.os_driver.supports_shell_lifecycle() {
+            return Err(SandboxError::UnsupportedPolicy {
+                platform: self.os_driver.platform(),
+                feature: "shell_lifecycle".into(),
+                reason: "this driver cannot supervise a continuable shell command".into(),
+            });
+        }
+        self.execute_in_mode(cmd, WorkspaceExecution::Controlled(lifecycle))
+            .await
+    }
+
+    #[cfg(target_os = "linux")]
+    fn as_workspace(&self) -> Option<&Self> {
+        Some(self)
+    }
+
+    fn managed(&self) -> Option<&dyn crate::sandbox::managed::ManagedSandbox> {
+        Some(self)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum WorkspaceExecution<'a> {
+    Foreground,
+    Controlled(&'a super::shell_lifecycle::ShellLifecycle),
+    #[cfg(target_os = "linux")]
+    FixedJsonl {
+        control: &'a super::shell_lifecycle::ShellLifecycle,
+        workspace: &'a super::shell_workspace::ShellWorkspace,
+        deadline: tokio::time::Instant,
+    },
+}
+
+#[cfg(target_os = "linux")]
+fn fixed_jsonl_startup_expired() -> SandboxError {
+    SandboxError::ExecutionFailed("fixed JSONL startup deadline elapsed".into())
+}
+
+impl WorkspaceSandbox {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn fixed_jsonl_policy(&self) -> Option<&Arc<super::shell_policy::ShellPolicy>> {
+        self.shell_policy.as_ref()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn can_run_fixed_jsonl(&self, config: &crate::Config) -> bool {
+        self.fixed_jsonl_policy()
+            .is_some_and(|policy| policy.matches_config(config))
+            && self.os_driver.can_run_fixed_jsonl()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn execute_fixed_jsonl(
+        &self,
+        cmd: SandboxCommand,
+        workspace: &super::shell_workspace::ShellWorkspace,
+        control: &super::shell_lifecycle::ShellLifecycle,
+        deadline: tokio::time::Instant,
+    ) -> Result<SandboxOutput, SandboxError> {
+        use super::shell_input::{JSONL_ARGS, JSONL_PROGRAM};
+
+        if tokio::time::Instant::now() >= deadline {
+            return Err(fixed_jsonl_startup_expired());
+        }
+        let workspace_binding = super::context::current_exec_workspace_binding();
+        if self.shell_policy.is_none()
+            || cmd.program != JSONL_PROGRAM
+            || !cmd.args.iter().map(String::as_str).eq(JSONL_ARGS)
+            || cmd.tool_name != "bash"
+            || cmd.stdin.is_some()
+            || !cmd.env.is_empty()
+            || cmd.capabilities.spawn_subprocess
+            || !cmd.capabilities.fs_read.is_empty()
+            || !cmd.capabilities.fs_write.is_empty()
+            || !matches!(cmd.capabilities.network, NetworkPolicy::None)
+            || cmd.cwd.as_deref() != Some(workspace.path())
+            || !workspace_binding.is_some_and(|binding| {
+                !binding.is_owned_worktree()
+                    && workspace.is_current(binding.root()).unwrap_or(false)
+            })
+        {
+            return Err(SandboxError::CapabilityDenied {
+                reason: "not the eligible fixed JSONL launch".into(),
+            });
+        }
+        self.execute_in_mode(
+            cmd,
+            WorkspaceExecution::FixedJsonl {
+                control,
+                workspace,
+                deadline,
+            },
+        )
+        .await
+    }
+
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
+    async fn execute_in_mode(
+        &self,
+        cmd: SandboxCommand,
+        mode: WorkspaceExecution<'_>,
+    ) -> Result<SandboxOutput, SandboxError> {
+        let lifecycle = match mode {
+            WorkspaceExecution::Foreground => None,
+            WorkspaceExecution::Controlled(control) => Some(control),
+            #[cfg(target_os = "linux")]
+            WorkspaceExecution::FixedJsonl { control, .. } => Some(control),
+        };
         self.os_driver.execution_preflight()?;
-        // Shared admission (hooks, cwd containment, approval, proxy, DNS, profile)
-        // lives in `prepare_command` so the managed spawn path cannot diverge.
+        // Only admission is safe to drop. Once in `run`, the driver must
+        // retain ownership until it can confirm cleanup.
+        let prepare = async {
+            #[cfg(target_os = "linux")]
+            if let WorkspaceExecution::FixedJsonl { deadline, .. } = mode {
+                return tokio::time::timeout_at(deadline, self.prepare_command(cmd))
+                    .await
+                    .map_err(|_| fixed_jsonl_startup_expired())?;
+            }
+            self.prepare_command(cmd).await
+        };
+        let prepared = if let Some(control) = lifecycle {
+            tokio::select! {
+                biased;
+                _ = control.cancelled() => return Err(control.cancel_before_spawn()),
+                prepared = prepare => prepared?,
+            }
+        } else {
+            prepare.await?
+        };
         let PreparedCommand {
             cmd,
             cwd,
             profile,
             timeout,
             active_proxy,
-        } = self.prepare_command(cmd).await?;
-        let mut output = self
-            .os_driver
-            .run(
-                &cmd.program,
-                &cmd.args,
-                &cmd.env,
-                cmd.stdin.as_deref(),
-                &cwd,
-                &profile,
-                timeout,
-                self.max_output_bytes,
-            )
-            .await;
+        } = prepared;
+        let mut output = match mode {
+            #[cfg(target_os = "linux")]
+            WorkspaceExecution::FixedJsonl {
+                control,
+                workspace,
+                deadline,
+            } => {
+                if !workspace.is_current(&cwd).unwrap_or(false) {
+                    return Err(SandboxError::CapabilityDenied {
+                        reason: "fixed JSONL workspace changed during admission".into(),
+                    });
+                }
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err(fixed_jsonl_startup_expired());
+                }
+                self.os_driver
+                    .run_fixed_jsonl(
+                        workspace.directory(),
+                        &profile,
+                        timeout.min(remaining),
+                        self.max_output_bytes,
+                        control,
+                    )
+                    .await
+            }
+            WorkspaceExecution::Foreground | WorkspaceExecution::Controlled(_) => {
+                self.os_driver
+                    .run(
+                        &cmd.program,
+                        &cmd.args,
+                        &cmd.env,
+                        cmd.stdin.as_deref(),
+                        &cwd,
+                        &profile,
+                        timeout,
+                        self.max_output_bytes,
+                        lifecycle,
+                    )
+                    .await
+            }
+        };
 
         // Keep the managed proxy (and Linux host bridge) alive across the OS
         // driver `run` and only shut it down here (drop = shutdown + UDS dir
@@ -307,10 +483,6 @@ impl Sandbox for WorkspaceSandbox {
         }
 
         output
-    }
-
-    fn managed(&self) -> Option<&dyn crate::sandbox::managed::ManagedSandbox> {
-        Some(self)
     }
 }
 
@@ -959,6 +1131,103 @@ mod tests {
     use crate::sandbox::exec_approval::gate::ApprovalRequester;
     use crate::sync_primitives::Mutex;
 
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn shell_jsonl_uses_the_mounted_prepared_input_policy() {
+        use crate::sandbox::shell_input::{
+            JsonlFrame, ShellEffectDenied, JSONL_ARGS, JSONL_PROGRAM, MAX_PREFIX,
+        };
+        use serde_json::json;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut app = crate::Config::default();
+        app.sandbox.enabled = true;
+        app.sandbox.workspace_root = root.path().to_owned();
+        app.sandbox.command_policy = serde_json::from_value(json!({
+            "use_default_rules": false,
+            "custom_rules": [{"name": "test_advisory", "regex": "INPUT_ADVISORY", "action": "warn"}]
+        }))
+        .unwrap();
+        app.security = serde_json::from_value(json!({
+            "enable_custom_patterns": true,
+            "custom_blocked": [{"pattern": "(?s)/records.*POLICY_ALPHA.*POLICY_BETA"}],
+            "custom_danger": [{"pattern": "INPUT_ADVISORY"}]
+        }))
+        .unwrap();
+
+        for tunable in [true, false] {
+            app.sandbox.command_policy.enabled = tunable;
+            let driver = Arc::new(FakeDriver::new());
+            let sandbox = crate::sandbox::build_sandbox(
+                &app.sandbox,
+                driver.clone(),
+                Arc::new(ApprovalGate::new(None)),
+                Default::default(),
+                &app.security,
+            );
+            let workspace = sandbox.as_workspace().unwrap();
+            let policy = workspace.fixed_jsonl_policy().unwrap();
+            assert!(policy.matches_config(&app));
+            let launch = SandboxCommand {
+                session_id: crate::routing::session_key::SessionKey::ephemeral(
+                    "mounted-jsonl-policy",
+                ),
+                tool_name: "bash".into(),
+                program: JSONL_PROGRAM.into(),
+                args: JSONL_ARGS.into_iter().map(str::to_owned).collect(),
+                env: Default::default(),
+                stdin: None,
+                cwd: None,
+                capabilities: SandboxCapabilities::session_baseline(),
+                timeout: None,
+            };
+            assert!(workspace.prepare_command(launch.clone()).await.is_ok());
+            let alpha = JsonlFrame::from_record(&json!("POLICY_ALPHA")).unwrap();
+            for (prefix, input, block, warn) in [
+                (&[][..], "POLICY_ALPHA", false, false),
+                (&[][..], "POLICY_BETA", false, false),
+                (alpha.bytes(), "POLICY_BETA", true, false),
+                (&[][..], "INPUT_ADVISORY", false, true),
+                (&[][..], "普通文本", false, false),
+                // Inert policy text. Only prepare_command runs in this test.
+                (&[][..], "rm -rf /", true, false),
+            ] {
+                let frame = JsonlFrame::from_record(&json!(input)).unwrap();
+                let mut prepared = launch.clone();
+                prepared.stdin = Some([prefix, frame.bytes()].concat());
+                let prepared = workspace.prepare_command(prepared).await;
+                let live = policy.check_frame(&launch, prefix, &frame);
+                if block {
+                    assert!(
+                        matches!(prepared, Err(SandboxError::CapabilityDenied { .. })),
+                        "{input}"
+                    );
+                    assert!(
+                        matches!(live, Err(ShellEffectDenied::PolicyBlocked)),
+                        "{input}"
+                    );
+                } else {
+                    assert!(prepared.is_ok(), "{input}");
+                    let warnings = live.unwrap();
+                    assert_eq!(warnings.operator, warn, "{input}");
+                    assert_eq!(
+                        warnings.builtin == ["test_advisory"],
+                        warn && tunable,
+                        "{input}"
+                    );
+                }
+            }
+            assert!(matches!(
+                policy.check_frame(&launch, &vec![b' '; MAX_PREFIX], &alpha),
+                Err(ShellEffectDenied::TooLarge)
+            ));
+            let mut changed = app.clone();
+            changed.security.enable_custom_patterns = false;
+            assert!(!policy.matches_config(&changed));
+            assert_eq!(*driver.run_count.read().await, 0);
+        }
+    }
+
     /// A no-op driver for tests — avoids invoking the real macOS sandbox-exec.
     struct FakeDriver {
         run_count: Arc<RwLock<u32>>,
@@ -976,6 +1245,10 @@ mod tests {
     impl OsSandboxDriverTrait for FakeDriver {
         fn platform(&self) -> &'static str {
             "fake"
+        }
+
+        fn supports_shell_lifecycle(&self) -> bool {
+            true
         }
 
         fn is_supported(&self) -> bool {
@@ -1005,6 +1278,7 @@ mod tests {
             _profile: &OsSandboxProfile,
             _timeout: Duration,
             _max_output_bytes: usize,
+            _lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
         ) -> Result<SandboxOutput, SandboxError> {
             *self.run_count.write().await += 1;
             Ok(SandboxOutput {
@@ -1085,6 +1359,7 @@ mod tests {
             _profile: &OsSandboxProfile,
             _timeout: Duration,
             _max_output_bytes: usize,
+            _lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
         ) -> Result<SandboxOutput, SandboxError> {
             *self.captured_env.lock().unwrap_or_else(|e| e.into_inner()) = env.clone();
             Ok(SandboxOutput {
@@ -1160,6 +1435,7 @@ mod tests {
             _profile: &OsSandboxProfile,
             _timeout: Duration,
             _max_output_bytes: usize,
+            _lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
         ) -> Result<SandboxOutput, SandboxError> {
             *self.captured_env.lock().unwrap_or_else(|e| e.into_inner()) = env.clone();
             Ok(SandboxOutput {
@@ -1571,6 +1847,55 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn yield_during_approval_then_cancel_never_reaches_the_driver() {
+        use crate::builtin_tools::bash_exec::{BashExecArgs, BashExecTool};
+        use crate::tools::AlephTool;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let driver = Arc::new(FakeDriver::new());
+        let asked = Arc::new(tokio::sync::Notify::new());
+        let gate = Arc::new(ApprovalGate::new(Some(Arc::new(NeverAnswers {
+            asked: Arc::clone(&asked),
+        }))));
+        let sandbox = build_sandbox(&tmp, driver.clone(), gate, SandboxHooks::new());
+        let tool = BashExecTool::new().with_sandbox(Arc::new(sandbox));
+        crate::sandbox::context::SESSION_ID
+            .scope(sid(), async {
+                let started = tool
+                    .call(
+                        serde_json::from_value::<BashExecArgs>(serde_json::json!({
+                            "cmd": "printf harmless", "allow_network": true, "yield_ms": 25
+                        }))
+                        .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let response: serde_json::Value = serde_json::from_str(&started.stdout).unwrap();
+                assert_eq!(response["status"], "starting");
+                let id = response["process_id"].as_u64().unwrap();
+                tokio::time::timeout(Duration::from_secs(2), asked.notified())
+                    .await
+                    .expect("the actual sandbox approval step was reached");
+
+                for (action, expected) in [("kill", "stopping"), ("wait", "killed")] {
+                    let result = tool
+                        .call(
+                            serde_json::from_value(serde_json::json!({
+                                "process_action": action, "process_id": id, "timeout": 2
+                            }))
+                            .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    let response: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+                    assert_eq!(response["status"], expected);
+                }
+            })
+            .await;
+        assert_eq!(*driver.run_count.read().await, 0);
+    }
+
     /// §6.1 at the capability card: the `ToolCallParked { Approval }` row is
     /// readable through the real actor service at the instant the requester
     /// is entered — before anyone could answer, and before any command could
@@ -1690,6 +2015,7 @@ mod tests {
             _profile: &OsSandboxProfile,
             _timeout: Duration,
             _max_output_bytes: usize,
+            _lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
         ) -> Result<SandboxOutput, SandboxError> {
             use crate::session::service::SessionService as _;
             let rows = self
@@ -2113,6 +2439,7 @@ mod tests {
             _profile: &OsSandboxProfile,
             _timeout: Duration,
             _max_output_bytes: usize,
+            _lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
         ) -> Result<SandboxOutput, SandboxError> {
             Ok(SandboxOutput::default())
         }
@@ -2627,6 +2954,7 @@ mod tests {
             _profile: &OsSandboxProfile,
             _timeout: Duration,
             _max_output_bytes: usize,
+            _lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
         ) -> Result<SandboxOutput, SandboxError> {
             *self.last_env.write().await = env.clone();
             self.workspace.lock().unwrap().launch_cwd = cwd.to_path_buf();
@@ -3295,6 +3623,7 @@ mod scrub_integration_tests {
             _profile: &OsSandboxProfile,
             _timeout: Duration,
             _max_output_bytes: usize,
+            _lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
         ) -> Result<SandboxOutput, SandboxError> {
             Ok(SandboxOutput {
                 stdout: self.stdout_payload.clone(),
@@ -3525,6 +3854,7 @@ mod denial_dialect_tests {
             _profile: &OsSandboxProfile,
             _timeout: Duration,
             _max_output_bytes: usize,
+            _lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
         ) -> Result<SandboxOutput, SandboxError> {
             Ok(SandboxOutput {
                 stderr: self.stderr.as_bytes().to_vec(),

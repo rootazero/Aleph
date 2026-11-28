@@ -18,6 +18,7 @@ fn the_wire_has_one_writer_and_one_reader_per_fact() {
     const RESOLVE: &str = "src/gateway/execution_engine/turn_permissions.rs";
     const EXECUTE: &str = "src/gateway/execution_engine/execute.rs";
     const STAMP: &str = "src/gateway/execution_engine/slash_command.rs";
+    const SHELL: &str = "src/gateway/execution_engine/shell_effect.rs";
     const ROUTER: &str = "src/gateway/inbound_router/executor.rs";
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let sources = rust_sources_under(&root);
@@ -33,7 +34,7 @@ fn the_wire_has_one_writer_and_one_reader_per_fact() {
         (typed_key.as_str(), &[WIRE]),
         ("stamp_pregrant_from_names(", &[WIRE, SPLIT]),
         ("forget_pregrant(", &[WIRE]),
-        ("pregrant_from_metadata(", &[WIRE, RESOLVE]),
+        ("pregrant_from_metadata(", &[WIRE, RESOLVE, SHELL]),
         ("mark_typed(", &[WIRE, STAMP, ROUTER]),
         ("is_typed(", &[WIRE, SPLIT]),
         ("forget_at_ingress(", &[WIRE, EXECUTE]),
@@ -144,7 +145,7 @@ fn the_fire_sites_are_where_the_design_puts_them() {
     let child_policy = once(&inner, "explicit.for_children()");
     let own = once(
         &inner,
-        "let tool_service = super::super::build_request_tool_service(",
+        "let tool_service = build_scoped_request_tool_service(",
     );
     assert!(
         children < child_policy && child_policy < own,

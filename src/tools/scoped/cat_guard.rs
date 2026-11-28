@@ -143,6 +143,11 @@ fn classify_skill_path(candidate: &Path) -> Option<(SkillKind, String)> {
         .iter()
         .map(|p| normalize_lexically(p))
         .collect();
+    if let Some(file) = all.iter().find(|file| **file == abs && file.is_file()) {
+        let manifest =
+            crate::skill::parse_skill_file(file, crate::skill::guess_source(file)).ok()?;
+        return Some((SkillKind::PluginSkill, manifest.id().to_string()));
+    }
     classify_against_roots(&abs, &all, &plugin)
 }
 
@@ -335,11 +340,13 @@ mod tests {
     fn compound_command_does_not_steer_on_unrelated_skill_listing() {
         // End-to-end: `/etc/hosts` is filtered out before any FS classification,
         // so this is deterministic regardless of the machine's real skill dirs.
-        assert!(skill_read_steer(
-            "bash",
-            &json!({"cmd": "ls ~/.aleph/skills/foo && cat /etc/hosts"})
-        )
-        .is_none());
+        assert!(
+            skill_read_steer(
+                "bash",
+                &json!({"cmd": "ls ~/.aleph/skills/foo && cat /etc/hosts"})
+            )
+            .is_none()
+        );
     }
 
     #[test]

@@ -6,7 +6,7 @@ fn parse(
     dir: &Path,
     plugin_id: &str,
 ) -> Result<HashMap<String, McpManagerConfig>, String> {
-    parse_declared_servers(content, dir, plugin_id)
+    parse_declared_servers(content, dir, plugin_id, false)
         .map(|servers| servers.into_iter().map(|s| (s.id.clone(), s)).collect())
 }
 
@@ -456,6 +456,7 @@ fn the_data_directory_is_provisioned_only_for_a_server_that_names_it() {
         r#"{"mcpServers":{"s":{"command":"node"}}}"#,
         &root,
         "p415-plain",
+        false,
     )
     .unwrap();
     provision_data_dir("p415-plain", &root, &plain);
@@ -465,6 +466,7 @@ fn the_data_directory_is_provisioned_only_for_a_server_that_names_it() {
         r#"{"mcpServers":{"s":{"command":"node","env":{"DB":"${ALEPH_PLUGIN_DATA}/db"}}}}"#,
         &root,
         "p415-named",
+        false,
     )
     .unwrap();
     provision_data_dir("p415-named", &root, &named);
@@ -512,6 +514,7 @@ fn the_operator_env_sits_under_the_authors_env_on_stdio_only() {
         }}"#,
         Path::new("/p/x"),
         "p",
+        false,
     )
     .unwrap();
     let keyed = with_operator_env(servers, &serde_json::json!({"key": "operator", "other": 1}));

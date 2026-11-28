@@ -77,7 +77,7 @@ pub(crate) fn is_continuation_driven_slash(name: &str) -> bool {
 /// request a channel's shared parser has already resolved must still be
 /// checked for `/btw`.
 pub(crate) fn stamp_btw(input: &str, metadata: &mut HashMap<String, String>) {
-    use crate::gateway::btw::{BtwTurn, BTW_METADATA_KEY, PROMOTE_STAMP};
+    use crate::gateway::btw::{BTW_METADATA_KEY, BtwTurn, PROMOTE_STAMP};
     if metadata.contains_key(BTW_METADATA_KEY) {
         return;
     }
@@ -114,7 +114,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// requires. `execute()`'s safety net, which stamps text other producers
     /// put in a request, calls `Self::stamp_slash_mode_unattested` instead.
     pub async fn stamp_slash_mode(&self, input: &str, metadata: &mut HashMap<String, String>) {
-        if self.stamp_mode(input, metadata).await {
+        self.stamp_slash_mode_in_workspace(input, metadata, None)
+            .await;
+    }
+
+    pub async fn stamp_slash_mode_in_workspace(
+        &self,
+        input: &str,
+        metadata: &mut HashMap<String, String>,
+        workspace: Option<&std::path::Path>,
+    ) {
+        if self.stamp_mode(input, metadata, workspace).await {
             super::slash_skill_scope::mark_typed(metadata);
         }
     }
@@ -127,20 +137,26 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         &self,
         input: &str,
         metadata: &mut HashMap<String, String>,
+        workspace: Option<&std::path::Path>,
     ) {
-        self.stamp_mode(input, metadata).await;
+        self.stamp_mode(input, metadata, workspace).await;
     }
 
     /// Stamp `/btw` and the slash mode; `true` when this call stamped the
     /// mode (an already-stamped request is left alone).
-    async fn stamp_mode(&self, input: &str, metadata: &mut HashMap<String, String>) -> bool {
+    async fn stamp_mode(
+        &self,
+        input: &str,
+        metadata: &mut HashMap<String, String>,
+        workspace: Option<&std::path::Path>,
+    ) -> bool {
         // Side questions first: they are resolved without the command parser,
         // and they must be stamped even when the parser cell is empty.
         stamp_btw(input, metadata);
         if metadata.contains_key(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY) {
             return false;
         }
-        let Some(mode_json) = self.try_resolve_slash_command(input).await else {
+        let Some(mode_json) = self.try_resolve_slash_command(input, workspace).await else {
             return false;
         };
         metadata.insert(
@@ -171,14 +187,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// has no `command_parser` field and never calls this function at all).
     /// Deliberately *not* a degraded second derivation: resolving `/foo` a
     /// different way is the drift this convergence removes.
-    pub(super) async fn try_resolve_slash_command(&self, input: &str) -> Option<String> {
+    pub(super) async fn try_resolve_slash_command(
+        &self,
+        input: &str,
+        workspace: Option<&std::path::Path>,
+    ) -> Option<String> {
         let trimmed = input.trim();
         if !trimmed.starts_with('/') {
             return None;
         }
 
         let parser = self.command_parser.read().await.clone()?;
-        let parsed = parser.parse_async(trimmed).await?;
+        let parsed = parser.parse_in_workspace(trimmed, workspace).await?;
 
         let mode_json = crate::gateway::inbound_router::serialize_parsed_command(&parsed)?;
         info!(
@@ -214,9 +234,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // mode (Panel/CLI resolver, channel router, TUI), the owner it names
         // is judged here, once, against the request's own project. No
         // installed extension manager ⇒ unknown owner ⇒ refused.
-        let visibility = crate::extension::visibility::VisibilityCtx::from_project_root(
-            request.workspace_path().map(std::path::Path::to_path_buf),
-        );
+        let visibility = crate::extension::visibility::VisibilityCtx {
+            project_root: request
+                .workspace_path()
+                .map(crate::extension::visibility::canonical_root),
+        };
         crate::extension::visibility::slash_owner_admits(
             &mode,
             &visibility,
@@ -1177,7 +1199,7 @@ mod arg_mapping_tests {
             };
             checked += 1;
             let name = chunk.lines().next().unwrap_or("?").trim().to_string();
-            match chunk.find("stamp_slash_mode(") {
+            match chunk.find("stamp_slash_mode_in_workspace(") {
                 Some(stamp) if stamp < spawn => {}
                 _ => offenders.push(name),
             }

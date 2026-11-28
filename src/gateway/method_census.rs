@@ -248,6 +248,7 @@ pub(crate) mod tests {
         ("generation_providers.voices", Class::Admin),
         ("goal.list", Class::Open),
         ("graph.delete_note", Class::Open),
+        ("graph.mutate_note", Class::Open),
         ("graph.node_detail", Class::Open),
         ("graph.query", Class::Open),
         ("graph.rename_note", Class::Open),

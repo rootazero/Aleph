@@ -1275,7 +1275,9 @@ async fn start_server_body(
             }
 
             let manager = Arc::new(AcpAdapterManager::from_entries(entries));
-            let _event_tx = alephcore::acp::manager::wire_persistence(&manager).await;
+            let (persistence, persisted) =
+                alephcore::acp::manager::wire_persistence(&manager).await;
+            startup_resources.install_acp(manager.clone(), persistence);
 
             // Wire the gateway broadcast hook so panels subscribed to
             // `acp.sessions.changed` get live re-fetch signals on every
@@ -1295,6 +1297,10 @@ async fn start_server_body(
 
             if !args.daemon {
                 println!("ACP harness manager initialized");
+            }
+            let restored = manager.restore_sessions(persisted).await;
+            if !restored.is_empty() {
+                tracing::info!(count = restored.len(), "Restored ACP sessions from disk");
             }
             Some(manager)
         } else {
@@ -2248,7 +2254,22 @@ async fn start_server_body(
     // Resolve the Linux installation once at boot, not from a turn or a live
     // settings update. Release the config lock before filesystem validation.
     #[cfg(target_os = "linux")]
-    let offline_stt = app_config.read().await.desktop.offline_stt.clone();
+    let offline_stt_installation = {
+        let offline_stt = app_config.read().await.desktop.offline_stt.clone();
+        offline_stt.and_then(|config| {
+            let (Some(executable), Some(model)) = (config.executable, config.model) else {
+                tracing::warn!("desktop.offline_stt requires both executable and model");
+                return None;
+            };
+            match aleph_desktop_linux::OfflineSttInstallation::new(executable, model) {
+                Ok(installation) => Some(installation),
+                Err(error) => {
+                    tracing::warn!(%error, "invalid desktop.offline_stt installation");
+                    None
+                }
+            }
+        })
+    };
     register_voice_capability_handlers(
         &mut server,
         app_config.clone(),
@@ -2257,7 +2278,7 @@ async fn start_server_body(
         #[cfg(target_os = "macos")]
         offline_speech_root,
         #[cfg(target_os = "linux")]
-        offline_stt,
+        offline_stt_installation,
     );
 
     register_session_handlers(
@@ -4087,7 +4108,7 @@ async fn start_server_body(
         }
     }
     if let Err(error) = startup_resources.cleanup().await {
-        tracing::warn!(%error, "Memory and projection cleanup failed; continuing sibling teardown");
+        tracing::warn!(%error, "Startup resource cleanup failed; continuing sibling teardown");
     }
     // Cancel config watcher background task if it was spawned
     if let Some(handle) = config_watcher_handle {
@@ -4134,25 +4155,15 @@ async fn start_server_body(
             "failed to dispose markdown skill registry scope"
         );
     }
-    // Reap detached background `bash` jobs before the rest of teardown. This
-    // has to be an explicit call: `tokio::process::Child::kill_on_drop` is
-    // best-effort once the runtime itself is being torn down, so a
-    // `bash {background: true}` build/install would otherwise outlive the
-    // daemon as an orphan still writing into the session workspace. Placed
-    // here rather than in the signal handler because this line is reached by
-    // *both* signal paths (`setup_graceful_shutdown` funnels Ctrl-C and
-    // SIGTERM onto one oneshot) **and** by a fatal `run_until_shutdown`
-    // error, which no signal-handler placement covers. It must also precede
-    // the ledger drain further down, whose comment claims everything that can
-    // dispatch a tool has already stopped — background bash was the
-    // counterexample. Idempotent; the awaits that follow give the runtime the
-    // scheduler pass it needs to drop each aborted task's `Child`.
-    //
-    // Managed `browser_companion` children are deliberately skipped by that
-    // reaper (it would kill them without closing their published resource
-    // first), so they are drained here: resource closed, grants revoked, then
-    // kill and wait for the real exit. An unconfirmed companion exit is
-    // reported separately from the Memory source's completion barrier.
+    // Both signal exits and run_until_shutdown errors reach this funnel.
+    // Seal new shell jobs before awaiting their native cleanup, not merely
+    // the drop of their task, and report any remaining unconfirmed jobs.
+    let unconfirmed = alephcore::builtin_tools::bash_exec::shutdown_background_jobs().await;
+    if unconfirmed > 0 {
+        tracing::warn!(unconfirmed, "shell cleanup was not confirmed on shutdown");
+    }
+    // Browser companions own their own close/revoke/reap protocol.
+    // Unconfirmed exits here are distinct from the Memory completion barrier.
     match tokio::time::timeout(
         std::time::Duration::from_secs(15),
         alephcore::builtin_tools::browser_tools::companion::shutdown_all_companions(),
@@ -4165,10 +4176,6 @@ async fn start_server_body(
             "managed companion exit was not confirmed on shutdown"
         ),
         Err(_) => tracing::warn!("managed companion shutdown timed out"),
-    }
-    let reaped = alephcore::builtin_tools::bash_exec::kill_all_running_background();
-    if reaped > 0 {
-        tracing::info!(count = reaped, "reaped background bash jobs on shutdown");
     }
     // PTY kill/journal/driver join is owned by StartupResources above, before
     // final capability events, event-hub close, bridge join and scope disposal.
@@ -4285,10 +4292,6 @@ async fn start_server_body(
                 tracing::warn!(%error, "heartbeat timer loop: join error after shutdown");
             }
         }
-    }
-
-    if let Some(ref manager) = acp_manager {
-        manager.shutdown_all().await;
     }
 
     if let Some(broadcaster) = auth_bundle.mdns_broadcaster {

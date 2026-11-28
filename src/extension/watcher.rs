@@ -13,7 +13,7 @@
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::{Arc, Mutex};
 use notify::{RecommendedWatcher, RecursiveMode};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -345,6 +345,10 @@ impl ExtensionWatcher {
     fn default_runtime_data_dirs() -> Vec<PathBuf> {
         [
             crate::utils::paths::get_data_dir().ok(),
+            crate::utils::paths::get_config_dir()
+                .ok()
+                .map(|dir| dir.join("raw")),
+            Some(super::hooks::ShellHookConsent::default_path()),
             crate::utils::paths::get_runtimes_dir().ok(),
             crate::utils::paths::get_note_memory_dir()
                 .ok()
@@ -380,8 +384,14 @@ impl ExtensionWatcher {
         runtime_dirs.iter().any(|d| path.starts_with(d))
     }
 
-    /// Check if a file should be watched based on extension
+    /// Watch extension sources, excluding skill activity written by Aleph.
     fn should_watch_file(path: &Path) -> bool {
+        if matches!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some(".usage.json" | ".cooccur.json")
+        ) {
+            return false;
+        }
         path.extension()
             .and_then(|ext| ext.to_str())
             .is_some_and(|ext| WATCHED_EXTENSIONS.contains(&ext))
@@ -618,6 +628,12 @@ mod tests {
 
     #[test]
     fn test_should_watch_file() {
+        assert!(!ExtensionWatcher::should_watch_file(Path::new(
+            "skills/.usage.json"
+        )));
+        assert!(!ExtensionWatcher::should_watch_file(Path::new(
+            "skills/.cooccur.json"
+        )));
         assert!(ExtensionWatcher::should_watch_file(&PathBuf::from(
             "test.md"
         )));
@@ -711,6 +727,22 @@ mod tests {
              exclusions = {dirs:?}",
             event.display()
         );
+    }
+
+    #[test]
+    fn raw_transcripts_and_hook_consents_do_not_trigger_extension_reload() {
+        let watcher = ExtensionWatcher::new_with_dirs(vec![], |_| {});
+        let dirs = watcher.effective_runtime_data_dirs();
+        let raw = crate::utils::paths::get_config_dir()
+            .unwrap()
+            .join("raw/sessions/session/turn.md");
+        let consent = super::super::hooks::ShellHookConsent::default_path();
+        for path in [raw, consent] {
+            assert!(ExtensionWatcher::is_runtime_data_path(
+                &canonicalize_best_effort(&path),
+                &dirs,
+            ));
+        }
     }
 
     /// A plugin's own persistent state lives under `${ALEPH_PLUGIN_DATA}`

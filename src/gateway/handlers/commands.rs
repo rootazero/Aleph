@@ -170,7 +170,7 @@ pub(crate) async fn render_command_help(
         Some(ch) => catalog.list_for_channel(ch).await,
         None => catalog.list_all_for_ui().await,
     };
-    let visibility = crate::extension::visibility::VisibilityCtx::from_project_root(None);
+    let visibility = crate::extension::visibility::VisibilityCtx::default();
     let tools = crate::extension::visibility::retain_visible_owned_commands(
         tools,
         &visibility,
@@ -270,22 +270,41 @@ pub async fn handle_list_from_registry(
         .and_then(|v| v.as_str())
         .and_then(channel_from_interface);
 
-    // Face ④ of `extension::visibility`, the list half. No project parameter
-    // (R2.3: no client sends one). The ctx is the one a project-less run gets
-    // — `from_project_root(None)` = daemon CWD — so the list the TUI/CLI see
-    // agrees with what a run started from them can use. `owner_visible` is
-    // `ExtensionManager::plugin_visible` in production; a closure in tests.
-    let visibility = crate::extension::visibility::VisibilityCtx::from_project_root(None);
+    use crate::extension::{
+        plugin_target::PluginAccess,
+        visibility::{PluginInstanceKey, VisibilityCtx, catalog_owner},
+    };
+    let access = super::plugins::current_plugin_access();
+    let visibility = match &access {
+        PluginAccess::Scoped(visibility) => visibility.clone(),
+        _ => VisibilityCtx::default(),
+    };
 
     let tools: Vec<UnifiedTool> = match channel {
         Some(ch) => tool_registry.list_for_channel(ch).await,
         None => tool_registry.list_root_commands().await,
     };
-    let tools = crate::extension::visibility::retain_visible_owned_commands(
+    let mut tools = crate::extension::visibility::retain_visible_owned_commands(
         tools,
         &visibility,
-        owner_visible,
+        |owner, visibility| {
+            !matches!(access, PluginAccess::Denied) && owner_visible(owner, visibility)
+        },
     );
+    for tool in &mut tools {
+        if let Some(owner) = catalog_owner(tool) {
+            let logical_id = PluginInstanceKey::runtime_group(owner);
+            if owner != logical_id {
+                if let Some(name) = tool
+                    .name
+                    .strip_prefix(owner)
+                    .and_then(|name| name.strip_prefix(':'))
+                {
+                    tool.name = format!("{logical_id}:{name}");
+                }
+            }
+        }
+    }
     let tree = build_command_tree(tools);
 
     JsonRpcResponse::success(

@@ -62,7 +62,7 @@ async fn handle_resolve(
 ) -> JsonRpcResponse {
     // Never reflect serde's error text: it can contain private answer input.
     let invalid = |message| JsonRpcResponse::error(request.id.clone(), INVALID_PARAMS, message);
-    let Some(params) = request.params else {
+    let Some(mut params) = request.params else {
         return invalid("Missing clarification params");
     };
     let Some(session_key) = params
@@ -84,6 +84,10 @@ async fn handle_resolve(
 
     let typed = params.get("action").is_some();
     let outcome = if typed {
+        // The RPC executor has already handled transport idempotency metadata.
+        if let Some(fields) = params.as_object_mut() {
+            fields.remove("idempotency_key");
+        }
         let Ok(params) = serde_json::from_value::<ClarificationActionParams>(params) else {
             return invalid("Invalid clarification action");
         };
@@ -284,6 +288,7 @@ mod tests {
                 "clarification.resolve",
                 Some(json!({
                     "session_key": key, "expected_request_id": request_id, "expected_question_id": "q1",
+                    "idempotency_key": "typed-test-attempt",
                     "action": {"kind":"submit", "answers": answers}
                 })),
                 json!(1),

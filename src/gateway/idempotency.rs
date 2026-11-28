@@ -9,6 +9,8 @@ use serde_json::Value;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+type RequestFingerprint = Option<[u8; 32]>;
+
 /// Cache entry: in-flight or completed.
 enum CacheEntry {
     /// Request is being processed; duplicates subscribe to this receiver.
@@ -16,9 +18,11 @@ enum CacheEntry {
     /// slot whose producer future was leaked (a task holding it across a hung
     /// dependency would otherwise pin the key as `InFlight` forever — every
     /// retry of that key then timed out for the process lifetime).
-    InFlight(watch::Sender<Option<Value>>, Instant),
+    InFlight(watch::Sender<Option<Value>>, Instant, RequestFingerprint),
     /// Result cached until TTL expires.
-    Complete(Value, Instant),
+    Complete(Value, Instant, RequestFingerprint),
+    /// A payload-bound operation can retry without releasing its key to other input.
+    Retryable(Instant, [u8; 32]),
 }
 
 /// Result of trying to acquire an idempotency slot.
@@ -30,6 +34,8 @@ pub enum AcquireResult {
     Cached(Value),
     /// Another request with this key is in-flight — await the receiver.
     Waiting(watch::Receiver<Option<Value>>),
+    /// A different request payload already owns this key.
+    PayloadMismatch,
 }
 
 /// RAII guard for an acquired idempotency slot.
@@ -75,10 +81,10 @@ impl IdempotencySlot {
             // Atomic transition: InFlight → Complete (notify waiters in-place).
             // Only modify if the entry's sender matches ours (same generation).
             cache.entry(key).and_modify(|entry| {
-                if let CacheEntry::InFlight(tx, _) = entry {
+                if let CacheEntry::InFlight(tx, _, fingerprint) = entry {
                     if tx.same_channel(&self.sender) {
                         let _ = tx.send(Some(result.clone()));
-                        *entry = CacheEntry::Complete(result.clone(), Instant::now());
+                        *entry = CacheEntry::Complete(result.clone(), Instant::now(), *fingerprint);
                     }
                 }
             });
@@ -92,15 +98,18 @@ impl IdempotencySlot {
 
     fn do_discard(&mut self) {
         if let Some(cache) = self.guard.take() {
-            cache.remove_if(&self.key, |_, entry| {
-                if let CacheEntry::InFlight(tx, _) = entry {
+            if let Entry::Occupied(mut slot) = cache.entry(self.key.clone()) {
+                if let CacheEntry::InFlight(tx, _, fingerprint) = slot.get() {
                     if tx.same_channel(&self.sender) {
                         let _ = tx.send(None);
-                        return true;
+                        if let Some(fingerprint) = *fingerprint {
+                            slot.insert(CacheEntry::Retryable(Instant::now(), fingerprint));
+                        } else {
+                            slot.remove();
+                        }
                     }
                 }
-                false
-            });
+            }
         }
     }
 }
@@ -133,64 +142,65 @@ impl IdempotencyGuard {
     /// TOCTOU race conditions between concurrent requests.
     #[must_use]
     pub fn try_acquire(&self, key: &str) -> AcquireResult {
-        // First, check for existing non-expired entries without holding an entry lock
-        // (entry() on an occupied key would block other readers of the same key)
-        if let Some(entry) = self.cache.get(key) {
-            match entry.value() {
-                CacheEntry::Complete(value, inserted_at) => {
-                    if inserted_at.elapsed() < self.ttl {
-                        return AcquireResult::Cached(value.clone());
-                    }
-                    // Expired — drop ref, fall through to entry() below
-                }
-                CacheEntry::InFlight(tx, _) => {
-                    return AcquireResult::Waiting(tx.subscribe());
-                }
-            }
-            drop(entry); // Explicitly drop before entry() to avoid deadlock
-        }
+        self.acquire(key, None)
+    }
 
-        // Atomic check-and-insert via entry() API
-        match self.cache.entry(key.to_string()) {
-            Entry::Occupied(mut e) => {
-                // Another thread beat us — re-check the entry. The shard lock
-                // held by `e` must NOT be released before the expired-replace,
-                // or two concurrent callers can both observe the same expired
-                // Complete, both insert InFlight, and both get Proceed (a
-                // TOCTOU duplicate-execution — the exact race this guard exists
-                // to prevent). So decide while borrowing, then mutate in place.
-                let cached = match e.get() {
-                    CacheEntry::Complete(value, inserted_at) => {
-                        if inserted_at.elapsed() < self.ttl {
-                            Some(value.clone())
-                        } else {
-                            None
-                        }
-                    }
-                    CacheEntry::InFlight(tx, _) => return AcquireResult::Waiting(tx.subscribe()),
-                };
-                if let Some(value) = cached {
-                    return AcquireResult::Cached(value);
-                }
-                // Still expired — replace with InFlight without releasing the lock.
-                let (tx, _rx) = watch::channel(None);
-                *e.get_mut() = CacheEntry::InFlight(tx.clone(), Instant::now());
-                AcquireResult::Proceed(IdempotencySlot {
-                    key: key.to_string(),
-                    sender: tx,
-                    guard: Some(self.cache.clone()),
+    /// Bind an operation's payload to the existing principal/method/key slot.
+    #[must_use]
+    pub fn try_acquire_for_payload(&self, key: &str, fingerprint: [u8; 32]) -> AcquireResult {
+        self.acquire(key, Some(fingerprint))
+    }
+
+    fn acquire(&self, key: &str, fingerprint: RequestFingerprint) -> AcquireResult {
+        let existing = |entry: &CacheEntry| match entry {
+            CacheEntry::Complete(value, inserted_at, stored)
+                if inserted_at.elapsed() < self.ttl =>
+            {
+                Some(if *stored == fingerprint {
+                    AcquireResult::Cached(value.clone())
+                } else {
+                    AcquireResult::PayloadMismatch
                 })
             }
-            Entry::Vacant(e) => {
-                let (tx, _rx) = watch::channel(None);
-                e.insert(CacheEntry::InFlight(tx.clone(), Instant::now()));
-                AcquireResult::Proceed(IdempotencySlot {
-                    key: key.to_string(),
-                    sender: tx,
-                    guard: Some(self.cache.clone()),
-                })
+            CacheEntry::InFlight(tx, _, stored) => Some(if *stored == fingerprint {
+                AcquireResult::Waiting(tx.subscribe())
+            } else {
+                AcquireResult::PayloadMismatch
+            }),
+            CacheEntry::Retryable(inserted_at, stored)
+                if inserted_at.elapsed() < self.ttl && Some(*stored) != fingerprint =>
+            {
+                Some(AcquireResult::PayloadMismatch)
+            }
+            CacheEntry::Complete(..) | CacheEntry::Retryable(..) => None,
+        };
+        // Check live slots without an exclusive lock, then recheck under the
+        // shard lock before replacing an expired one.
+        if let Some(result) = self
+            .cache
+            .get(key)
+            .and_then(|entry| existing(entry.value()))
+        {
+            return result;
+        }
+        let (sender, _receiver) = watch::channel(None);
+        let entry = CacheEntry::InFlight(sender.clone(), Instant::now(), fingerprint);
+        match self.cache.entry(key.to_string()) {
+            Entry::Occupied(mut slot) => {
+                if let Some(result) = existing(slot.get()) {
+                    return result;
+                }
+                slot.insert(entry);
+            }
+            Entry::Vacant(slot) => {
+                slot.insert(entry);
             }
         }
+        AcquireResult::Proceed(IdempotencySlot {
+            key: key.to_string(),
+            sender,
+            guard: Some(self.cache.clone()),
+        })
     }
 
     /// Remove expired entries. Returns number of entries pruned.
@@ -206,7 +216,7 @@ impl IdempotencyGuard {
         let inflight_ceiling = self.ttl.saturating_mul(2);
         let mut pruned = 0;
         self.cache.retain(|_, entry| match entry {
-            CacheEntry::Complete(_, inserted_at) => {
+            CacheEntry::Complete(_, inserted_at, _) | CacheEntry::Retryable(inserted_at, _) => {
                 if inserted_at.elapsed() >= self.ttl {
                     pruned += 1;
                     false
@@ -214,7 +224,7 @@ impl IdempotencyGuard {
                     true
                 }
             }
-            CacheEntry::InFlight(_, started_at) => {
+            CacheEntry::InFlight(_, started_at, _) => {
                 if started_at.elapsed() >= inflight_ceiling {
                     pruned += 1;
                     false
@@ -250,7 +260,7 @@ mod tests {
             let AcquireResult::Proceed(stale) = guard.try_acquire("key") else {
                 panic!("first acquisition must proceed");
             };
-            if let CacheEntry::InFlight(_, started) =
+            if let CacheEntry::InFlight(_, started, _) =
                 guard.cache.get_mut("key").unwrap().value_mut()
             {
                 *started = Instant::now() - Duration::from_secs(21);

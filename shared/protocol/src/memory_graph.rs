@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub const GRAPH_QUERY_METHOD: &str = "graph.query";
 pub const GRAPH_SEARCH_METHOD: &str = "graph.search";
 pub const GRAPH_NODE_DETAIL_METHOD: &str = "graph.node_detail";
+pub const GRAPH_MUTATE_NOTE_METHOD: &str = "graph.mutate_note";
 pub const NEBULA_TAB_ID: &str = "memory-nebula";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +54,12 @@ pub struct NoteLinkDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphQueryResponse {
+    /// Exact root of a focused one-hop window; omitted for overview requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<NoteAddress>,
+    /// A focused window omitted edges to fit the response budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
     pub nodes: Vec<NoteNodeDto>,
     pub edges: Vec<NoteLinkDto>,
     /// Total notes for the agent (nodes may be truncated to `limit`); lets the
@@ -76,6 +83,9 @@ pub struct GraphQueryResponse {
 /// render dangling/tombstone links distinctly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutgoingLinkDto {
+    /// Present only for an active relation whose endpoint still exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<NoteAddress>,
     pub to: String, // resolved path (active/tombstone) or raw (dangling)
     pub raw: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,8 +100,14 @@ pub struct OutgoingLinkDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoteDetailResponse {
+    /// Exact extant sources of active incoming relations; legacy backlinks remain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backlink_targets: Option<Vec<NoteAddress>>,
     pub node: NoteNodeDto,
     pub content: String,
+    /// Revision of the exact Markdown in `content`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
     pub backlinks: Vec<String>,
     #[serde(default)]
     pub outgoing: Vec<OutgoingLinkDto>,
@@ -127,10 +143,48 @@ pub struct GraphSearchResponse {
 }
 
 /// An exact note address, distinct from an agent selector for enumeration.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NoteAddress {
     pub agent_id: String,
     pub node_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphMutateNoteParams {
+    pub address: NoteAddress,
+    pub revision: String,
+    pub action: NoteMutation,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum NoteMutation {
+    Update { content: String },
+    Rename { title: String },
+    Delete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphMutateNoteResponse {
+    pub address: NoteAddress,
+    pub status: NoteMutationStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteMutationStatus {
+    Updated,
+    Renamed,
+    Deleted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartialNoteMutation {
+    pub reconciliation_required: bool,
+    pub address: NoteAddress,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_source: Option<NoteAddress>,
 }
 
 impl NoteNodeDto {

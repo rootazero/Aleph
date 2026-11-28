@@ -10,7 +10,7 @@
 |---------|-------------|
 | `cargo run --bin aleph-server` · `cargo check -p alephcore` | Start server (debug) · quick compile check（**只验证了仓库的一小半**，见下方验证集） |
 | `just dev` · `just build` | Dev server（先重建 WASM）· Release build (WASM + server) |
-| `just shell-dev` · `just shell-build` · `just shell-build-lite` | 桌面 App dev · 完整 installers（.dmg/.msi/.deb，内置 server）· Panel 纯壳（无 server，连局域网） |
+| `just shell-dev` · `just shell-build` | NSH 开发入口 · 含 server 的桌面整包 / NSH development and package |
 | `just test-all` · `just clippy` · `just wasm` | 全量测试（core + desktop + proptest + 共享 crate）· Lint · 唯一编译 Panel **出厂形态**的命令 |
 | `just verify-build` · `just release YY.M.D` | CI 验证三产物三平台能否构建（不打 tag）· **发版**（需先写 changelog）→ [RELEASE.md](RELEASE.md) |
 
@@ -33,7 +33,7 @@ cargo clippy --workspace --all-targets    # 先 just _stage-shell-placeholders�
 
 - **`cargo check` 不编译 `#[cfg(test)]`**——删 `pub fn` / 字段的同一笔里必须跑 `cargo test --no-run`；改动 `interfaces/tui/` `interfaces/cli/` `shared/ui_logic/` `shared/protocol/` 的同一笔里跑 `just test-shared`（**上面那条 `--workspace` clippy 会 lint 它们，但 lint 不是测试**；CI 的路径过滤不含 `interfaces/tui/**` `interfaces/cli/**`，只改那两处的提交在 CI 上不触发它）。
 - **`interfaces/webchat/` 有任何改动（哪怕不是你改的）就跑一次 `cargo test -p aleph-panel --lib`**——这个 crate 的**语义合并冲突是常态形状**（一侧的类型 + 另一侧的调用点，git 不报冲突、两边单独看都完整）。修完**先看警告再看错误**：`unused variable` 说明那半边根本没有调用者，正解是 CUT。只改 Panel 时用 `just wasm`——它是唯一编译**出厂形态**的命令。
-- **`cargo check -p aleph-desktop-shell` 前需先 `just _stage-shell-placeholders`**（tauri-build 要求 externalBin 占位文件存在）；**`--workspace` clippy 同样要**。占位路径**别在别处抄一份**——那条 recipe 自己推 triple、Windows 补 `.exe`、`AlephBridge-` 只在 macOS 上建。
+- **桌面宿主检查 / Desktop host check**：`cargo check -p aleph-nsh-shell`。Linux 安装 [NSH 系统依赖](LINUX_DESKTOP.md) 后编译。
 - 验证是怎么骗你的（数字 / 仪器 / 扫描边界 / 闸 / 命令陷阱）→ [FEATURE_LOCATOR 附录 C](FEATURE_LOCATOR.md) · 触发器 → 附录 E.10。
 
 ---

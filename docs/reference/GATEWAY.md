@@ -299,6 +299,7 @@ All three answer with `aleph_protocol::SubscriptionList`: `subscribed` (one patt
 
 | Domain | Methods |
 |--------|---------|
+| `acp.sessions.*` | `list`, `cancel`, `shutdown` — Admin-class lifecycle control over pooled ACP client sessions; see below |
 | `connect` | LAN-trust handshake (no auth; always `operator`) |
 | `pairing.*` | `list`, `approve`, `reject` — **channel** sender approval (iMessage/Telegram unknown senders), not device auth |
 | `interface.*` | `status`, `config` |
@@ -323,6 +324,18 @@ English: Registration identity is shared across event, pending snapshot and comp
 
 `trace.tool_output` 返回 `ToolOutputPage { tool_call_id, text, offset, total_bytes, truncated, source }`。offset 是实际 UTF-8 页起点，下一页用 `offset + text.len()`，不能按字符计数。`source: expired` 表示持久化原文已过期，`truncated: true` 不应触发无限加载。正文脱敏归 Gateway，客户端只消费 RPC，不读取服务器路径。
 
+### ACP session methods (2026-11-28)
+
+`acp.sessions.list` / `acp.sessions.cancel` / `acp.sessions.shutdown` 是 **Admin 类**方法（授权分类见 `src/gateway/method_census.rs`），实现位于 `src/gateway/handlers/acp_config.rs`。它们只控制 Aleph 侧自己拥有的 ACP 客户端会话生命周期，不改变对端 harness 的协议语义。
+
+- `acp.sessions.list`：返回会话快照，每条含 harness、cwd、可选 session name、远端 ACP session ID、存活状态与会话状态；**可选 `load_error`** 字段只在恢复失败时出现，说明上次 `session/load` 的失败原因（此时远端 ID 仍保留，可重试同一条恢复路径）。
+- `acp.sessions.cancel`：按 harness / cwd / session name 向当前子进程发送协作取消通知。此调用绕开 prompt 锁。`cancelled: true` 表示通知已发送，`cancelled: false` 表示子进程尚无远端 ID。没有活动实例时返回错误。
+- `acp.sessions.shutdown`：显式关闭并清除该会话的关联记录——包括只有落盘记录、没有活进程的条目；重复调用是幂等的。harness 更新/禁用/注销同样会清除该 harness 的关联，而被拒绝的配置变更保留关联。服务停止则相反：保留可恢复 ID，并经共享启动资源排空写入者后退出。
+
+`acp.sessions.changed` 是**重读信号**，不是数据通道：它由已提交的内存状态变更发出，客户端据此重新 `acp.sessions.list`；落盘的 `acp_sessions.json` 才是重启后恢复的来源。
+
+English: these three methods are Admin-class and control only the ACP client sessions Aleph owns. `list` returns snapshots that carry the optional `load_error` field when a restore failed, keeping the remote ID for a retry of the same `session/load` path; `cancel` bypasses the prompt lock and returns `cancelled: true` when it sends a cooperative notification or `cancelled: false` when the child has no remote ID. It returns an error when there is no active owner. `shutdown` clears the association, including disk-only records, and is idempotent, while a server stop instead retains recoverable IDs and drains the persistence writer through the shared startup resources. `acp.sessions.changed` is a refetch signal: clients re-read `acp.sessions.list` and the persisted `acp_sessions.json` file remains the source after a restart.
+
 ---
 
 ## Event Topics
@@ -341,6 +354,7 @@ Subscribe to events using glob patterns:
 | `agent.completed` | Run completed |
 | `agent.error` | Run error |
 | `session.*` | Session events |
+| `acp.sessions.changed` | Refetch signal for ACP client session state; clients re-read `acp.sessions.list` |
 | `config.*` | Configuration changes |
 
 ---

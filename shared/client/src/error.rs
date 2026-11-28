@@ -15,7 +15,11 @@ pub enum CliError {
     Io(#[from] std::io::Error),
 
     #[error("RPC error ({code}): {message}")]
-    Rpc { code: i32, message: String },
+    Rpc {
+        code: i32,
+        message: String,
+        data: Option<serde_json::Value>,
+    },
 
     #[error("Timeout waiting for response: {0}")]
     Timeout(String),

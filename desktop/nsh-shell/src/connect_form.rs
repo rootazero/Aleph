@@ -27,6 +27,7 @@ pub(crate) enum View {
     /// The connect form, with why the last attempt failed and the view to
     /// return to when the user cancels.
     Connect {
+        address: String,
         error: Option<String>,
         back: Option<Box<View>>,
     },
@@ -34,13 +35,23 @@ pub(crate) enum View {
     Panel { target: ConnectionTarget },
 }
 
-/// The view before any probe: a remote target is probed first.
-pub(crate) fn initial_view(target: &ConnectionTarget) -> View {
+/// Builds the initial view from the saved target, including a legacy HTTP target.
+pub(crate) fn initial_view(target: &ConnectionTarget, rejected: Option<String>) -> View {
+    if let Some(address) = rejected {
+        return View::Connect {
+            address,
+            error: Some(HTTPS_REQUIRED.into()),
+            back: None,
+        };
+    }
     match target {
         ConnectionTarget::Local => View::Starting,
         ConnectionTarget::Remote(_) => View::Checking,
     }
 }
+
+const HTTPS_REQUIRED: &str =
+    "远程服务器必须使用 HTTPS。请填写带有系统信任证书的 HTTPS 地址，或选择使用本机服务。";
 
 /// The view once `target` has been probed. An unreachable remote opens the
 /// form with the reason, rather than a web view with a browser error page.
@@ -53,6 +64,7 @@ pub(crate) fn startup_view(target: &ConnectionTarget, probe: Probe) -> View {
             target: target.clone(),
         },
         Some(error) => View::Connect {
+            address: target.panel_url(),
             error: Some(error),
             back: None,
         },
@@ -65,6 +77,8 @@ pub(crate) fn startup_view(target: &ConnectionTarget, probe: Probe) -> View {
 pub(crate) struct Switch {
     pub(crate) view: Signal<View>,
     pub(crate) home: Option<PathBuf>,
+    pub(crate) request: Signal<u64>,
+    pub(crate) operation: Signal<bool>,
     #[cfg(feature = "embedded-core")]
     pub(crate) service: LocalService,
 }
@@ -91,38 +105,92 @@ impl Switch {
         })
     }
 
-    /// Opens the form over whatever is shown, remembering it for Cancel.
+    pub(crate) fn begin_operation(&self) -> bool {
+        if self.operation.get_untracked() {
+            return false;
+        }
+        self.operation.set(true);
+        true
+    }
+
+    #[cfg(feature = "embedded-core")]
+    pub(crate) async fn stop_local(&self) -> Result<(), String> {
+        let service = self.service.clone();
+        blocking(move || service.stop())
+            .await
+            .map_err(|error| format!("等待本机服务停止失败：{error}"))??;
+        Ok(())
+    }
+
+    fn next_request(&self) -> u64 {
+        let next = self.request.get_untracked().wrapping_add(1);
+        self.request.set(next);
+        next
+    }
+
     pub(crate) fn open_form(&self) {
         let current = self.view.get_untracked();
-        if matches!(current, View::Connect { .. }) {
+        if self.operation.get_untracked() || matches!(current, View::Connect { .. }) {
             return;
         }
+        self.next_request();
+        let target = self.current_target();
         self.view.set(View::Connect {
+            address: match target {
+                ConnectionTarget::Local => String::new(),
+                ConnectionTarget::Remote(_) => target.panel_url(),
+            },
             error: None,
             back: Some(Box::new(current)),
         });
     }
 
-    /// Probes the remote server the app was started with.
     pub(crate) fn probe_startup(&self, target: ConnectionTarget) {
-        let view = self.view;
+        let request = self.next_request();
+        let switch = self.clone();
         spawn(async move {
             let probed = target.clone();
             let probe = background(async move { probe_target(&probed).await })
                 .await
                 .unwrap_or(Probe::Down);
-            view.try_set(startup_view(&target, probe));
+            switch.complete_startup_probe(request, &target, probe);
         });
     }
 
+    fn complete_startup_probe(&self, request: u64, target: &ConnectionTarget, probe: Probe) {
+        if self.request.get_untracked() == request {
+            self.view.try_set(startup_view(target, probe));
+        }
+    }
+
     fn use_local(&self) {
+        if self.operation.get_untracked() {
+            return;
+        }
+        self.next_request();
         self.save(&ConnectionTarget::Local);
+        #[cfg(feature = "embedded-core")]
+        self.service.start();
         self.view.set(View::Starting);
+    }
+
+    fn cancel(&self, back: View) {
+        if self.operation.get_untracked() {
+            return;
+        }
+        self.next_request();
+        self.view.set(back.clone());
+        if back == View::Checking {
+            self.probe_startup(self.current_target());
+        }
     }
 
     /// Connects to `raw` if a Gateway answers there; otherwise `problem`
     /// says why and nothing changes.
     fn connect(&self, raw: &str, problem: Signal<Option<String>>, busy: Signal<bool>) {
+        if self.operation.get_untracked() {
+            return;
+        }
         let target = match ConnectionTarget::parse(raw.trim()) {
             Ok(target) => target,
             Err(_) => {
@@ -137,13 +205,10 @@ impl Switch {
             return;
         }
         if HostSettings::for_target(target.clone(), None).is_err() {
-            problem.set(Some(
-                "远程服务器必须使用 HTTPS：只有本机地址可以用 HTTP。\
-                 局域网中的服务器请通过带受信任证书的 HTTPS 地址访问。"
-                    .into(),
-            ));
+            problem.set(Some(HTTPS_REQUIRED.into()));
             return;
         }
+        let request = self.next_request();
         busy.set(true);
         problem.set(None);
         let switch = self.clone();
@@ -152,20 +217,28 @@ impl Switch {
             let probe = background(async move { probe_target(&probed).await })
                 .await
                 .unwrap_or(Probe::Down);
+            if switch.request.get_untracked() != request {
+                return;
+            }
             if let Some(error) = probe_message(&target, probe) {
                 problem.try_set(Some(error));
                 busy.try_set(false);
                 return;
             }
-            switch.save(&target);
-            // The bundled server is not needed while a remote one serves
-            // the Panel; it starts again when the user switches back.
-            #[cfg(feature = "embedded-core")]
-            {
-                let service = switch.service.clone();
-                let _ = blocking(move || service.stop()).await;
+            if !switch.begin_operation() {
+                busy.try_set(false);
+                return;
             }
+            #[cfg(feature = "embedded-core")]
+            if let Err(error) = switch.stop_local().await {
+                switch.operation.set(false);
+                problem.try_set(Some(error));
+                busy.try_set(false);
+                return;
+            }
+            switch.save(&target);
             switch.view.try_set(View::Panel { target });
+            switch.operation.set(false);
         });
     }
 
@@ -183,8 +256,13 @@ impl Switch {
 }
 
 /// The connect form.
-pub(crate) fn form(error: Option<String>, back: Option<View>, switch: Switch) -> AnyElement {
-    let draft = signal(String::new());
+pub(crate) fn form(
+    address: String,
+    error: Option<String>,
+    back: Option<View>,
+    switch: Switch,
+) -> AnyElement {
+    let draft = signal(address);
     let problem = signal(error);
     let busy = signal(false);
 
@@ -208,7 +286,7 @@ pub(crate) fn form(error: Option<String>, back: Option<View>, switch: Switch) ->
         }));
     if let Some(back) = back {
         actions = actions.child(action("取消", false, move || {
-            cancel.view.set(back.clone());
+            cancel.cancel(back.clone());
         }));
     }
 
@@ -290,7 +368,7 @@ mod tests {
 
     #[test]
     fn a_local_target_starts_the_bundled_server() {
-        assert_eq!(initial_view(&ConnectionTarget::Local), View::Starting);
+        assert_eq!(initial_view(&ConnectionTarget::Local, None), View::Starting);
         assert_eq!(
             startup_view(&ConnectionTarget::Local, Probe::Down),
             View::Starting
@@ -300,7 +378,7 @@ mod tests {
     #[test]
     fn a_remote_target_is_probed_before_the_panel() {
         let target = remote("https://gw.example.com");
-        assert_eq!(initial_view(&target), View::Checking);
+        assert_eq!(initial_view(&target, None), View::Checking);
         assert_eq!(
             startup_view(&target, Probe::Ready),
             View::Panel {
@@ -310,11 +388,34 @@ mod tests {
     }
 
     #[test]
+    fn a_late_startup_probe_cannot_override_switching_to_local() {
+        let runtime = nsh_core::element::reactive::Runtime::default();
+        let _entered = runtime.enter();
+        let switch = Switch {
+            view: signal(View::Checking),
+            request: signal(0),
+            operation: signal(false),
+            home: None,
+            #[cfg(feature = "embedded-core")]
+            service: crate::local_service::LocalService::new(
+                Box::new(|| Ok(())),
+                Box::new(|| Ok(false)),
+            ),
+        };
+        let request = switch.next_request();
+        switch.open_form();
+        switch.use_local();
+        switch.complete_startup_probe(request, &remote("https://gw.example.com"), Probe::Ready);
+        assert_eq!(switch.view.get_untracked(), View::Starting);
+    }
+
+    #[test]
     fn an_unreachable_remote_opens_the_form_with_the_reason() {
         let target = remote("https://gw.example.com");
         let View::Connect {
             error: Some(error),
             back: None,
+            ..
         } = startup_view(&target, Probe::Down)
         else {
             panic!("expected the connect form");
@@ -338,6 +439,7 @@ mod tests {
         };
         assert_eq!(shown_target(&panel), Some(target.clone()));
         let over_panel = View::Connect {
+            address: target.panel_url(),
             error: None,
             back: Some(Box::new(panel)),
         };
@@ -345,6 +447,7 @@ mod tests {
         // At startup, before any server shows, the saved choice decides.
         assert_eq!(shown_target(&View::Checking), None);
         let first = View::Connect {
+            address: String::new(),
             error: Some("refused".into()),
             back: None,
         };

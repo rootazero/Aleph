@@ -54,6 +54,7 @@ pub(crate) mod panel_publication;
 mod plugin_ops;
 pub mod plugin_secrets;
 pub mod plugin_state;
+pub(crate) mod plugin_target;
 pub mod plugin_trust;
 pub mod plugin_vars;
 mod projection;
@@ -69,7 +70,7 @@ mod types;
 pub mod watcher;
 
 pub use effects::{
-    async_disposer, sync_disposer, DisposeOutcome, DisposeReport, Disposer, EffectScope, PluginId,
+    DisposeOutcome, DisposeReport, Disposer, EffectScope, PluginId, async_disposer, sync_disposer,
 };
 pub use error::*;
 pub use lifecycle::{DiscoveredPluginIds, MountError, ReloadReport, UnmountError};
@@ -81,11 +82,11 @@ pub use manager_global::{
 pub use manifest::*;
 pub use registry::*;
 pub use service_manager::ServiceManager;
-pub(crate) use template::{inline_commands, run_inline, SKILL_DIR_TOKEN};
 pub use template::{
-    inline_shell_command, split_arguments, InlineArgs, InlineShell, InlineSite, SkillTemplate,
-    TemplateCtx, SKILL_DIR_VARIABLE,
+    InlineArgs, InlineShell, InlineSite, PromptDialect, SKILL_DIR_VARIABLE, SkillTemplate,
+    TemplateCtx, inline_shell_command, split_arguments,
 };
+pub(crate) use template::{SKILL_DIR_TOKEN, inline_commands, run_inline};
 pub use types::*;
 
 // Re-export marketplace types
@@ -209,25 +210,9 @@ pub struct ExtensionManager {
     /// Skill System v2 (independent bounded context)
     skill_system: crate::skill::SkillSystem,
 
-    /// Active plugin tools keyed by their namespaced key
-    /// (`plugin_id:tool_name`).
-    ///
-    /// A short tool name is NOT unique across plugins, so every
-    /// registration is kept: dropping the loser of that contest here took
-    /// the tool away from the project that owns it, before any visibility
-    /// question was asked. The short-name winner is decided per view — see
-    /// [`Self::active_plugin_tools_snapshot`] (no project to scope by) and
-    /// [`Self::active_plugin_tools_visible_to`] (visibility first).
-    ///
-    /// This is a sync snapshot so runtime systems like the agent loop can
-    /// cheaply read tool metadata and revision state without awaiting locks.
-    active_plugin_tools: Arc<StdRwLock<HashMap<String, ToolRegistration>>>,
-
-    /// `plugin_id → ScopeKey` for every registered row, refreshed in the same
-    /// registry read as [`Self::active_plugin_tools`]. Read by every visibility
-    /// face through [`Self::plugin_visible`]; `Option::None` for an id the
-    /// registry never saw, which the predicate reads as "not visible".
-    plugin_scope_keys: Arc<StdRwLock<HashMap<String, visibility::ScopeKey>>>,
+    /// One synchronous projection of the registry's tool registrations and
+    /// package winners for request-time lookup.
+    plugin_runtime_view: Arc<StdRwLock<PluginRuntimeView>>,
 
     /// Monotonic revision for active plugin tool snapshot changes.
     plugin_tool_revision: Arc<AtomicU64>,
@@ -337,10 +322,11 @@ pub struct ExtensionManager {
     /// the runtime, owned here so `unmount` can take it all back out. A std
     /// mutex, never held across an `await`: `lifecycle.rs` removes the scope
     /// under the lock and disposes it after.
-    scopes: Arc<StdMutex<HashMap<String, effects::EffectScope>>>,
+    scopes: Arc<StdMutex<HashMap<visibility::PluginInstanceKey, effects::EffectScope>>>,
 
     /// Instance ownership, not a callable registry or a desired-state store.
-    runtime_owners: Arc<StdMutex<HashMap<String, Arc<runtime_owner::RuntimeOwner>>>>,
+    runtime_owners:
+        Arc<StdMutex<HashMap<visibility::PluginInstanceKey, Arc<runtime_owner::RuntimeOwner>>>>,
 
     /// Weak self-reference installed at the single Arc ownership boundary.
     /// Retained activation work may borrow the live manager's authorities
@@ -452,8 +438,11 @@ impl ExtensionManager {
         tree: Arc<crate::capability::ownership::OwnershipTree>,
     ) -> ExtensionResult<Self> {
         let discovery = Arc::new(DiscoveryManager::new(config.discovery.clone())?);
+        let plugin_runtime_view = Arc::new(StdRwLock::new(PluginRuntimeView::default()));
         let hook_executor = Arc::new(HookRegistry::new_with_ownership_tree(
-            HookExecutor::empty().with_consent(ShellHookConsent::shared()),
+            HookExecutor::empty()
+                .with_consent(ShellHookConsent::shared())
+                .with_plugin_visibility(Arc::clone(&plugin_runtime_view)),
             tree,
         ));
         let cache_state = Arc::new(RwLock::new(CacheState::default()));
@@ -514,8 +503,7 @@ impl ExtensionManager {
             // Share the process-wide instance so init() here is visible to
             // the builtin skill tools and the gateway RPC handlers.
             skill_system: crate::skill::shared_skill_system().clone(),
-            active_plugin_tools: Arc::new(StdRwLock::new(HashMap::new())),
-            plugin_scope_keys: Arc::new(StdRwLock::new(HashMap::new())),
+            plugin_runtime_view,
             plugin_tool_revision: Arc::new(AtomicU64::new(0)),
             panel_publication: Arc::new(StdRwLock::new(
                 panel_publication::PanelAssetPublicationStore::default(),
@@ -791,9 +779,7 @@ impl ExtensionManager {
                 self.load_all_locked_inner(false).await?;
             } else {
                 // A prior cold read retained its exact tool-only WASM owners.
-                // Reconcile non-tool providers and refresh runtime settings
-                // without replacing those owners.
-                self.publish_plugin_settings().await;
+                // Reconcile non-tool providers while preserving those owners.
                 self.discover_with_mode(crate::extension::lifecycle::DiscoveryMode::Activation)
                     .await?;
                 self.views().publish_transition_views().await;
@@ -810,7 +796,11 @@ impl ExtensionManager {
                             &owner.output,
                             Some(&owner.manifest),
                         )
-                        && desired_enabled.is_enabled_for(&owner.record.id, owner.record.origin)
+                        && matches!(
+                            desired_enabled
+                                .activation_for(&owner.record.instance_key(), owner.record.origin),
+                            crate::extension::plugin_state::Activation::Enabled
+                        )
                 })
                 .cloned()
                 .collect();
@@ -1177,6 +1167,43 @@ impl ExtensionManager {
 /// The hook and tool-index halves of the view recomputation
 /// (`lifecycle.rs::Views::after_transition`); the skill / sub-agent half is
 /// in `projection.rs`.
+#[derive(Default)]
+struct PluginRuntimeView {
+    tools: HashMap<String, ToolRegistration>,
+    scope_keys: HashMap<String, visibility::ScopeKey>,
+    project_packages: HashMap<String, HashSet<std::path::PathBuf>>,
+}
+
+impl PluginRuntimeView {
+    fn package_visible(&self, runtime_key: &str, ctx: &visibility::VisibilityCtx) -> bool {
+        self.scope_keys.get(runtime_key).is_some_and(|scope| {
+            visibility::visible_to(scope, ctx)
+                && (scope != &visibility::ScopeKey::Global
+                    || !ctx.project_root.as_ref().is_some_and(|root| {
+                        self.project_packages
+                            .get(runtime_key)
+                            .is_some_and(|roots| roots.contains(root))
+                    }))
+        })
+    }
+
+    fn tool_order(&self, a: &ToolRegistration, b: &ToolRegistration) -> std::cmp::Ordering {
+        let project = |owner: &str| {
+            matches!(
+                self.scope_keys.get(owner),
+                Some(visibility::ScopeKey::Project(_))
+            )
+        };
+        a.name
+            .cmp(&b.name)
+            .then_with(|| project(&b.plugin_id).cmp(&project(&a.plugin_id)))
+            .then_with(|| {
+                visibility::PluginInstanceKey::runtime_group(&a.plugin_id)
+                    .cmp(visibility::PluginInstanceKey::runtime_group(&b.plugin_id))
+            })
+    }
+}
+
 impl projection::Views {
     /// Compute the user-level hook configs (`~/.aleph/hooks.json`, project
     /// files) fresh from disk. Pure derivation — does not touch
@@ -1222,68 +1249,51 @@ impl projection::Views {
             .list_hooks()
             .into_iter()
             .filter_map(|hook| {
-                registry
-                    .get_plugin(&hook.plugin_id)
-                    .filter(|plugin| plugin.status.is_active())
-                    .map(|plugin| {
-                        HookInput::plugin(
-                            hook_config_from_registration(hook.clone(), plugin.scope_key.clone()),
-                            plugin,
-                        )
-                    })
+                registry.active_plugin(&hook.plugin_id).map(|plugin| {
+                    HookInput::plugin(
+                        hook_config_from_registration(hook.clone(), plugin.scope_key.clone()),
+                        plugin,
+                    )
+                })
             })
             .collect()
     }
 
-    fn build_active_plugin_tool_index(
+    fn build_plugin_runtime_view(
         registry: &PluginRegistry,
-        mut cold_tools: Vec<ToolRegistration>,
-    ) -> (
-        HashMap<String, ToolRegistration>,
-        HashMap<String, visibility::ScopeKey>,
-    ) {
-        let mut active_plugins: Vec<String> = registry
-            .list_active_plugins()
-            .into_iter()
-            .map(|plugin| plugin.id.clone())
-            .collect();
-        active_plugins.sort();
-
-        let mut active_tools = HashMap::new();
-        for plugin_id in active_plugins {
-            let mut plugin_tools: Vec<ToolRegistration> = registry
-                .list_tools_for_plugin(&plugin_id)
-                .into_iter()
-                .cloned()
-                .collect();
-            plugin_tools.sort_by(|a, b| a.name.cmp(&b.name));
-
-            for tool in plugin_tools {
-                // Keyed by the namespaced key: two plugins may expose the
-                // same short name, and both registrations have to survive
-                // until visibility has decided which one a session sees.
-                active_tools.insert(namespaced_component_key(&tool.plugin_id, &tool.name), tool);
+        cold_tools: Vec<ToolRegistration>,
+    ) -> PluginRuntimeView {
+        let mut view = PluginRuntimeView::default();
+        for plugin in registry.list_plugins() {
+            if let visibility::ScopeKey::Project(root) = &plugin.scope_key {
+                view.project_packages
+                    .entry(plugin.id.clone())
+                    .or_default()
+                    .insert(root.clone());
+            }
+            if plugin.status.is_active() || plugin.status == PluginStatus::Cold {
+                view.scope_keys.insert(
+                    plugin.instance_key().runtime_key(),
+                    plugin.scope_key.clone(),
+                );
             }
         }
-
-        cold_tools.sort_by(|a, b| a.name.cmp(&b.name).then(a.plugin_id.cmp(&b.plugin_id)));
-        for tool in cold_tools {
-            // Keyed by the namespaced key, like every registry entry: the
-            // index keeps one registration per owner, and the short-name
-            // contest is settled per view. A Cold declaration never
-            // replaces a Ready registration of the same owner.
-            active_tools
-                .entry(namespaced_component_key(&tool.plugin_id, &tool.name))
-                .or_insert(tool);
+        for tool in registry.list_tools() {
+            if view.scope_keys.contains_key(&tool.plugin_id) {
+                view.tools.insert(
+                    namespaced_component_key(&tool.plugin_id, &tool.name),
+                    tool.clone(),
+                );
+            }
         }
-
-        let scope_keys = registry
-            .list_plugins()
-            .into_iter()
-            .map(|p| (p.id.clone(), p.scope_key.clone()))
-            .collect();
-
-        (active_tools, scope_keys)
+        for tool in cold_tools {
+            if view.scope_keys.contains_key(&tool.plugin_id) {
+                view.tools
+                    .entry(namespaced_component_key(&tool.plugin_id, &tool.name))
+                    .or_insert(tool);
+            }
+        }
+        view
     }
 
     fn cold_plugin_tools(&self) -> Vec<ToolRegistration> {
@@ -1300,7 +1310,9 @@ impl projection::Views {
                     .iter()
                     .filter_map(|capability| match capability {
                         crate::extension::capability::CapabilityDeclaration::Tool(registration) => {
-                            Some(registration.clone())
+                            let mut registration = registration.clone();
+                            registration.plugin_id.clone_from(&owner.runtime_key);
+                            Some(registration)
                         }
                         _ => None,
                     })
@@ -1310,23 +1322,14 @@ impl projection::Views {
 
     pub(crate) async fn refresh_active_plugin_tools(&self) {
         let cold_tools = self.cold_plugin_tools();
-        let (active_tools, scope_keys) = {
+        let view = {
             let registry = self.plugin_registry.read().await;
-            Self::build_active_plugin_tool_index(&registry, cold_tools)
+            Self::build_plugin_runtime_view(&registry, cold_tools)
         };
-
-        // Both maps are derived under the one registry read above, but published
-        // by two sequential writes: a reader between them can see new tools with
-        // a not-yet-published key, which reads as `None` → not visible
-        // (fail-closed), never the reverse.
         *self
-            .active_plugin_tools
+            .plugin_runtime_view
             .write()
-            .unwrap_or_else(|e| e.into_inner()) = active_tools;
-        *self
-            .plugin_scope_keys
-            .write()
-            .unwrap_or_else(|e| e.into_inner()) = scope_keys;
+            .unwrap_or_else(|e| e.into_inner()) = view;
         self.plugin_tool_revision.fetch_add(1, Ordering::SeqCst);
     }
 }
@@ -1382,26 +1385,9 @@ impl ExtensionManager {
             .revision()
     }
 
-    /// Snapshot of active plugin tools, one entry per short tool name.
-    ///
-    /// This view has no project to scope by, so the short-name contest is
-    /// settled globally: the lexicographically first plugin id wins, the
-    /// same winner this view has always published. The index keeps every
-    /// registration — see [`Self::active_plugin_tools`].
-    ///
-    /// Admitted Cold declarations are part of this metadata projection: a
-    /// Cold tool is callable metadata, never a Ready proof, and the
-    /// canonical dispatch path activates its owner on the first call.
+    /// Global tool metadata, including admitted Cold declarations.
     pub fn active_plugin_tools_snapshot(&self) -> Vec<ToolRegistration> {
-        let tools = self
-            .active_plugin_tools
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
-        let mut snapshot: Vec<ToolRegistration> = tools.values().cloned().collect();
-        snapshot.sort_by(|a, b| a.name.cmp(&b.name).then(a.plugin_id.cmp(&b.plugin_id)));
-        let mut seen = HashSet::new();
-        snapshot.retain(|tool| seen.insert(tool.name.clone()));
-        snapshot
+        self.active_plugin_tools_visible_to(&visibility::VisibilityCtx::default())
     }
 
     /// Snapshot of plugin tool metadata that the mounted-only transport
@@ -1413,14 +1399,20 @@ impl ExtensionManager {
             .runtime_owners
             .lock()
             .unwrap()
-            .iter()
-            .map(|(id, owner)| (id.clone(), owner.provider.state()))
-            .collect::<std::collections::HashMap<_, _>>();
-        let tools = self
-            .active_plugin_tools
+            .values()
+            .map(|owner| (owner.runtime_key.clone(), owner.provider.state()))
+            .collect::<HashMap<_, _>>();
+        let view = self
+            .plugin_runtime_view
             .read()
             .unwrap_or_else(|e| e.into_inner());
-        let mut snapshot: Vec<ToolRegistration> = tools.values().cloned().collect();
+        let ctx = visibility::VisibilityCtx::default();
+        let mut snapshot: Vec<ToolRegistration> = view
+            .tools
+            .values()
+            .filter(|tool| view.package_visible(&tool.plugin_id, &ctx))
+            .cloned()
+            .collect();
         // The Ready filter runs BEFORE the short-name dedup: a Cold owner's
         // tool must not win the name contest and hide a Ready namesake
         // (E1-03). `active_plugin_tools_snapshot()` dedups first, so the
@@ -1445,95 +1437,95 @@ impl ExtensionManager {
         &self,
         ctx: &visibility::VisibilityCtx,
     ) -> Vec<ToolRegistration> {
-        let tools = self
-            .active_plugin_tools
+        let view = self
+            .plugin_runtime_view
             .read()
             .unwrap_or_else(|e| e.into_inner());
-        // Visibility FIRST. A tool this session may see is not dropped
-        // because a plugin the session cannot see claimed the same short
-        // name; the short-name contest is settled among the visible
-        // plugins only.
-        let mut visible: Vec<ToolRegistration> = tools
+        let mut visible: Vec<ToolRegistration> = view
+            .tools
             .values()
-            .filter(|tool| self.plugin_visible(&tool.plugin_id, ctx))
+            .filter(|tool| view.package_visible(&tool.plugin_id, ctx))
             .cloned()
             .collect();
-        // Within one short name, the MOST SPECIFIC scope wins: a project
-        // plugin shadows a global plugin that claims the same name, so a
-        // global plugin can never delete the project's own tool. Ties (two
-        // plugins of the same scope) fall back to the lexicographically
-        // first plugin id.
-        visible.sort_by(|a, b| {
-            a.name.cmp(&b.name).then_with(|| {
-                self.scope_specificity(&b.plugin_id)
-                    .cmp(&self.scope_specificity(&a.plugin_id))
-                    .then_with(|| a.plugin_id.cmp(&b.plugin_id))
-            })
-        });
+        visible.sort_by(|a, b| view.tool_order(a, b));
         let mut seen = HashSet::new();
         visible.retain(|tool| seen.insert(tool.name.clone()));
         visible
     }
 
-    /// How specific a plugin's scope is: a project plugin (1) shadows a
-    /// global plugin (0) when both claim the same tool short name. An
-    /// unknown plugin id scores 0 — the registry is the only authority on
-    /// scope, and a plugin it cannot name has no claim to shadow.
-    fn scope_specificity(&self, plugin_id: &str) -> u8 {
-        match self.plugin_scope_key(plugin_id) {
-            Some(visibility::ScopeKey::Project(_)) => 1,
-            _ => 0,
-        }
-    }
-
-    /// The visibility key of a registered plugin, any status. `None` = unknown id.
-    pub fn plugin_scope_key(&self, plugin_id: &str) -> Option<visibility::ScopeKey> {
-        self.plugin_scope_keys
+    /// The visibility key attached to an active or admitted Cold owner.
+    pub fn plugin_scope_key(&self, runtime_key: &str) -> Option<visibility::ScopeKey> {
+        self.plugin_runtime_view
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .get(plugin_id)
+            .scope_keys
+            .get(runtime_key)
             .cloned()
     }
 
-    /// May a session in `ctx` see anything this plugin contributes?
-    ///
-    /// Fail-closed on an unknown id: the registry is the only authority on
-    /// where a plugin came from, and a plugin it cannot name has no key to
-    /// compare. Every capability face (tool index, skills, sub-agents, slash
-    /// list, request-time MCP join) asks this; hooks compare their own
-    /// stamped key with the same `visible_to`.
-    pub fn plugin_visible(&self, plugin_id: &str, ctx: &visibility::VisibilityCtx) -> bool {
-        self.plugin_scope_key(plugin_id)
-            .is_some_and(|key| visibility::visible_to(&key, ctx))
+    pub(crate) fn plugin_tool_provider_name(
+        &self,
+        runtime_key: &str,
+        name: &str,
+    ) -> Option<String> {
+        let scope = self.plugin_scope_key(runtime_key)?;
+        let id = visibility::PluginInstanceKey::runtime_group(runtime_key);
+        Some(visibility::PluginInstanceKey::new(scope, id.to_owned()).tool_provider_name(name))
     }
 
-    /// Resolve a plugin tool from the live metadata projection by short name
-    /// or `plugin_id:name`.
-    ///
-    /// An explicit `plugin_id:name` names its owner and resolves to that
-    /// registration directly. A bare short name is ambiguous across
-    /// plugins: the winner is the one
-    /// [`Self::active_plugin_tools_snapshot`] publishes — the
-    /// lexicographically first plugin id.
-    ///
-    /// Cold declarations are metadata-visible here; the canonical handler
-    /// performs activation only after dispatch admission.
+    /// Unqualified discovery applies the project package winner even when
+    /// that package has no active contributions.
+    pub fn plugin_visible(&self, runtime_key: &str, ctx: &visibility::VisibilityCtx) -> bool {
+        self.plugin_runtime_view
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .package_visible(runtime_key, ctx)
+    }
+
+    /// Resolve a tool alias in the authorized run's package view.
     pub fn resolve_active_plugin_tool(&self, name: &str) -> Option<ToolRegistration> {
-        let tools = self
-            .active_plugin_tools
+        self.resolve_active_plugin_tool_for(name, &visibility::VisibilityCtx::for_authorized_run())
+    }
+
+    pub(crate) fn resolve_active_plugin_tool_for(
+        &self,
+        name: &str,
+        ctx: &visibility::VisibilityCtx,
+    ) -> Option<ToolRegistration> {
+        let view = self
+            .plugin_runtime_view
             .read()
             .unwrap_or_else(|e| e.into_inner());
-
-        if let Some((plugin_id, short_name)) = name.split_once(':') {
-            return tools
-                .get(&namespaced_component_key(plugin_id, short_name))
+        if let Some((owner, short_name)) = name.split_once(':') {
+            let runtime_key = ctx
+                .project_root
+                .as_ref()
+                .filter(|root| {
+                    view.project_packages
+                        .get(owner)
+                        .is_some_and(|roots| roots.contains(*root))
+                })
+                .map(|root| {
+                    visibility::PluginInstanceKey::new(
+                        visibility::ScopeKey::Project(root.clone()),
+                        owner.to_owned(),
+                    )
+                    .runtime_key()
+                });
+            let runtime_key = runtime_key.as_deref().unwrap_or(owner);
+            return view
+                .package_visible(runtime_key, ctx)
+                .then(|| {
+                    view.tools
+                        .get(&namespaced_component_key(runtime_key, short_name))
+                })
+                .flatten()
                 .cloned();
         }
-
-        tools
+        view.tools
             .values()
-            .filter(|tool| tool.name == name)
-            .min_by(|a, b| a.plugin_id.cmp(&b.plugin_id))
+            .filter(|tool| tool.name == name && view.package_visible(&tool.plugin_id, ctx))
+            .min_by(|a, b| view.tool_order(a, b))
             .cloned()
     }
 
@@ -1758,8 +1750,8 @@ mod tests {
 
     #[test]
     fn plugin_agent_to_def_maps_subagent_and_keeps_body() {
-        use crate::extension::types::AgentMode as ExtMode;
         use crate::extension::AgentRegistration;
+        use crate::extension::types::AgentMode as ExtMode;
 
         let mut reg = AgentRegistration {
             name: "deployer".into(),
@@ -2082,15 +2074,24 @@ mod tests {
         );
 
         // Record the operator's preference the way every toggle face does.
-        assert!(manager
-            .set_plugin_enabled("quiet-plugin", false)
-            .await
-            .unwrap()
-            .changed());
         assert!(
-            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
+            manager
+                .set_plugin_enabled("quiet-plugin", false)
+                .await
                 .unwrap()
-                .is_enabled_for("quiet-plugin", PluginOrigin::Workspace),
+                .changed()
+        );
+        assert!(
+            crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
+                .unwrap()
+                .activation_for(
+                    &visibility::PluginInstanceKey::new(
+                        visibility::ScopeKey::project(tmp.path()),
+                        "quiet-plugin".to_owned()
+                    ),
+                    PluginOrigin::Workspace
+                )
+                == plugin_state::Activation::Disabled,
             "the preference must reach disk, not just the in-memory registry"
         );
 
@@ -2189,12 +2190,14 @@ mod tests {
         let (manager2, _) = isolated_manager(tmp.path()).await;
         drop(manager);
         manager2.load_all().await.unwrap();
-        assert!(!manager2
-            .get_plugin_record("wakeable")
-            .await
-            .unwrap()
-            .status
-            .is_active());
+        assert!(
+            !manager2
+                .get_plugin_record("wakeable")
+                .await
+                .unwrap()
+                .status
+                .is_active()
+        );
 
         let _ = manager2.set_plugin_enabled("wakeable", true).await.unwrap();
         assert!(
@@ -2234,9 +2237,16 @@ mod tests {
             "the legacy marker's intent must be honoured on the migrating load"
         );
         assert!(
-            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
+            crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
                 .unwrap()
-                .is_enabled_for("old-timer", PluginOrigin::Workspace),
+                .activation_for(
+                    &visibility::PluginInstanceKey::new(
+                        visibility::ScopeKey::project(tmp.path()),
+                        "old-timer".to_owned()
+                    ),
+                    PluginOrigin::Workspace
+                )
+                == plugin_state::Activation::Disabled,
             "and be written into the durable document"
         );
         assert!(
@@ -2462,33 +2472,28 @@ mod tests {
             project_root: Some(crate::extension::visibility::canonical_root(dir.path())),
         };
         let elsewhere = VisibilityCtx { project_root: None };
+        let owner =
+            visibility::PluginInstanceKey::new(ScopeKey::project(dir.path()), "p2-vis".into())
+                .runtime_key();
         assert_eq!(
-            manager.plugin_scope_key("p2-vis"),
+            manager.plugin_scope_key(&owner),
             Some(ScopeKey::project(dir.path()))
         );
-        assert!(manager.plugin_visible("p2-vis", &here));
-        assert!(!manager.plugin_visible("p2-vis", &elsewhere));
+        assert!(manager.plugin_visible(&owner, &here));
+        assert!(!manager.plugin_visible(&owner, &elsewhere));
         // Never registered → not visible anywhere. `Some(true)` here would let
         // a face show a tool whose owner the registry cannot name.
         assert!(!manager.plugin_visible("never-registered", &here));
         assert_eq!(manager.plugin_scope_key("never-registered"), None);
 
-        // The key map covers every registered row, any status — activation is
-        // a separate question each face asks itself. `unmount` is a lifecycle
-        // transition (Loaded → Disabled) that runs `after_transition`, which
-        // rebuilds both snapshots; the row survives, so the key must too.
         manager.unmount("p2-vis").await.unwrap();
-        assert_eq!(
-            manager.plugin_scope_key("p2-vis"),
-            Some(ScopeKey::project(dir.path())),
-            "the key map covers every registered row, any status — activation is a separate question each face asks itself"
-        );
-        assert!(manager.plugin_visible("p2-vis", &here));
+        assert_eq!(manager.plugin_scope_key(&owner), None);
+        assert!(!manager.plugin_visible(&owner, &here));
         assert!(
             !manager
                 .active_plugin_tools_snapshot()
                 .iter()
-                .any(|t| t.plugin_id == "p2-vis"),
+                .any(|t| t.plugin_id == owner),
             "the tool index, by contrast, is active-only"
         );
     }
@@ -2498,7 +2503,7 @@ mod tests {
     /// the request-time filter is what changes.
     #[tokio::test]
     async fn plugin_tool_index_is_filtered_by_the_owning_plugins_visibility() {
-        use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
+        use crate::extension::visibility::{ScopeKey, VisibilityCtx, canonical_root};
         let _home = hermetic_home();
         let proj = tempfile::tempdir().unwrap();
         let manager = ExtensionManager::with_defaults().await.unwrap();
@@ -2511,13 +2516,14 @@ mod tests {
                 PluginOrigin::Workspace,
             );
             record.scope_key = ScopeKey::project(proj.path());
+            let owner = record.instance_key().runtime_key();
             registry.register_plugin(record);
             registry.register_tool(ToolRegistration {
                 name: "p2_scoped_tool".into(),
                 description: "only in its project".into(),
                 parameters: serde_json::json!({"type": "object"}),
                 handler: "tool_p2_scoped_tool".into(),
-                plugin_id: "p2-tools".into(),
+                plugin_id: owner,
             });
             let mut global = PluginRecord::new(
                 "p2-global-tools".into(),
@@ -2550,8 +2556,7 @@ mod tests {
         let nowhere = VisibilityCtx { project_root: None };
         assert_eq!(names(&in_p), vec!["p2_global_tool", "p2_scoped_tool"]);
         assert_eq!(names(&nowhere), vec!["p2_global_tool"]);
-        // The unfiltered snapshot still holds both: the filter is per request.
-        assert_eq!(manager.active_plugin_tools_snapshot().len(), 2);
+        assert_eq!(manager.active_plugin_tools_snapshot().len(), 1);
     }
 
     /// A short tool name is not unique across plugins. The tool index kept
@@ -2559,7 +2564,7 @@ mod tests {
     /// was deleted before the session in that project ever asked for it.
     #[tokio::test]
     async fn a_project_tool_survives_another_plugin_claiming_the_same_short_name() {
-        use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
+        use crate::extension::visibility::{ScopeKey, VisibilityCtx, canonical_root};
         let _home = hermetic_home();
         let proj = tempfile::tempdir().unwrap();
         let manager = ExtensionManager::with_defaults().await.unwrap();
@@ -2572,13 +2577,14 @@ mod tests {
                 PluginOrigin::Workspace,
             );
             project_plugin.scope_key = ScopeKey::project(proj.path());
+            let owner = project_plugin.instance_key().runtime_key();
             registry.register_plugin(project_plugin);
             registry.register_tool(ToolRegistration {
                 name: "shared_tool".into(),
                 description: "the project's own tool".into(),
                 parameters: serde_json::json!({"type": "object"}),
                 handler: "tool_proj_alpha".into(),
-                plugin_id: "proj-alpha".into(),
+                plugin_id: owner,
             });
             let mut global_plugin = PluginRecord::new(
                 "global-alpha".into(),
@@ -2611,17 +2617,20 @@ mod tests {
         };
         let nowhere = VisibilityCtx { project_root: None };
 
+        let owner =
+            visibility::PluginInstanceKey::new(ScopeKey::project(proj.path()), "proj-alpha".into())
+                .runtime_key();
         assert_eq!(
             owners(&in_p),
-            vec!["proj-alpha".to_string()],
+            vec![owner.clone()],
             "the project plugin's tool must not be deleted by the global plugin claiming the same short name"
         );
         assert_eq!(owners(&nowhere), vec!["global-alpha".to_string()]);
         assert_eq!(
             manager
-                .resolve_active_plugin_tool("proj-alpha:shared_tool")
+                .resolve_active_plugin_tool_for(&format!("{owner}:shared_tool"), &in_p)
                 .map(|tool| tool.plugin_id),
-            Some("proj-alpha".to_string()),
+            Some(owner),
             "an explicit namespace resolves to its own registration"
         );
         assert_eq!(
@@ -2638,7 +2647,7 @@ mod tests {
     /// its project and nowhere else.
     #[tokio::test]
     async fn plugin_visible_decides_the_mcp_join_for_owned_servers() {
-        use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
+        use crate::extension::visibility::{ScopeKey, VisibilityCtx, canonical_root};
         let _home = hermetic_home();
         let proj = tempfile::tempdir().unwrap();
         let manager = ExtensionManager::with_defaults().await.unwrap();
@@ -2654,7 +2663,10 @@ mod tests {
             registry.register_plugin(record);
         }
         manager.sync_runtime_snapshots().await;
-        let server_id = crate::extension::mcp_config::plugin_server_id("proj", "srv");
+        let owner =
+            visibility::PluginInstanceKey::new(ScopeKey::project(proj.path()), "proj".into())
+                .runtime_key();
+        let server_id = crate::extension::mcp_config::plugin_server_id(&owner, "srv");
         let owner = crate::extension::mcp_config::owning_plugin_of_server_id(&server_id).unwrap();
         assert!(manager.plugin_visible(
             owner,
@@ -2739,9 +2751,9 @@ mod tests {
         assert_eq!(
             planted.source(),
             &crate::domain::skill::SkillSource::Plugin(crate::domain::skill::PluginId::new(
-                "my-plugin"
+                record.instance_key().runtime_key()
             )),
-            "owner must be the registry id, not the directory name"
+            "skill ownership must resolve to the exact registry row"
         );
 
         // And the face that dropped it before this task now keeps it.
@@ -2751,7 +2763,7 @@ mod tests {
         let kept = crate::extension::visibility::retain_visible_plugin_skills(
             manifests.clone(),
             &in_p,
-            |id| manager.plugin_scope_key(id),
+            |id, ctx| manager.plugin_visible(id, ctx),
         );
         assert!(
             kept.iter().any(|m| m.name() == "planted"),
@@ -2913,11 +2925,13 @@ mod tests {
 
         manager.ensure_loaded().await.unwrap();
         assert!(manager.is_loaded().await);
-        assert!(manager
-            .get_plugin_registry()
-            .await
-            .list_plugins()
-            .is_empty());
+        assert!(
+            manager
+                .get_plugin_registry()
+                .await
+                .list_plugins()
+                .is_empty()
+        );
 
         let err = manager
             .set_tool_handler_registry(fresh_tool_handler_registry())
@@ -3032,7 +3046,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(
-                "mounted".to_string(),
+                visibility::PluginInstanceKey::new(visibility::ScopeKey::Global, "mounted".into()),
                 effects::EffectScope::new("mounted".to_string()),
             );
         assert!(!manager.is_loaded().await);
@@ -3068,11 +3082,13 @@ mod tests {
             .load_plugin(&manifest)
             .expect("the real empty WASM module links");
         assert!(!manager.is_loaded().await);
-        assert!(manager
-            .get_plugin_registry()
-            .await
-            .list_plugins()
-            .is_empty());
+        assert!(
+            manager
+                .get_plugin_registry()
+                .await
+                .list_plugins()
+                .is_empty()
+        );
         assert!(manager.scopes.lock().unwrap().is_empty());
         assert_eq!(manager.plugin_loader.read().await.loaded_count(), 1);
 

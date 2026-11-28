@@ -7,6 +7,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::extension::manifest::inputs;
+
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use tracing::{debug, info, warn};
@@ -342,7 +344,7 @@ where
     F: Fn(&Path, &str, &str) -> Result<CapabilityDeclaration>,
 {
     let dir = base.join(rel_path);
-    if !dir.exists() || !dir.is_dir() {
+    if !inputs::exists(&dir) || !inputs::is_dir(&dir) {
         return Ok(Vec::new());
     }
 
@@ -356,7 +358,7 @@ where
     }
 
     let mut caps = Vec::new();
-    let entries = std::fs::read_dir(&dir).with_context(|| {
+    let entries = inputs::read_dir(&dir).with_context(|| {
         format!(
             "Failed to read {} dir: {}",
             config.component_name,
@@ -380,9 +382,9 @@ where
             continue;
         }
 
-        let result = if path.is_dir() {
+        let result = if inputs::is_dir(&path) {
             let entry_file = path.join(config.dir_entry_file);
-            if !entry_file.exists() || !is_path_inside(base, &entry_file) {
+            if !inputs::exists(&entry_file) || !is_path_inside(base, &entry_file) {
                 continue;
             }
             let dir_name = path
@@ -442,13 +444,13 @@ pub fn parse_skills_dir(
 /// this one store — there is no parallel `CommandRegistration` type.
 ///
 /// [`SkillType`]: crate::extension::types::SkillType
-fn parse_skill_registration(
+pub(super) fn parse_skill_registration(
     md_path: &Path,
     default_name: &str,
     plugin_id: &str,
     skill_type: crate::extension::types::SkillType,
 ) -> Result<CapabilityDeclaration> {
-    let content = std::fs::read_to_string(md_path)
+    let content = inputs::read_to_string(md_path)
         .with_context(|| format!("Failed to read {}", md_path.display()))?;
     let (fm, body): (SkillFm, String) = parse_frontmatter(&content, md_path)?;
     let name = fm.name.unwrap_or_else(|| default_name.to_string());
@@ -460,6 +462,7 @@ fn parse_skill_registration(
     };
 
     Ok(CapabilityDeclaration::Skill(SkillRegistration {
+        template_dialect: Default::default(),
         name,
         description: fm.description.unwrap_or_default(),
         content: body,
@@ -758,7 +761,7 @@ fn parse_single_agent(
     default_name: &str,
     plugin_id: &str,
 ) -> Result<CapabilityDeclaration> {
-    let content = std::fs::read_to_string(md_path)
+    let content = inputs::read_to_string(md_path)
         .with_context(|| format!("Failed to read {}", md_path.display()))?;
     let (fm, body): (AgentFm, String) = parse_frontmatter(&content, md_path)?;
     // The mode axis exists for disk agents only: a plugin agent always
@@ -807,7 +810,7 @@ pub fn parse_hooks_file(
     plugin_id: &str,
 ) -> Result<Vec<CapabilityDeclaration>> {
     let file_path = base.join(rel_path);
-    if !file_path.exists() {
+    if !inputs::exists(&file_path) {
         return Ok(Vec::new());
     }
     if !is_path_inside(base, &file_path) {
@@ -817,7 +820,7 @@ pub fn parse_hooks_file(
         ));
     }
 
-    let content = std::fs::read_to_string(&file_path)
+    let content = inputs::read_to_string(&file_path)
         .with_context(|| format!("Failed to read hooks file: {}", file_path.display()))?;
 
     parse_hooks_content(&content, base, plugin_id)
@@ -950,7 +953,7 @@ pub fn parse_mcp_config_file(
     plugin_id: &str,
 ) -> Result<Vec<CapabilityDeclaration>> {
     let file_path = base.join(rel_path);
-    if !file_path.exists() {
+    if !inputs::exists(&file_path) {
         return Ok(Vec::new());
     }
     if !is_path_inside(base, &file_path) {
@@ -960,7 +963,7 @@ pub fn parse_mcp_config_file(
         ));
     }
 
-    let content = std::fs::read_to_string(&file_path)
+    let content = inputs::read_to_string(&file_path)
         .with_context(|| format!("Failed to read MCP config: {}", file_path.display()))?;
 
     // One message, not `with_context`: the row renders `e.to_string()`, which
@@ -982,7 +985,7 @@ pub fn parse_mcp_config_content(
     base: &Path,
     plugin_id: &str,
 ) -> Result<Vec<CapabilityDeclaration>> {
-    crate::extension::mcp_config::parse_declared_servers(content, base, plugin_id)
+    crate::extension::mcp_config::parse_declared_servers(content, base, plugin_id, true)
         .map(|servers| {
             servers
                 .into_iter()
@@ -1014,7 +1017,7 @@ pub fn parse_v2_prompt(
             file_path.display()
         ));
     }
-    let content = std::fs::read_to_string(&file_path)
+    let content = inputs::read_to_string(&file_path)
         .with_context(|| format!("Failed to read v2 prompt file: {}", file_path.display()))?;
 
     let scope = match prompt_section.scope.as_str() {
@@ -1030,6 +1033,7 @@ pub fn parse_v2_prompt(
     };
 
     Ok(CapabilityDeclaration::Skill(SkillRegistration {
+        template_dialect: Default::default(),
         name: format!("{plugin_id}-prompt"),
         description: format!("V2 prompt for plugin {plugin_id}"),
         content,
@@ -1066,9 +1070,10 @@ pub fn parse_v2_tool_prompts(
             );
             continue;
         }
-        match std::fs::read_to_string(&file_path) {
+        match inputs::read_to_string(&file_path) {
             Ok(content) => {
                 caps.push(CapabilityDeclaration::Skill(SkillRegistration {
+                    template_dialect: Default::default(),
                     name: format!("{}-tool-prompt", tool.name),
                     description: tool
                         .description
@@ -1201,7 +1206,7 @@ pub fn parse_v2_services(
 /// Returns `true` only if `target` resolves to a path inside `root`.
 /// If either path cannot be canonicalized (e.g., does not exist), returns `false`.
 pub(crate) fn is_path_inside(root: &Path, target: &Path) -> bool {
-    match (root.canonicalize(), target.canonicalize()) {
+    match (inputs::canonicalize(root), inputs::canonicalize(target)) {
         (Ok(root), Ok(target)) => target.starts_with(&root),
         _ => false,
     }
@@ -1540,10 +1545,16 @@ mod tests {
             "primary.md",
             "---\nname: primary\ndescription: Wants to be primary\nmode: primary\n---\nBody.\n",
         );
-        let err = parse_agents_dir(dir.path(), "agents", "plug").unwrap_err();
+        let primary = dir.path().join("agents/primary.md");
+        let err = parse_single_agent(&primary, "primary", "plug").unwrap_err();
         assert!(
             err.to_string().contains("`mode:` is not supported"),
             "the error must name the rejected key: {err}"
+        );
+        assert!(
+            parse_agents_dir(dir.path(), "agents", "plug")
+                .unwrap()
+                .is_empty()
         );
     }
 
@@ -2227,12 +2238,16 @@ mod tests {
             .filter(|l| l.contains("hook matcher"))
             .collect();
         assert_eq!(notices.len(), 2, "{logged}");
-        assert!(notices
-            .iter()
-            .any(|l| l.contains("`resume`") && l.contains("never fires")));
-        assert!(notices
-            .iter()
-            .any(|l| l.contains("`x`") && l.contains("ignored")));
+        assert!(
+            notices
+                .iter()
+                .any(|l| l.contains("`resume`") && l.contains("never fires"))
+        );
+        assert!(
+            notices
+                .iter()
+                .any(|l| l.contains("`x`") && l.contains("ignored"))
+        );
     }
 
     /// The third reader of a matcher, `aleph.plugin.toml`'s `[[hooks]]

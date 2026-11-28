@@ -16,8 +16,7 @@ on:
       - 'interfaces/webchat/webview-baseline.json'
       - 'interfaces/webchat/baseline-probe.js'
       - 'interfaces/webchat/styles/**'
-      - 'desktop/shell/tauri.conf.json'
-      - 'desktop/shell/tauri.lite.conf.json'
+      - 'desktop/nsh-shell/nsh.json'
       - 'scripts/check_panel_dist.mjs'
       - 'scripts/check_webview_baseline.mjs'
       - 'crates/aleph-slot-api/**'
@@ -38,8 +37,7 @@ on:
       - 'interfaces/webchat/webview-baseline.json'
       - 'interfaces/webchat/baseline-probe.js'
       - 'interfaces/webchat/styles/**'
-      - 'desktop/shell/tauri.conf.json'
-      - 'desktop/shell/tauri.lite.conf.json'
+      - 'desktop/nsh-shell/nsh.json'
       - 'scripts/check_panel_dist.mjs'
       - 'scripts/check_webview_baseline.mjs'
       - 'crates/aleph-slot-api/**'
@@ -390,7 +388,7 @@ jobs:
       - name: Check formatting
         run: cargo fmt -p alephcore -p aleph-cdp -p aleph-desktop -p aleph-desktop-macos -p aleph-desktop-linux -p aleph-desktop-windows -- --check
       - name: Clippy
-        run: cargo clippy -p alephcore -p aleph-desktop --features native-qa -- -D warnings
+        run: cargo clippy -p alephcore -p aleph-desktop -- -D warnings
 
       # Neither step above compiles `#[cfg(test)]` code — `cargo check` does not,
       # and `cargo clippy` without `--all-targets` does not either. That hole is
@@ -419,9 +417,6 @@ jobs:
       - name: Check test code compiles
         if: runner.os == 'Linux'
         run: cargo check -p alephcore --all-targets -j1
-      - name: Check native QA gateway compiles
-        if: runner.os == 'Linux'
-        run: cargo check -p alephcore --bin aleph-panel-native-qa-gateway --features native-qa -j1
 
   # The Swift half of the desktop bridge had no CI at all: `just bridge-test`
   # exercises the wire format (golden fixtures against the committed schema.json),
@@ -567,33 +562,14 @@ jobs:
           rustup component add clippy
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install Tauri Linux dependencies
+      - name: Install NSH Linux dependencies
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update && sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
-            libayatana-appindicator3-dev libssl-dev
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libssl-dev
 
-      # tauri-build requires the externalBin files to exist; empty
-      # placeholders satisfy `cargo check` / `clippy` without a daemon build.
-      # Shared with the justfile recipe and the rust-doctor workflow: three
-      # copies of this derivation existed and the third was missing entirely.
-      - name: Stage externalBin placeholders
-        shell: bash
-        run: bash scripts/stage_shell_placeholders.sh
-
-      - name: Check
-        run: cargo check -p aleph-desktop-shell
       - name: Clippy
-        run: cargo clippy -p aleph-desktop-shell -- -D warnings
+        run: cargo clippy --locked -p aleph-nsh-shell --all-targets -- -D warnings
 
-      # The release builds BOTH shell variants; this job checked only the
-      # default one, so every file behind `#![cfg(not(feature =
-      # "embedded-core"))]` — the whole panel-only connect-setup module —
-      # was compiled for the first time by the release itself. It broke
-      # there (mdns-sd 0.20 yields `ScopedIp`, not `IpAddr`) with no gate
-      # in front of it. Check the variant the release actually ships.
-      - name: Check (panel-only / lite variant)
-        run: cargo check -p aleph-desktop-shell --no-default-features
-      - name: Clippy (panel-only / lite variant)
-        run: cargo clippy -p aleph-desktop-shell --no-default-features -- -D warnings
+      - name: Test desktop host and shell
+        run: cargo test --locked -p aleph-desktop-host -p aleph-nsh-shell

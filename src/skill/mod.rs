@@ -22,25 +22,25 @@ pub mod usage;
 
 pub use compat::SkillInfo;
 pub use config::{InstallPreferences, SkillConfigUpdate, SkillEntryConfig, SkillsConfig};
-pub use cooccurrence::{cluster_chains, CoOccurrenceLog, RecentUse};
+pub use cooccurrence::{CoOccurrenceLog, RecentUse, cluster_chains};
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
-pub use frontmatter::{normalize_allowed_tools, ALLOWED_TOOLS_KEY};
+pub use frontmatter::{ALLOWED_TOOLS_KEY, normalize_allowed_tools};
 pub use guard::{
-    install_allowed, merge_verdicts, scan_content, scan_skill_directory, ScanVerdict, ThreatLevel,
-    TrustLevel,
+    ScanVerdict, ThreatLevel, TrustLevel, install_allowed, merge_verdicts, scan_content,
+    scan_skill_directory,
 };
 pub use installer::{
-    build_install_command, filter_install_specs_for_current_os, select_best_install,
-    InstallExecutor, InstallResult, InstallSuccess, SkillInstallError,
+    InstallExecutor, InstallResult, InstallSuccess, SkillInstallError, build_install_command,
+    filter_install_specs_for_current_os, select_best_install,
 };
-pub use manifest::{automation_notice, parse_skill_content, parse_skill_file, SkillParseError};
-pub use preprocess::{preprocess_skill_content, PreprocessError, SkillPreprocessContext};
-pub use prompt::{build_skills_prompt_xml, SkillPromptBudget};
+pub use manifest::{SkillParseError, automation_notice, parse_skill_content, parse_skill_file};
+pub use preprocess::{PreprocessError, SkillPreprocessContext, preprocess_skill_content};
+pub use prompt::{SkillPromptBudget, build_skills_prompt_xml};
 pub use registry::SkillRegistry;
 pub use shared::{ensure_shared_skill_system_initialized, shared_skill_system};
 pub use snapshot::SkillSnapshot;
 pub use status::{InstallOption, MissingRequirements, SkillStatusEntry, SkillStatusFilter};
-pub use usage::{record_use_in_dir, SkillState, UsageStats, UsageStore};
+pub use usage::{SkillState, UsageStats, UsageStore, record_use_in_dir};
 
 use crate::sync_primitives::{Arc, AtomicU64, Ordering};
 use std::path::{Path, PathBuf};
@@ -320,9 +320,31 @@ impl SkillSystem {
         let base = self.inner.skill_dirs.read().await.clone();
         let published: Vec<PathBuf> = crate::utils::paths::plugin_skill_dirs()
             .into_iter()
+            .filter(|publication| !publication.exact_file || publication.selected_file_is_current())
             .map(|p| p.dir)
             .collect();
         merge_published_roots_off_loop(base, published, crate::utils::paths::equivalent).await
+    }
+
+    /// Resolve file-backed skill roots to the directories holding their usage sidecars.
+    async fn usage_roots(&self) -> Vec<PathBuf> {
+        let roots = self.scan_roots().await;
+        run_blocking_fs("SkillSystem::usage_roots", move || {
+            let mut seen = std::collections::HashSet::new();
+            roots
+                .into_iter()
+                .filter_map(|root| {
+                    if root.is_file() {
+                        usage::sidecar_dir_for_manifest(&root).map(Path::to_path_buf)
+                    } else {
+                        Some(root)
+                    }
+                })
+                .filter(|root| seen.insert(root.clone()))
+                .collect()
+        })
+        .await
+        .unwrap_or_default()
     }
 
     /// Get a clone of the current snapshot.
@@ -457,7 +479,7 @@ impl SkillSystem {
     /// rare same-id collision (the registry would normally have already
     /// deduped at load time).
     async fn collect_usage_snapshot(&self) -> std::collections::HashMap<String, UsageStats> {
-        let dirs = self.scan_roots().await;
+        let dirs = self.usage_roots().await;
         run_blocking_fs("SkillSystem::collect_usage_snapshot", move || {
             let mut merged: std::collections::HashMap<String, UsageStats> = Default::default();
             for dir in &dirs {
@@ -485,7 +507,7 @@ impl SkillSystem {
     /// registration time — so no defensive traversal check is needed here.
     async fn owning_dir(&self, id: &SkillId) -> Option<PathBuf> {
         let id_str = id.as_str();
-        let dirs = self.scan_roots().await;
+        let dirs = self.usage_roots().await;
         let owned_id = id_str.to_string();
         match tokio::task::spawn_blocking(move || {
             for dir in &dirs {
@@ -724,7 +746,7 @@ impl SkillSystem {
                     }
                 }
             }
-            let dirs = self.scan_roots().await;
+            let dirs = self.usage_roots().await;
             for dir in &dirs {
                 UsageStore::new(dir).forget(id.as_str());
                 // Paired with the .usage.json cleanup above: `.cooccur.json`
@@ -781,7 +803,11 @@ impl SkillSystem {
                 crate::utils::paths::assert_not_real_claude_home(dir, "SkillSystem::rescan_dirs");
                 if dir.exists() {
                     let source = guess_source(dir);
-                    let manifests = scan_directory(dir, source);
+                    let manifests = if dir.is_file() {
+                        parse_skill_file(dir, source).into_iter().collect()
+                    } else {
+                        scan_directory(dir, source)
+                    };
                     new_registry.register_all(manifests);
                 }
             }
@@ -989,24 +1015,39 @@ pub fn default_skill_dirs() -> Vec<PathBuf> {
 /// resolved through `ALEPH_HOME` / the project dir, so `/var` vs
 /// `/private/var` or a literal `$HOME` vs a canonicalised root are both
 /// reachable). `None` = no published dir covers `path`.
-fn plugin_id_from_published_dirs(path: &Path) -> Option<String> {
+fn published_skill_owner(path: &Path) -> Option<crate::utils::paths::PublishedPluginSkillDir> {
     let published = crate::utils::paths::plugin_skill_dirs();
     if published.is_empty() {
         return None;
     }
-    let longest_covering = |covers: &dyn Fn(&Path) -> bool| {
-        published
-            .iter()
-            .filter(|d| covers(&d.dir))
-            .max_by_key(|d| d.dir.components().count())
-            .map(|d| d.plugin_id.clone())
+    let matches = |path: &Path, root: &Path, exact_file: bool| {
+        if exact_file {
+            path == root
+        } else {
+            path.starts_with(root)
+        }
     };
-    longest_covering(&|dir| path.starts_with(dir)).or_else(|| {
+    let longest_covering =
+        |covers: &dyn Fn(&crate::utils::paths::PublishedPluginSkillDir) -> bool| {
+            published
+                .iter()
+                .filter(|entry| {
+                    covers(entry) && (!entry.exact_file || entry.selected_file_is_current())
+                })
+                .max_by_key(|entry| (entry.dir.components().count(), entry.exact_file))
+                .cloned()
+        };
+    longest_covering(&|entry| matches(path, &entry.dir, entry.exact_file)).or_else(|| {
         let canonical = crate::extension::visibility::canonical_root(path);
-        longest_covering(&|dir| {
-            canonical.starts_with(crate::extension::visibility::canonical_root(dir))
+        longest_covering(&|entry| {
+            let root = crate::extension::visibility::canonical_root(&entry.dir);
+            matches(&canonical, &root, entry.exact_file)
         })
     })
+}
+
+fn plugin_id_from_published_dirs(path: &Path) -> Option<String> {
+    published_skill_owner(path).map(|entry| entry.runtime_key())
 }
 
 /// FALLBACK owner for a plugin skill path that no published dir covers:

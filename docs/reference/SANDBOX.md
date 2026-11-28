@@ -79,7 +79,7 @@ Each `SessionWorkspace` carries:
    only where the process starts. Owned worktrees set `CARGO_TARGET_DIR` to
    `<worktree>/target`. Ordinary runs retain their existing cwd policy.
 5. **Run** — `os_driver.run(program, args, env, stdin, cwd, profile, timeout,
-   max_output_bytes)`. Default timeout 60s, default output budget 1 MB (split
+   max_output_bytes, lifecycle)`. Default timeout 60s, default output budget 1 MB (split
    stdout + stderr). Both override-able on the `WorkspaceSandbox` via
    `with_timeout` / `with_max_output_bytes`. Immediately after the run (before
    scrub), stderr is matched against the *running* backend's own denial
@@ -95,6 +95,12 @@ Each `SessionWorkspace` carries:
    carrying `session_id`, `program`, `caps`, `exit_code`, `signal`,
    `duration_ms`. This is the capability-ledger hook; downstream tracing
    subscribers can sink it to whatever store is desired.
+
+**Managed Shell / 托管 Shell。** Background and yielding shell calls use the same admission, workspace, policy, and native driver as foreground calls. Only opted-in drivers accept the lifecycle control. The driver orders cancellation against spawn, owns the direct child through a wait, and bounds the remaining output drain independently of the output byte limit. The optional initial script pipe drains concurrently with output and closes at the end of the script; it is not an interactive input channel.
+
+取消在启动前阻止 spawn。启动后，普通命令的原生驱动确认直接子进程退出。人工 PTY 和浏览器伴随进程各有独立的生命周期契约。
+
+受控 JSONL 只在符合条件的 Linux 配对 Gateway turn 中开放。WorkspaceSandbox 复用已挂载的 CommandPolicy 和 SecurityKernel，用固定启动文本加完整的已接受前缀和候选帧做等价检查；预算不足时拒绝。Bubblewrap 启动固定系统 jq，使用只读工作区、隔离网络、有上限的私有临时空间和启用 CPU、内存、PID 控制器的可委派 cgroup。首次 EOF 和每次写入均需单次操作员审批，提交时与实时撤权共同排序。 / The eligible Linux paired Gateway route runs the mounted text policies over the fixed launch and the full accepted prefix plus candidate frame. Bubblewrap runs the system jq using a read-only workspace, an isolated network, bounded private scratch and an actively verified delegated cgroup. Each write and the first EOF require one-time operator approval followed by reauthorization at delivery. See [the wire contract](TOOL_SYSTEM.md#code-execution).
 
 **Worktree lifetime / 工作树寿命。** Team selects its source from the authorized
 project, not the daemon cwd. A project bound to a Git subdirectory must be

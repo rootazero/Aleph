@@ -71,6 +71,19 @@ impl AgentHarness {
                             .await);
                     }
                 };
+                if crate::builtin_tools::bash_jsonl::is_private(&call.name, &new_args) {
+                    return Ok(self
+                        .settle_blocked_call(
+                            session_id,
+                            turn_id,
+                            call,
+                            started,
+                            iteration,
+                            callback,
+                            "guardrail rewrite produced a fixed JSONL operation".into(),
+                        )
+                        .await);
+                }
                 tracing::info!(?session_id, tool = %call.name, source = %rep.source, "tool-call args sanitized");
                 Ok(ToolCallGuardOutcome::Sanitize(new_args))
             }

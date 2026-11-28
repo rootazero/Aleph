@@ -11,6 +11,8 @@ pub struct AskUserOption {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
 
 /// Question projection shared by stream events and pending snapshots.

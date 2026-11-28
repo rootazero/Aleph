@@ -5,7 +5,70 @@ use super::{
     SecurityStore,
 };
 use crate::gateway::security::PANEL_DEVICE_TYPE;
-use rusqlite::{params, OptionalExtension, Result as SqliteResult};
+use rusqlite::{params, Connection, OptionalExtension, Result as SqliteResult};
+
+// An immediate transaction is held by the same connection as the canonical
+// store. The mutex also prevents temporarily changing other callers' timeout.
+#[cfg(target_os = "linux")]
+pub(crate) struct ShellAccountGuard<'a> {
+    connection: std::sync::MutexGuard<'a, Connection>,
+    previous_timeout: std::time::Duration,
+    reserved: bool,
+    expires_at_ms: i64,
+    role: UserRole,
+}
+
+#[cfg(target_os = "linux")]
+impl ShellAccountGuard<'_> {
+    pub(crate) fn role_at_effect(&self) -> Option<UserRole> {
+        (current_timestamp_ms() < self.expires_at_ms).then_some(self.role)
+    }
+
+    pub(crate) fn expiry(&self) -> Option<std::time::SystemTime> {
+        let millis = u64::try_from(self.expires_at_ms).ok()?;
+        std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(millis))
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ShellAccountGuard<'_> {
+    fn drop(&mut self) {
+        if self.reserved {
+            if let Err(error) = self.connection.execute_batch("ROLLBACK") {
+                tracing::error!(%error, "failed to release Shell account reservation");
+            }
+        }
+        if let Err(error) = self.connection.busy_timeout(self.previous_timeout) {
+            tracing::error!(%error, "failed to restore security store busy timeout");
+        }
+    }
+}
+
+fn active_device_principal_on(
+    conn: &Connection,
+    token_id: &str,
+    device_id: &str,
+) -> SqliteResult<Option<(String, UserRole, i64)>> {
+    let principal: Option<(String, String, i64)> = conn
+        .query_row(
+            "SELECT u.user_id, u.role, t.expires_at
+             FROM tokens t JOIN devices d ON d.device_id = t.device_id
+             JOIN users u ON u.user_id = d.user_id
+             WHERE t.token_id = ?1 AND t.device_id = ?2
+               AND t.revoked_at IS NULL AND t.expires_at > ?3
+               AND d.revoked_at IS NULL AND d.device_type = ?4 AND u.status = ?5",
+            params![
+                token_id,
+                device_id,
+                current_timestamp_ms(),
+                PANEL_DEVICE_TYPE,
+                UserStatus::Active.as_str()
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    Ok(principal.and_then(|(user, role, expiry)| Some((user, UserRole::from_str(&role)?, expiry))))
+}
 
 impl SecurityStore {
     // ========== Shared Token (Secret Vault Master Key) Operations ==========
@@ -261,25 +324,49 @@ impl SecurityStore {
         device_id: &str,
     ) -> SqliteResult<Option<(String, UserRole)>> {
         let conn = self.conn.lock().unwrap_or_else(|error| error.into_inner());
-        let principal: Option<(String, String)> = conn
-            .query_row(
-                "SELECT u.user_id, u.role
-                 FROM tokens t JOIN devices d ON d.device_id = t.device_id
-                 JOIN users u ON u.user_id = d.user_id
-                 WHERE t.token_id = ?1 AND t.device_id = ?2
-                   AND t.revoked_at IS NULL AND t.expires_at > ?3
-                   AND d.revoked_at IS NULL AND d.device_type = ?4 AND u.status = ?5",
-                params![
-                    token_id,
-                    device_id,
-                    current_timestamp_ms(),
-                    PANEL_DEVICE_TYPE,
-                    UserStatus::Active.as_str()
-                ],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        Ok(principal.and_then(|(user, role)| Some((user, UserRole::from_str(&role)?))))
+        Ok(active_device_principal_on(&conn, token_id, device_id)?
+            .map(|(user, role, _)| (user, role)))
+    }
+
+    /// Reserve this database's writer slot without blocking behind a competing
+    /// writer, including one using a different SQLite connection. No rows change.
+    /// The caller must keep the live connection guard until the final effect.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn try_shell_account_guard(
+        &self,
+        token_id: &str,
+        device_id: &str,
+        expected_user: &str,
+        expected_role: UserRole,
+    ) -> SqliteResult<Option<ShellAccountGuard<'_>>> {
+        let Ok(connection) = self.conn.try_lock() else {
+            return Ok(None);
+        };
+        if !connection.is_autocommit() {
+            return Ok(None);
+        }
+        let timeout_ms = connection.pragma_query_value(None, "busy_timeout", |row| row.get(0))?;
+        let previous_timeout = std::time::Duration::from_millis(timeout_ms);
+        let mut guard = ShellAccountGuard {
+            connection,
+            previous_timeout,
+            reserved: false,
+            expires_at_ms: 0,
+            role: expected_role,
+        };
+        guard.connection.busy_timeout(std::time::Duration::ZERO)?;
+        guard.connection.execute_batch("BEGIN IMMEDIATE")?;
+        guard.reserved = true;
+        let Some((user, role, expires_at_ms)) =
+            active_device_principal_on(&guard.connection, token_id, device_id)?
+        else {
+            return Ok(None);
+        };
+        if user != expected_user || role != expected_role {
+            return Ok(None);
+        }
+        guard.expires_at_ms = expires_at_ms;
+        Ok(Some(guard))
     }
 
     /// Revoke a single device token by token_id.
@@ -335,6 +422,122 @@ mod tests {
                 user_id: None,
             })
             .unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shell_store_reservation_orders_independent_account_and_device_mutation() {
+        use std::fs::File;
+        use std::io::{ErrorKind, Read, Write};
+        use std::os::fd::FromRawFd;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use crate::gateway::security::DeviceTokenManager;
+        use rusqlite::ErrorCode;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("security.db");
+        let effect_store = SecurityStore::open(&path).unwrap();
+        let mutator = Arc::new(SecurityStore::open(&path).unwrap());
+        mutator
+            .conn
+            .lock()
+            .unwrap()
+            .busy_timeout(Duration::ZERO)
+            .unwrap();
+        let devices = DeviceTokenManager::new(mutator.clone());
+        let user = "shell-test-user";
+        let device = "shell-test-device";
+        let token = "shell-test-token";
+        let frame = b"null\n";
+        mutator
+            .create_user(user, "Synthetic test", UserRole::Member)
+            .unwrap();
+        mutator
+            .upsert_device(&DeviceUpsertData {
+                device_id: device,
+                device_name: "Synthetic Panel",
+                device_type: Some(PANEL_DEVICE_TYPE),
+                public_key: b"test-key",
+                fingerprint: device,
+                role: "member",
+                scopes: &[],
+                user_id: Some(user),
+            })
+            .unwrap();
+        mutator
+            .issue_device_token(
+                token,
+                device,
+                "test-only",
+                "member",
+                &[],
+                current_timestamp_ms() + 60_000,
+            )
+            .unwrap();
+
+        let mut fds = [-1; 2];
+        // SAFETY: pipe2 writes two owned descriptors into the two-element array
+        // on success. Neither descriptor is shared or closed elsewhere.
+        assert_eq!(
+            unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) },
+            0
+        );
+        let (mut reader, mut writer) =
+            unsafe { (File::from_raw_fd(fds[0]), File::from_raw_fd(fds[1])) };
+        let mut received = [0; 16];
+        let reserve =
+            || effect_store.try_shell_account_guard(token, device, user, UserRole::Member);
+
+        mutator
+            .update_user(user, None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        assert!(reserve().unwrap().is_none());
+        assert_eq!(
+            reader.read(&mut received).unwrap_err().kind(),
+            ErrorKind::WouldBlock
+        );
+        mutator
+            .update_user(user, None, None, Some(UserStatus::Active))
+            .unwrap();
+
+        let guard = reserve().unwrap().unwrap();
+        assert!(reserve().unwrap().is_none(), "no local lock wait");
+        assert_eq!(guard.role_at_effect(), Some(UserRole::Member));
+        let busy = mutator
+            .update_user(user, None, None, Some(UserStatus::Deactivated))
+            .unwrap_err();
+        assert_eq!(busy.sqlite_error_code(), Some(ErrorCode::DatabaseBusy));
+        assert_eq!(writer.write(frame).unwrap(), frame.len());
+        drop(guard);
+        assert_eq!(reader.read(&mut received).unwrap(), frame.len());
+        assert_eq!(&received[..frame.len()], frame);
+
+        // A competing no-op transaction also denies the effect without changing
+        // the store's normal busy timeout, even when BEGIN IMMEDIATE fails.
+        let competing = mutator.conn.lock().unwrap();
+        competing.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let Err(busy) = reserve() else {
+            panic!("independent writer did not exclude the effect")
+        };
+        assert_eq!(busy.sqlite_error_code(), Some(ErrorCode::DatabaseBusy));
+        competing.execute_batch("ROLLBACK").unwrap();
+        drop(competing);
+        let configured_timeout: i64 = effect_store
+            .conn
+            .lock()
+            .unwrap()
+            .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+            .unwrap();
+        assert_eq!(configured_timeout, 5000);
+
+        assert!(devices.revoke_panel_device(device).unwrap());
+        assert!(reserve().unwrap().is_none());
+        assert_eq!(
+            reader.read(&mut received).unwrap_err().kind(),
+            ErrorKind::WouldBlock
+        );
     }
 
     /// `get_shared_token_secret` and `get_shared_token_plaintext` both read

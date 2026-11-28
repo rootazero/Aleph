@@ -8,6 +8,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use super::manifest::adapter::{AdapterOutput, AdapterRegistry};
+
 /// Result of validating a plugin directory.
 #[derive(Debug, Default)]
 pub struct ValidationResult {
@@ -48,13 +50,43 @@ pub fn validate_plugin(plugin_dir: &Path) -> ValidationResult {
         return result;
     }
 
-    // 2. Parse manifest (sync version — no runtime needed)
-    let manifest = match super::manifest::parse_manifest_from_dir_sync(plugin_dir) {
-        Ok(m) => m,
+    // 2. Parse the same package that discovery and reload will mount.
+    match AdapterRegistry::defaults().parse_dir_fresh(plugin_dir) {
+        Ok(output) => validate_output(plugin_dir, &output),
         Err(e) => {
             result.errors.push(format!("Failed to parse manifest: {e}"));
-            return result;
+            result
         }
+    }
+}
+
+pub(crate) fn validate_install_candidate(plugin_dir: &Path) -> Result<AdapterOutput, String> {
+    let output = AdapterRegistry::defaults()
+        .parse_dir_fresh(plugin_dir)
+        .map_err(|error| format!("Failed to parse manifest: {error}"))?;
+    let validation = validate_output(plugin_dir, &output);
+    if !validation.is_valid() {
+        return Err(validation.errors.join("; "));
+    }
+    Ok(output)
+}
+
+pub(super) fn validate_output(plugin_dir: &Path, output: &AdapterOutput) -> ValidationResult {
+    let mut result = ValidationResult::default();
+    for diagnostic in &output.diagnostics {
+        result.warnings.push(format!(
+            "{}: {}",
+            diagnostic.path.display(),
+            diagnostic.message
+        ));
+    }
+    let Some(manifest) = &output.runtime_manifest else {
+        let name = output.name.as_deref().unwrap_or(&output.plugin_id);
+        result
+            .info
+            .push(format!("Plugin: {name} ({})", output.plugin_id));
+        result.info.push("Kind: Static".to_owned());
+        return result;
     };
 
     result
@@ -205,6 +237,43 @@ entry = "SKILL.md"
     }
 
     #[test]
+    fn validates_a_codex_package_without_a_rust_runtime_manifest() {
+        let dir = tempdir().unwrap();
+        let marker = dir.path().join(".codex-plugin/plugin.json");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(marker, r#"{"name":"portable-codex"}"#).unwrap();
+
+        let result = validate_plugin(dir.path());
+        assert!(result.is_valid(), "Errors: {:?}", result.errors);
+        assert!(
+            result
+                .info
+                .iter()
+                .any(|item| item.contains("portable-codex"))
+        );
+    }
+
+    #[test]
+    fn malformed_explicit_manifest_cannot_fall_back_to_conventions() {
+        let dir = tempdir().unwrap();
+        let marker = dir.path().join(".claude-plugin/plugin.json");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(marker, "invalid JSON").unwrap();
+        let skill = dir.path().join("skills/greet/SKILL.md");
+        std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+        std::fs::write(skill, "---\nname: greet\ndescription: hello\n---\nGreet.").unwrap();
+
+        let result = validate_plugin(dir.path());
+        assert!(!result.is_valid());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("JSON parse error"))
+        );
+    }
+
+    #[test]
     fn missing_manifest() {
         let dir = tempdir().unwrap();
         let result = validate_plugin(dir.path());
@@ -230,10 +299,12 @@ entry = "dist/index.js"
         let result = validate_plugin(dir.path());
         // Should be valid (missing entry is only a warning)
         assert!(result.is_valid(), "Errors: {:?}", result.errors);
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.contains("entry") || w.contains("Entry")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("entry") || w.contains("Entry"))
+        );
     }
 
     #[test]
@@ -264,10 +335,12 @@ handler = "handle2"
 
         let result = validate_plugin(dir.path());
         assert!(!result.is_valid());
-        assert!(result
-            .errors
-            .iter()
-            .any(|e| e.contains("Duplicate") || e.contains("duplicate")));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.contains("Duplicate") || e.contains("duplicate"))
+        );
     }
 
     #[test]

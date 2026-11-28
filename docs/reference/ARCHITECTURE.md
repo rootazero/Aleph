@@ -275,6 +275,21 @@ In the Phase 2B preparation slice, production replay was **inert and VerifyOnly*
 
 The two real `ToolCallRequested` producers in `src/harness/agent/act.rs` receive only a read-only lookup through `HarnessDeps`. The startup path passes the existing MCP `ToolHandlerRegistry` explicitly; fixtures and builtin paths without a registry remain `None` and therefore fail closed. This is wiring, not recovery policy: the harness does not decide replay or execute recovery.
 
+### ACP session lifecycle ownership / ACP 会话生命周期所有权
+
+ACP is a **client** slice: Aleph starts the peer harness child process and keeps a local association between a local key and the remote ACP session ID. The owner of that association is the native `AcpAdapterManager` in `src/acp/manager/`; the Gateway, the model tools and Teams are only callers. There is no daemon, no shared queue and no cross-process lease: the scope is one process lifetime.
+
+`src/acp/manager/mod.rs` keeps one slot per `SessionKey` (harness + cwd + optional session name). Starting and retiring the same key serialize inside the manager; different keys progress concurrently. A live owner is published only against a still-valid harness registration, so a harness that was updated or unregistered in the meantime cannot publish a stale child.
+
+`src/acp/session.rs::CancelHandle` is independent of the prompt lock: cancellation is delivered to the running turn instead of queueing behind it, and the dispatch result distinguishes a sent notification (`CancelDispatch::Sent`) from having no session to cancel (`CancelDispatch::NoSession`).
+
+A persisted remote ID is restored through `session/load` only. A blank context is created solely by an explicit replacement. A failed load keeps the remote ID and the reason, and exposes the reason as the optional `load_error` field of `SessionSnapshot`; a later reuse retries the same `session/load` path.
+
+Explicit close, explicit replacement, and a successful harness update / disable / unregistration clear that harness's associations — including records that only exist on disk without a running process — while a rejected configuration change keeps them. A server stop does the opposite: recoverable IDs are retained and the persistence writer is drained through the shared startup resources (`src/bin/aleph-server/commands/start/builder/startup_resources.rs`, `AcpPersistence::close_and_await` in `src/acp/manager/persistence.rs`) before exit.
+
+`acp.sessions.changed` is a **refetch signal** emitted from committed in-memory state changes, not a data channel; clients re-read `acp.sessions.list`, and the persisted `acp_sessions.json` file remains the source for load after a restart.
+
+ACP 在 Aleph 中是**客户端**切片：Aleph 启动对端 harness 子进程，并保存「本地键 ↔ 远端 ACP session ID」的关联。该关联的权威是 `src/acp/manager/` 下的原生 `AcpAdapterManager`，Gateway、模型工具与 Teams 只是调用方；没有 daemon、没有共享队列、没有跨进程租约，范围限于单进程生命周期。`src/acp/manager/mod.rs` 按 `SessionKey`（harness + cwd + 可选 session name）保存一个 slot：同键的启动与回收串行，异键并行；live owner 只在 harness 注册仍然有效时发布，所以已更新或已注销的 harness 无法发布过期子进程。`src/acp/session.rs::CancelHandle` 不依赖 prompt 锁，取消直接送达正在运行的 turn 而非排在锁后，结果区分 `CancelDispatch::Sent`（已发出）与 `CancelDispatch::NoSession`（无会话可取消）。已落盘的远端 ID 只经 `session/load` 恢复，只有显式替换才创建空白上下文；加载失败保留远端 ID 与原因，并通过 `SessionSnapshot` 的可选 `load_error` 字段暴露，后续复用重试同一 `session/load` 路径。显式关闭、显式替换以及成功的 harness 更新/禁用/注销会清除该 harness 的关联（含仅落盘、无进程的记录），被拒绝的配置变更则保留。服务停止相反：保留可恢复 ID，并经共享启动资源（`src/bin/aleph-server/commands/start/builder/startup_resources.rs`、`src/acp/manager/persistence.rs` 的 `AcpPersistence::close_and_await`）排空写入者后退出。`acp.sessions.changed` 只是由已提交的内存状态变更发出的**重读信号**，不是数据通道；客户端据此重新 `acp.sessions.list`，落盘的 `acp_sessions.json` 仍是重启后加载的来源。详见 [FEATURE_LOCATOR §3.19](FEATURE_LOCATOR.md)。
 
 ---
 
@@ -650,22 +665,11 @@ test-helpers = []          # 集成测试工具
 
 ## Platform Architecture
 
-### Desktop Hosts (dual-track)
+### Desktop host / 桌面宿主
 
-The Panel is one codebase (`interfaces/webchat` → `aleph-panel`, Leptos/WASM) served by
-`aleph-server` itself on `http://127.0.0.1:18790`. The desktop host is only the WebView
-around it, and the host is mid-migration:
+The NSH 0.6.0 host (`desktop/nsh-shell`, crate `aleph-nsh-shell`) opens the Leptos/WASM Panel served by `aleph-server`. Local mode manages the packaged server on loopback, while Remote mode connects to an existing Gateway. The browser opens the same Panel. / 桌面与浏览器共用同一份 Panel，Core 持有业务事实和授权。
 
-| Host | Location | State (2026-11) |
-|---|---|---|
-| Legacy Tauri host | `desktop/shell` (`aleph-desktop-shell`) | **Still the released build** — the release workflow and `just shell-build` target it; carries the updater, `aleph://` deeplink, macOS menu and service management |
-| NSH host | `desktop/nsh-shell` (`aleph-nsh-shell`) | **Forward form** — window, tray, global shortcut, notification permission and the typed Panel bridge; no updater, deeplink, macOS menu or service control yet, and no release pipeline or build `just` target (only the development entry `just shell-tsx-dev`) |
-
-The host↔Panel contract is typed, not ad-hoc: `shared/protocol/src/panel_shell.rs`
-(the host sends `ShellRequest` and receives `PanelReply`; credential and autostart payloads ride inside them), implemented host-side in
-`desktop/nsh-shell/src/panel_bridge.rs` and consumed Panel-side in
-`interfaces/webchat/src/app/shell_bridge.rs`. The switch is gated by the Phase 11 plan
-([docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md](../superpowers/plans/2026-11-21-phase11-nsh-cutover.md)).
+`shared/protocol/src/panel_shell.rs` defines the typed `ShellRequest` and `PanelReply` envelopes. `desktop/nsh-shell/src/panel_bridge.rs` and `interfaces/webchat/src/app/shell_bridge.rs` connect the two ends. The host owns window, tray, OS integration and the bundled-server lifecycle. [Desktop shell](DESKTOP_SHELL.md) · [Release](RELEASE.md)
 
 ### Desktop Bridge
 

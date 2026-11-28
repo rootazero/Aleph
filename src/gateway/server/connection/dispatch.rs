@@ -77,7 +77,7 @@ async fn dispatch_snapshot(
         caller_is_loopback,
         caller_conn_id,
         snapshot.verified_user.clone(),
-        process_request_with_context(text, mc, context, voice_context, Some(&snapshot)),
+        process_request_with_context(text, mc, context, voice_context),
     )
     .await
 }
@@ -127,12 +127,135 @@ impl CallerSnapshot {
 
 type ConnectionTable = RwLock<HashMap<String, ConnectionState>>;
 
+/// Process-local origin of a live paired Panel request. Not a permission grant:
+/// final effect authorization must hold the authority guards through delivery.
+#[derive(Clone)]
+pub(crate) struct PairedShellOrigin {
+    connections: Arc<ConnectionTable>,
+    conn_id: String,
+    store: Arc<crate::gateway::security::SecurityStore>,
+    token_id: String,
+    device_id: String,
+    user_id: String,
+    role: crate::gateway::security::store::UserRole,
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) struct PairedShellGuard<'a> {
+    // Drop the database reservation before releasing the connection guard.
+    account: crate::gateway::security::store::ShellAccountGuard<'a>,
+    _connection: tokio::sync::RwLockReadGuard<'a, HashMap<String, ConnectionState>>,
+}
+
+#[cfg(target_os = "linux")]
+impl PairedShellGuard<'_> {
+    pub(crate) fn role_at_effect(&self) -> Option<crate::gateway::security::store::UserRole> {
+        self.account.role_at_effect()
+    }
+
+    pub(crate) fn bound_attempt(
+        &self,
+        attempt: crate::sandbox::shell_input::ShellPipeAttempt,
+    ) -> Result<
+        crate::sandbox::shell_input::ShellPipeAttempt,
+        crate::sandbox::shell_input::ShellEffectDenied,
+    > {
+        let expiry = self
+            .account
+            .expiry()
+            .ok_or(crate::sandbox::shell_input::ShellEffectDenied::Expired)?;
+        Ok(attempt.with_account_expiry(expiry))
+    }
+}
+
+impl PairedShellOrigin {
+    fn matches_live_connection(&self, state: &ConnectionState) -> bool {
+        !state.first_message
+            && state.caller_role == self.role.wire_role()
+            && state.verified_user.as_deref() == Some(&self.user_id)
+            && state.caller_user.as_deref() == Some(&self.user_id)
+            && state.device_id.as_deref() == Some(&self.device_id)
+            && state.verified_device_token_id.as_deref() == Some(&self.token_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn still_connected(&self) -> bool {
+        let table = self.connections.read().await;
+        let Some(state) = table.get(&self.conn_id) else {
+            return false;
+        };
+        self.matches_live_connection(state)
+            && matches!(
+                self.store.active_device_principal(&self.token_id, &self.device_id),
+                Ok(Some((user, role))) if user == self.user_id && role.wire_role() == state.caller_role
+            )
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn same_connection(&self, current: &Self) -> bool {
+        Arc::ptr_eq(&self.connections, &current.connections)
+            && Arc::ptr_eq(&self.store, &current.store)
+            && self.conn_id == current.conn_id
+            && self.token_id == current.token_id
+            && self.device_id == current.device_id
+            && self.user_id == current.user_id
+            && self.role == current.role
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn user_id(&self) -> &str {
+        &self.user_id
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn try_effect_guard(
+        &self,
+    ) -> Result<PairedShellGuard<'_>, crate::sandbox::shell_input::ShellEffectDenied> {
+        use crate::sandbox::shell_input::ShellEffectDenied;
+
+        let connection = self
+            .connections
+            .try_read()
+            .map_err(|_| ShellEffectDenied::Busy)?;
+        let state = connection
+            .get(&self.conn_id)
+            .ok_or(ShellEffectDenied::Stale)?;
+        if !self.matches_live_connection(state) {
+            return Err(ShellEffectDenied::Stale);
+        }
+        // Device revocation already orders its two authorities this way.
+        let account = self
+            .store
+            .try_shell_account_guard(&self.token_id, &self.device_id, &self.user_id, self.role)
+            .map_err(|error| match error.sqlite_error_code() {
+                Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+                    ShellEffectDenied::Busy
+                }
+                _ => ShellEffectDenied::Stale,
+            })?
+            .ok_or(ShellEffectDenied::Stale)?;
+        Ok(PairedShellGuard {
+            account,
+            _connection: connection,
+        })
+    }
+}
+
+tokio::task_local! {
+    pub(crate) static PAIRED_SHELL_ORIGIN: Option<PairedShellOrigin>;
+}
+
+pub(crate) fn current_paired_shell_origin() -> Option<PairedShellOrigin> {
+    PAIRED_SHELL_ORIGIN.try_with(Clone::clone).ok().flatten()
+}
+
 #[derive(Clone)]
 pub(super) struct DispatchPeer {
     pub(super) connections: Arc<ConnectionTable>,
     pub(super) conn_id: String,
     legacy_loopback: bool,
     bound: Option<BoundPeer>,
+    paired_panel_store: Option<Arc<crate::gateway::security::SecurityStore>>,
 }
 
 #[derive(Clone)]
@@ -174,7 +297,48 @@ impl DispatchPeer {
             conn_id,
             legacy_loopback,
             bound: None,
+            paired_panel_store: None,
         }
+    }
+
+    pub(super) fn panel(
+        connections: Arc<ConnectionTable>,
+        conn_id: String,
+        legacy_loopback: bool,
+        store: Option<Arc<crate::gateway::security::SecurityStore>>,
+    ) -> Self {
+        Self {
+            paired_panel_store: store,
+            ..Self::legacy(connections, conn_id, legacy_loopback)
+        }
+    }
+
+    async fn paired_shell_origin(&self, start: &CallerSnapshot) -> Option<PairedShellOrigin> {
+        let store = self.paired_panel_store.clone()?;
+        let table = self.connections.read().await;
+        let state = table.get(&self.conn_id)?;
+        let user_id = state.verified_user.as_ref()?;
+        use crate::gateway::security::store::UserRole;
+        let role = match state.caller_role.as_str() {
+            "operator" => UserRole::Admin,
+            "member" => UserRole::Member,
+            _ => return None,
+        };
+        if state.first_message
+            || state.caller_user.as_ref() != Some(user_id)
+            || &CallerSnapshot::from_state(state) != start
+        {
+            return None;
+        }
+        Some(PairedShellOrigin {
+            connections: self.connections.clone(),
+            conn_id: self.conn_id.clone(),
+            store,
+            token_id: state.verified_device_token_id.clone()?,
+            device_id: state.device_id.clone()?,
+            user_id: user_id.clone(),
+            role,
+        })
     }
 
     pub(super) fn web(
@@ -459,10 +623,8 @@ pub(super) async fn revalidate_peer(
     peer: &DispatchPeer,
     method: &str,
     start: &CallerSnapshot,
-) -> bool {
-    validate_live(&peer.view(), method, start, None)
-        .await
-        .is_ok()
+) -> Option<CallerSnapshot> {
+    validate_live(&peer.view(), method, start, None).await.ok()
 }
 
 async fn validate_live(
@@ -474,6 +636,9 @@ async fn validate_live(
     let Some(live) = peer.snapshot().await else {
         return Err(viewer_denied_response(id));
     };
+    if method == aleph_protocol::memory_graph::GRAPH_MUTATE_NOTE_METHOD && peer.bound.is_none() {
+        return Err(viewer_denied_response(id));
+    }
     let viewer_method = is_browser_viewer_method(method);
     let denial = crate::gateway::caller_identity::with_caller_identity(
         live.role.clone(),
@@ -575,6 +740,10 @@ pub(super) async fn dispatch_for_peer(
 ) -> String {
     let view = peer.view();
     let dispatch = dispatch_ordinary(text, mc, &view, &req.method, req.id.clone(), start, permit);
+    if req.method == "chat.send" {
+        let origin = peer.paired_shell_origin(start).await;
+        return PAIRED_SHELL_ORIGIN.scope(origin, dispatch).await;
+    }
     if req.method == "trace.tool_output" && peer.bound.is_some() {
         return crate::gateway::handlers::tool_output::V1_TOOL_OUTPUT
             .scope(true, dispatch)
@@ -632,7 +801,7 @@ pub fn idempotency_principal(method: &str, snapshot: &CallerSnapshot) -> String 
 
 /// Process a JSON-RPC request string
 pub async fn process_request(text: &str, middleware_chain: &MiddlewareChain) -> String {
-    process_request_with_context(text, middleware_chain, None, None, None).await
+    process_request_with_context(text, middleware_chain, None, None).await
 }
 
 async fn process_request_with_context(
@@ -640,7 +809,6 @@ async fn process_request_with_context(
     middleware_chain: &MiddlewareChain,
     panel_context: Option<PanelRequestContext>,
     mut voice_context: Option<VoiceRequestContext>,
-    caller: Option<&CallerSnapshot>,
 ) -> String {
     // Parse the request
     let request: JsonRpcRequest = match serde_json::from_str(text) {
@@ -697,8 +865,6 @@ async fn process_request_with_context(
         context.reserve_response_bytes(field.to_string().len() - 1);
     }
 
-    #[cfg(feature = "native-qa")]
-    let request_for_observer = request.clone();
     let response = {
         use tracing::Instrument;
         middleware_chain
@@ -706,19 +872,6 @@ async fn process_request_with_context(
             .instrument(span)
             .await
     };
-
-    #[cfg(not(feature = "native-qa"))]
-    let _ = caller;
-
-    #[cfg(feature = "native-qa")]
-    if let Some(caller) = caller {
-        crate::gateway::native_qa::observe_rpc(
-            &middleware_chain.native_qa_observer(),
-            caller,
-            &request_for_observer,
-            &response,
-        );
-    }
 
     // Echo the trace context back so the caller / a downstream hop can continue
     // the trace (naming our span as the parent). `traceparent` is a non-standard

@@ -10,62 +10,56 @@
 
 use std::path::Path;
 
+use crate::extension::manifest::inputs;
+
 use anyhow::Result;
 
 use crate::extension::capability::{CapabilitySource, SourceFormat};
 use crate::extension::manifest::adapter::{AdapterOutput, ManifestAdapter};
-use crate::extension::manifest::toml_types::AlephPluginToml;
-use crate::extension::manifest::{
-    convert_permissions, declared_sections, parsers, ALEPH_PLUGIN_TOML,
-};
+use crate::extension::manifest::toml_types::{manifest_from_toml, AlephPluginToml};
+use crate::extension::manifest::{declared_sections, parsers, ALEPH_PLUGIN_TOML};
 use crate::extension::types::PluginOrigin;
 
 pub struct AlephTomlAdapter;
 
 impl ManifestAdapter for AlephTomlAdapter {
     fn detect(&self, plugin_dir: &Path) -> bool {
-        plugin_dir.join(ALEPH_PLUGIN_TOML).exists()
+        inputs::exists(plugin_dir.join(ALEPH_PLUGIN_TOML))
     }
 
     fn parse(&self, plugin_dir: &Path) -> Result<AdapterOutput> {
         let toml_path = plugin_dir.join(ALEPH_PLUGIN_TOML);
-        let content = std::fs::read_to_string(&toml_path)?;
+        let content = inputs::read_to_string(&toml_path)?;
         let raw: AlephPluginToml = toml::from_str(&content)
             .map_err(|e| anyhow::anyhow!("aleph.plugin.toml parse error: {e}"))?;
 
-        // Sanitize the declared id so a third-party manifest cannot claim an
-        // arbitrary/colliding capability-registry key (mirrors the Codex and
-        // Cursor adapters, and the metadata path which sanitizes this id too).
-        let plugin_id = crate::extension::manifest::sanitize_plugin_id(&raw.plugin.id);
-        if plugin_id.is_empty() {
-            return Err(anyhow::anyhow!("plugin.id must not be empty"));
-        }
-        crate::extension::manifest::validate_plugin_id(&plugin_id)
-            .map_err(|e| anyhow::anyhow!("invalid plugin id '{}': {e}", raw.plugin.id))?;
+        let name = raw.plugin.name.clone();
+        let manifest = manifest_from_toml(raw, plugin_dir)?;
+        let plugin_id = manifest.id.clone();
         let mut capabilities = Vec::new();
 
         // Component directories (same convention as auto-discover).
-        if plugin_dir.join("skills").is_dir() {
+        if inputs::is_dir(plugin_dir.join("skills")) {
             capabilities.extend(parsers::parse_skills_dir(plugin_dir, "skills", &plugin_id)?);
         }
         // Commands are merged into skills following the OpenClaw convention.
-        if plugin_dir.join("commands").is_dir() {
+        if inputs::is_dir(plugin_dir.join("commands")) {
             capabilities.extend(parsers::parse_commands_dir(
                 plugin_dir, "commands", &plugin_id,
             )?);
         }
-        if plugin_dir.join("agents").is_dir() {
+        if inputs::is_dir(plugin_dir.join("agents")) {
             capabilities.extend(parsers::parse_agents_dir(plugin_dir, "agents", &plugin_id)?);
         }
         for hooks_path in &["hooks/hooks.json", "hooks.json"] {
-            if plugin_dir.join(hooks_path).exists() {
+            if inputs::exists(plugin_dir.join(hooks_path)) {
                 capabilities.extend(parsers::parse_hooks_file(
                     plugin_dir, hooks_path, &plugin_id,
                 )?);
                 break;
             }
         }
-        if plugin_dir.join(".mcp.json").exists() {
+        if inputs::exists(plugin_dir.join(".mcp.json")) {
             capabilities.extend(parsers::parse_mcp_config_file(
                 plugin_dir,
                 ".mcp.json",
@@ -77,32 +71,33 @@ impl ManifestAdapter for AlephTomlAdapter {
         // [[hooks]] / [[services]]) go through the one translation shared with
         // the CC dialects, so the two formats cannot mean different things by
         // the same section.
-        let permissions = convert_permissions(&raw.permissions);
         capabilities.extend(declared_sections::declared_capabilities(
             plugin_dir,
             &plugin_id,
             &declared_sections::DeclaredSections {
-                prompt: raw.prompt.as_ref(),
-                tools: &raw.tools,
-                hooks: &raw.hooks,
-                commands: &raw.commands,
-                services: &raw.services,
+                prompt: manifest.prompt_v2.as_ref(),
+                tools: manifest.tools_v2.as_deref().unwrap_or_default(),
+                hooks: manifest.hooks_v2.as_deref().unwrap_or_default(),
+                commands: manifest.commands_v2.as_deref().unwrap_or_default(),
+                services: manifest.services_v2.as_deref().unwrap_or_default(),
             },
-            &permissions,
+            &manifest.permissions,
         ));
 
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),
-            name: raw.plugin.name.clone(),
-            version: raw.plugin.version.clone(),
-            description: raw.plugin.description.clone(),
+            name,
+            version: manifest.version.clone(),
+            description: manifest.description.clone(),
             capabilities,
             source: CapabilitySource {
                 plugin_id,
                 origin: PluginOrigin::Global,
                 format: SourceFormat::AlephToml,
             },
-            permissions,
+            permissions: manifest.permissions.clone(),
+            runtime_manifest: Some(manifest),
+            diagnostics: Vec::new(),
         })
     }
 

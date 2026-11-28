@@ -465,7 +465,14 @@ pub fn parse_aleph_plugin_toml_content(
     let toml: AlephPluginToml = toml::from_str(content).map_err(|e| {
         ExtensionError::invalid_manifest(&toml_path, format!("TOML parse error: {e}"))
     })?;
+    manifest_from_toml(toml, plugin_dir)
+}
 
+pub(super) fn manifest_from_toml(
+    toml: AlephPluginToml,
+    plugin_dir: &Path,
+) -> ExtensionResult<PluginManifest> {
+    let toml_path = plugin_dir.join(ALEPH_PLUGIN_TOML);
     let plugin_id = if toml.plugin.id.is_empty() {
         return Err(ExtensionError::missing_field(&toml_path, "plugin.id"));
     } else {

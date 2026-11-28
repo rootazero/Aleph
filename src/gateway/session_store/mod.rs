@@ -52,6 +52,17 @@ pub struct RunBill {
 
 #[async_trait]
 pub trait SessionStore: Send + Sync {
+    /// Unsupported backends cannot authorize a live Shell input effect.
+    #[cfg(target_os = "linux")]
+    #[doc(hidden)]
+    async fn prepare_shell_session(
+        &self,
+        _key: &SessionKey,
+        _expected: Option<&file_backend::ShellSessionIdentity>,
+    ) -> Result<Option<file_backend::ShellSessionGuard>, SessionStoreError> {
+        Ok(None)
+    }
+
     async fn get_or_create(&self, key: &SessionKey) -> Result<SessionMetadata, SessionStoreError>;
     async fn get_metadata(
         &self,

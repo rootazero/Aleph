@@ -178,6 +178,7 @@ impl crate::sandbox::driver::OsSandboxDriverTrait for UnsupportedDriver {
         _profile: &crate::sandbox::driver::OsSandboxProfile,
         _timeout: std::time::Duration,
         _max_output_bytes: usize,
+        _lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
     ) -> Result<crate::sandbox::command::SandboxOutput, crate::sandbox::command::SandboxError> {
         Err(crate::sandbox::command::SandboxError::Other(
             "sandbox not supported on this platform".into(),

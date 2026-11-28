@@ -1034,27 +1034,11 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
     >,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
     #[cfg(target_os = "macos")] offline_speech_root: Option<std::path::PathBuf>,
-    #[cfg(target_os = "linux")] offline_stt: Option<
-        alephcore::config::types::desktop::DesktopOfflineSttConfig,
-    >,
+    #[cfg(target_os = "linux")] installation: Option<aleph_desktop_linux::OfflineSttInstallation>,
 ) {
     use alephcore::gateway::handlers::voice;
     use alephcore::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, SERVICE_UNAVAILABLE};
 
-    #[cfg(target_os = "linux")]
-    let installation = offline_stt.and_then(|config| {
-        let (Some(executable), Some(model)) = (config.executable, config.model) else {
-            tracing::warn!("desktop.offline_stt requires both executable and model");
-            return None;
-        };
-        match aleph_desktop_linux::OfflineSttInstallation::new(executable, model) {
-            Ok(installation) => Some(installation),
-            Err(error) => {
-                tracing::warn!(%error, "invalid desktop.offline_stt installation");
-                None
-            }
-        }
-    });
     #[cfg(target_os = "linux")]
     let offline_stt_mounted = installation.is_some();
     #[cfg(target_os = "windows")]

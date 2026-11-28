@@ -7,7 +7,9 @@ use std::path::PathBuf;
 
 use alephcore::sync_primitives::Arc;
 
-use alephcore::gateway::busy_queue::{spawn_queued_chat_run, spawn_queued_run};
+use alephcore::gateway::busy_queue::{
+    PanelShellOwners, spawn_panel_queued_run, spawn_queued_chat_run, spawn_queued_run,
+};
 use alephcore::gateway::event_bus::GatewayEventBus;
 use alephcore::gateway::handlers::agent::AgentRunManager;
 use alephcore::gateway::router::AgentRouter;
@@ -45,7 +47,7 @@ pub(crate) async fn serve_webchat_on_listener(
     // Loopback-only origin rule, shared with the `/ws` upgrade guard so the
     // same-machine parsing lives in one place (`OriginPolicy`) instead of
     // being duplicated inline. The static-asset server has no same-origin
-    // notion, so `host` is `None`: only loopback / `tauri:` origins pass.
+    // notion, so `host` is `None`: nonempty origins need an allow-list match.
     let policy = alephcore::gateway::origin_policy::OriginPolicy::loopback_only();
     let allowed_origins = tower_http::cors::AllowOrigin::predicate(move |origin, _| {
         policy.is_allowed(origin.to_str().ok(), None)
@@ -149,7 +151,7 @@ where
     use alephcore::gateway::handlers::agent::AgentRunParams;
     use alephcore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
     use serde::Serialize;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     /// Result of agent.run request
     #[derive(Debug, Clone, Serialize)]
@@ -291,8 +293,15 @@ where
     // fallback, which ran *after* the busy lane and could only ever produce
     // `direct_tool`. Two things were broken by that and both are fixed here —
     // `/my-skill` never loaded its instructions or recorded a use, and any
+    let slash_workspace = run_request
+        .workspace_path()
+        .map(std::path::Path::to_path_buf);
     engine
-        .stamp_slash_mode(&slash_input, &mut run_request.metadata)
+        .stamp_slash_mode_in_workspace(
+            &slash_input,
+            &mut run_request.metadata,
+            slash_workspace.as_deref(),
+        )
         .await;
 
     // Publish the addressed session before acknowledging success. The request
@@ -338,6 +347,7 @@ where
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_chat_send_with_engine<P, R>(
     request: alephcore::gateway::JsonRpcRequest,
+    shell_owners: Option<PanelShellOwners>,
     engine: Arc<ExecutionEngine<P, R>>,
     event_bus: Arc<GatewayEventBus>,
     router: Arc<AgentRouter>,
@@ -359,7 +369,7 @@ where
     use alephcore::gateway::handlers::chat::ChatSendParams;
     use alephcore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
     use serde::Serialize;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     #[derive(Debug, Clone, Serialize)]
     struct ChatSendResult {
@@ -492,8 +502,15 @@ where
         Err(e) => return build_run_error_response(request.id, e),
     };
 
+    let slash_workspace = run_request
+        .workspace_path()
+        .map(std::path::Path::to_path_buf);
     engine
-        .stamp_slash_mode(&slash_input, &mut run_request.metadata)
+        .stamp_slash_mode_in_workspace(
+            &slash_input,
+            &mut run_request.metadata,
+            slash_workspace.as_deref(),
+        )
         .await;
 
     // Publish the addressed session before acknowledging success. The request
@@ -524,7 +541,7 @@ where
         )
         .await;
     } else {
-        spawn_queued_run(
+        spawn_panel_queued_run(
             engine.clone(),
             run_request,
             agent,
@@ -532,6 +549,7 @@ where
             busy_cfg,
             locale,
             "Chat run",
+            shell_owners,
         );
     }
 

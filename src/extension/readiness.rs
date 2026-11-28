@@ -17,8 +17,8 @@
 //! — both go through [`derive_readiness`] and [`write_readiness`]; nothing
 //! else writes `PluginStatus::Pending` onto a registry row.
 
-use crate::extension::types::PluginStatus;
 use crate::extension::PluginRegistry;
+use crate::extension::types::PluginStatus;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
@@ -88,13 +88,14 @@ pub fn derive_readiness(i: &ReadinessInputs<'_>) -> PluginStatus {
 /// A free function over the registry handle — not a method — because the
 /// task `lifecycle.rs::watch_server_starts` spawns has captured that
 /// `Arc`, not the manager; `mount_parsed` calls it with `&self.plugin_registry`.
-pub async fn write_readiness(
+pub(super) async fn write_readiness(
     registry: &Arc<RwLock<PluginRegistry>>,
-    plugin_id: &str,
+    instance: &super::visibility::PluginInstanceKey,
     status: PluginStatus,
 ) -> bool {
     let mut reg = registry.write().await;
-    let Some(row) = reg.get_plugin_mut(plugin_id) else {
+    let plugin_id = &instance.plugin_id;
+    let Some(row) = reg.get_plugin_instance_mut(instance) else {
         return false;
     };
     // Exhaustive on the CURRENT status: the operator's / policy's answer
@@ -237,9 +238,10 @@ mod tests {
             PluginKind::Mcp,
             PluginOrigin::Global,
         ));
+        let instance = crate::extension::visibility::PluginInstanceKey::global("w");
         write_readiness(
             &registry,
-            "w",
+            &instance,
             PluginStatus::Pending {
                 waiting_on: vec!["mcp:plugin:w/a".into()],
             },
@@ -247,7 +249,7 @@ mod tests {
         .await;
         let row = registry.read().await.get_plugin("w").unwrap().clone();
         assert_eq!(row.error.as_deref(), Some("waiting on mcp:plugin:w/a"));
-        write_readiness(&registry, "w", PluginStatus::Loaded).await;
+        write_readiness(&registry, &instance, PluginStatus::Loaded).await;
         let row = registry.read().await.get_plugin("w").unwrap().clone();
         assert_eq!(row.status, PluginStatus::Loaded);
         assert_eq!(
@@ -256,7 +258,7 @@ mod tests {
         );
         write_readiness(
             &registry,
-            "w",
+            &instance,
             PluginStatus::Error("mcp:plugin:w/a: ENOENT".into()),
         )
         .await;
@@ -264,7 +266,7 @@ mod tests {
         assert_eq!(row.error.as_deref(), Some("mcp:plugin:w/a: ENOENT"));
         // A row the operator switched off is never touched by readiness.
         registry.write().await.get_plugin_mut("w").unwrap().status = PluginStatus::Disabled;
-        write_readiness(&registry, "w", PluginStatus::Loaded).await;
+        write_readiness(&registry, &instance, PluginStatus::Loaded).await;
         assert_eq!(
             registry.read().await.get_plugin("w").unwrap().status,
             PluginStatus::Disabled
@@ -304,16 +306,26 @@ mod tests {
                 "Error -> Loaded: back on the views",
             ),
         ];
+        let instance = crate::extension::visibility::PluginInstanceKey::global("w");
         for (status, want, why) in steps {
-            assert_eq!(write_readiness(&registry, "w", status).await, want, "{why}");
+            assert_eq!(
+                write_readiness(&registry, &instance, status).await,
+                want,
+                "{why}"
+            );
         }
         registry.write().await.get_plugin_mut("w").unwrap().status = PluginStatus::Disabled;
         assert!(
-            !write_readiness(&registry, "w", error()).await,
+            !write_readiness(&registry, &instance, error()).await,
             "nothing written"
         );
         assert!(
-            !write_readiness(&registry, "missing", error()).await,
+            !write_readiness(
+                &registry,
+                &crate::extension::visibility::PluginInstanceKey::global("missing"),
+                error()
+            )
+            .await,
             "no row"
         );
     }

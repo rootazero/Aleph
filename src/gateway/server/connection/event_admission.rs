@@ -583,6 +583,10 @@ mod tests {
         let chunk = stream("stream.response_chunk", json!({"run_id": "r"}));
         assert!(v1_event_admitted(&chunk.to_string()));
         assert!(v1_event_admitted(&overflow_warning_frame(1, 1)));
+        for topic in ["stream.ask_user", "stream.clarification_ended"] {
+            let frame = stream(topic, json!({"session_key": "session"}));
+            assert!(v1_event_admitted(&frame.to_string()), "{topic}");
+        }
         let reasoning = stream("stream.reasoning", json!({"run_id": "r"}));
         assert!(!v1_event_admitted(&reasoning.to_string()));
         let wrapped = json!({"jsonrpc": "2.0", "method": "event", "params": {"topic": "session.created", "data": {}}});

@@ -111,7 +111,7 @@
 //! commands with no entry until then: each one comes back `pending` once and
 //! runs from its approval on.
 
-use crate::extension::visibility::{canonical_root, ScopeKey};
+use crate::extension::visibility::{ScopeKey, canonical_root};
 use crate::sync_primitives::{Arc, RwLock};
 use std::collections::BTreeMap;
 use std::fs;
@@ -295,13 +295,11 @@ impl ConsentEntry {
         let Some(root) = self.plugin_root.as_deref() else {
             return false;
         };
-        crate::extension::manifest::validate_plugin_id(&self.plugin_name).is_ok()
-            && literal.plugin_name == self.plugin_name
+        literal.plugin_name == self.plugin_name
             && literal.project_root == self.project_root
             && literal.command != self.command
-            && crate::extension::plugin_vars::PluginVars::new(&self.plugin_name, root)
-                .expand(&literal.command)
-                == self.command
+            && crate::extension::plugin_vars::PluginVars::for_owner(&self.plugin_name, root)
+                .is_some_and(|vars| vars.expand(&literal.command) == self.command)
     }
 
     /// Every entry in `entries` that authorises nothing and never fires
@@ -1101,12 +1099,8 @@ impl<'a> ScriptContext<'a> {
     fn new(owner: &str, project: Option<&'a Path>, root: Option<&'a Path>) -> Self {
         let skill = ShellHookConsent::is_skill_owner(owner);
         let data = root
-            .filter(|_| crate::extension::manifest::validate_plugin_id(owner).is_ok())
-            .map(|root| {
-                crate::extension::plugin_vars::PluginVars::new(owner, root)
-                    .data_dir()
-                    .to_path_buf()
-            });
+            .and_then(|root| crate::extension::plugin_vars::PluginVars::for_owner(owner, root))
+            .map(|vars| vars.data_dir().to_path_buf());
         Self {
             root,
             data,
@@ -2311,10 +2305,12 @@ mod tests {
     #[test]
     fn approve_unknown_prefix_returns_none() {
         let (_d, consent) = tmp_consent();
-        assert!(consent
-            .approve("ffffffff", None)
-            .expect("approve")
-            .is_none());
+        assert!(
+            consent
+                .approve("ffffffff", None)
+                .expect("approve")
+                .is_none()
+        );
     }
 
     #[test]

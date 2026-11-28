@@ -29,18 +29,18 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use super::effects::{async_disposer, DisposeReport, Disposer, EffectScope};
+use super::effects::{DisposeReport, Disposer, EffectScope, async_disposer};
 use super::error::ExtensionResult;
-use super::manifest::adapter::{AdapterOutput, AdapterRegistry};
 use super::manifest::PluginManifest;
+use super::manifest::adapter::{AdapterOutput, AdapterRegistry};
 use super::plugin_state::Activation;
 use super::projection::Views;
 use super::registrar::mcp_registrar::ServerStartReceiver;
 use super::registry::{DiagnosticLevel, PluginDiagnostic};
 use super::runtime_owner::RuntimeOwner;
 use super::types::{LoadSummary, PluginKind, PluginOrigin, PluginRecord, PluginStatus};
-use super::visibility::ScopeKey;
-use super::{loader, manifest, mcp_config, readiness, registrar, slash_effect, ExtensionManager};
+use super::visibility::{PluginInstanceKey, ScopeKey};
+use super::{ExtensionManager, loader, mcp_config, readiness, registrar, slash_effect};
 use crate::extension::capability::CapabilityDeclaration;
 use crate::sync_primitives::Arc;
 
@@ -158,10 +158,6 @@ impl Identified {
 struct ScannedDir {
     found: super::DiscoveredExtensionDir,
     identified: Identified,
-    /// `parse_manifest_from_dir_cached_global` of the root, only for a
-    /// `Parsed` dir and only when it parses — the one manifest both
-    /// `build_record` (kind) and `mount_parsed` (wasm / mcp steps) read.
-    manifest: Option<PluginManifest>,
     /// A legacy `.disabled` marker exists (never checked under Claude
     /// Code's cache, which is never written).
     legacy_marker: bool,
@@ -219,13 +215,13 @@ impl ExtensionManager {
     /// mount/unmount wrappers here: they would re-enter load_guard.
     pub(super) async fn reconcile_plugin_control_locked(
         &self,
-        id: &str,
+        instance: &PluginInstanceKey,
         enabled: bool,
         outcome: &mut super::plugin_state::PluginControlOutcome,
     ) {
         use super::plugin_state::{PluginControlPhase, PluginRuntimeOutcome};
         if enabled {
-            match self.mount_inner(id, None).await {
+            match self.mount_inner(&instance, None).await {
                 Ok(PluginStatus::Cold) => outcome.runtime_outcome = PluginRuntimeOutcome::Cold,
                 Ok(_) => outcome.runtime_outcome = PluginRuntimeOutcome::Mounted,
                 Err(MountError::AlreadyMounted(_)) => {
@@ -244,7 +240,7 @@ impl ExtensionManager {
                 }
             }
         } else {
-            match self.unmount_inner(id).await {
+            match self.unmount_inner(&instance).await {
                 Ok(report) => {
                     outcome.cleanup_report = cleanup_steps(&report);
                     if report.all_ok() {
@@ -258,7 +254,12 @@ impl ExtensionManager {
                         outcome.runtime_outcome = PluginRuntimeOutcome::Failed;
                         outcome.error_phase = Some(PluginControlPhase::Cleanup);
                         outcome.error = Some(message.clone());
-                        if let Some(row) = self.plugin_registry.write().await.get_plugin_mut(id) {
+                        if let Some(row) = self
+                            .plugin_registry
+                            .write()
+                            .await
+                            .get_plugin_instance_mut(&instance)
+                        {
                             row.status = PluginStatus::Error(format!("cleanup: {message}"));
                             row.error = Some(message);
                         }
@@ -269,12 +270,12 @@ impl ExtensionManager {
                     // A consumed failing scope cannot be proved cleaned by a
                     // second disable. Keep its diagnostic rather than claiming
                     // a successful stop; residual ownership is a P3 concern.
-                    if let Some(row) = registry.get_plugin(id).filter(|row| matches!(&row.status, PluginStatus::Error(message) if message.starts_with("cleanup: "))) {
+                    if let Some(row) = registry.get_plugin_instance(&instance).filter(|row| matches!(&row.status, PluginStatus::Error(message) if message.starts_with("cleanup: "))) {
                         outcome.runtime_outcome = PluginRuntimeOutcome::Failed;
                         outcome.error_phase = Some(PluginControlPhase::Cleanup);
                         outcome.error = row.error.clone().or_else(|| Some("prior cleanup failed".to_owned()));
                     } else {
-                        let changed = registry.disable_plugin(id);
+                        let changed = registry.disable_plugin_instance(&instance);
                         outcome.runtime_outcome = if changed { PluginRuntimeOutcome::Unmounted } else { PluginRuntimeOutcome::NoChange };
                     }
                 }
@@ -300,7 +301,11 @@ impl ExtensionManager {
     /// (`readiness`) — `Loaded` for a plugin with nothing to wait on.
     pub async fn mount(&self, id: &str) -> Result<PluginStatus, MountError> {
         let _guard = self.load_guard.lock().await;
-        let status = self.mount_inner(id, None).await?;
+        let instance = self
+            .unambiguous_plugin_instance(id)
+            .await
+            .ok_or_else(|| MountError::NotFound(id.to_owned()))?;
+        let status = self.mount_inner(&instance, None).await?;
         self.views().after_transition().await;
         self.sync_runtime_snapshots().await;
         Ok(status)
@@ -310,10 +315,135 @@ impl ExtensionManager {
     /// `Disabled` row so the plugin stays listable and re-enablable.
     pub async fn unmount(&self, id: &str) -> Result<DisposeReport, UnmountError> {
         let _guard = self.load_guard.lock().await;
-        let result = self.unmount_inner(id).await;
+        let instance = self
+            .unambiguous_plugin_instance(id)
+            .await
+            .ok_or_else(|| UnmountError::NotFound(id.to_owned()))?;
+        let result = self.unmount_inner(&instance).await;
         self.views().after_transition().await;
         self.sync_runtime_snapshots().await;
         result
+    }
+
+    pub(crate) async fn publish_plugin_install<T: Send + 'static>(
+        &self,
+        instances: &[PluginInstanceKey],
+        publish: impl FnOnce() -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        self.ensure_discovered()
+            .await
+            .map_err(|error| error.to_string())?;
+        let _guard = self.load_guard.lock().await;
+        {
+            let registry = self.plugin_registry.read().await;
+            let mut seen = HashSet::new();
+            for instance in instances {
+                if !seen.insert(instance) || registry.get_plugin_instance(instance).is_some() {
+                    return Err(format!(
+                        "Plugin '{}' is already present in this scope",
+                        instance.plugin_id
+                    ));
+                }
+            }
+        }
+        let result =
+            crate::skill::run_blocking_fs("ExtensionManager::publish_plugin_install", publish)
+                .await
+                .ok_or_else(|| "Plugin installation was cancelled".to_owned())??;
+        if let Err(error) = self
+            .discover_selected(DiscoveryMode::Activation, Some(instances))
+            .await
+        {
+            tracing::warn!(%error, "Failed to discover new plugin installations");
+        }
+        self.publish_runtime_transition_views().await;
+        Ok(result)
+    }
+
+    pub(crate) async fn uninstall_plugin_target(
+        &self,
+        target: &super::plugin_target::PluginTarget,
+        access: &super::plugin_target::PluginAccess,
+    ) -> Result<(PluginInstanceKey, anyhow::Result<()>), super::plugin_target::PluginTargetError>
+    {
+        let _guard = self.load_guard.lock().await;
+        let instance = self.resolve_plugin_target(target, access).await?;
+        let result = self.uninstall_plugin_instance_locked(&instance).await;
+        Ok((instance, result))
+    }
+
+    async fn uninstall_plugin_instance_locked(
+        &self,
+        instance: &PluginInstanceKey,
+    ) -> anyhow::Result<()> {
+        let path = self
+            .plugin_registry
+            .read()
+            .await
+            .get_plugin_instance(instance)
+            .map(|row| row.root_dir.clone())
+            .ok_or_else(|| anyhow::anyhow!("Plugin is no longer discovered"))?;
+        let install_roots = match &instance.scope {
+            ScopeKey::Global => vec![crate::extension::default_plugins_dir()],
+            ScopeKey::Project(root) => vec![
+                root.join(".aleph/plugins"),
+                root.join(".aleph/plugins.local"),
+            ],
+        };
+        let install_root = install_roots
+            .iter()
+            .find(|root| {
+                path.strip_prefix(root).is_ok_and(|relative| {
+                    let count = relative.components().count();
+                    (1..=2).contains(&count)
+                        && relative
+                            .components()
+                            .all(|component| matches!(component, std::path::Component::Normal(_)))
+                })
+            })
+            .ok_or_else(|| anyhow::anyhow!("Plugin is outside an Aleph install directory"))?;
+        let canonical_root = tokio::fs::canonicalize(install_root).await?;
+        let canonical_path = tokio::fs::canonicalize(&path).await?;
+        let canonical_expected = canonical_root.join(path.strip_prefix(install_root)?);
+        anyhow::ensure!(
+            canonical_path == canonical_expected,
+            "Plugin install path traverses a symbolic link"
+        );
+        if let ScopeKey::Project(root) = &instance.scope {
+            anyhow::ensure!(
+                canonical_root.starts_with(root),
+                "Install directory leaves its project"
+            );
+        }
+        match self.unmount_inner(instance).await {
+            Ok(report) => {
+                self.publish_runtime_transition_views().await;
+                anyhow::ensure!(report.all_ok(), "Plugin effects did not stop cleanly");
+            }
+            Err(UnmountError::NotMounted(_)) => {}
+            Err(error) => return Err(error.into()),
+        }
+        tokio::fs::remove_dir_all(path).await?;
+        self.plugin_registry
+            .write()
+            .await
+            .unregister_plugin_instance(instance);
+        self.forget_plugin_instance_preference_locked(instance)
+            .await;
+        if matches!(instance.scope, ScopeKey::Global) {
+            crate::tools::usage::forget_plugin(&instance.plugin_id);
+        }
+        if let Err(error) = self
+            .discover_selected(
+                DiscoveryMode::Activation,
+                Some(std::slice::from_ref(instance)),
+            )
+            .await
+        {
+            tracing::warn!(plugin = %instance.plugin_id, %error, "failed to discover remaining plugin sources after removal");
+        }
+        self.publish_runtime_transition_views().await;
+        Ok(())
     }
 
     /// Check the new version, then unmount + mount.
@@ -330,12 +460,38 @@ impl ExtensionManager {
     /// the plugin unmounted as before.
     pub async fn reload_plugin(&self, id: &str) -> Result<PluginStatus, MountError> {
         let _guard = self.load_guard.lock().await;
-        let prepared = match self.preflight_reload(id).await {
+        let instance = self
+            .unambiguous_plugin_instance(id)
+            .await
+            .ok_or_else(|| MountError::NotFound(id.to_owned()))?;
+        self.reload_plugin_instance_locked(&instance).await
+    }
+
+    pub(crate) async fn reload_plugin_target(
+        &self,
+        target: &super::plugin_target::PluginTarget,
+        access: &super::plugin_target::PluginAccess,
+    ) -> Result<
+        (PluginInstanceKey, Result<PluginStatus, MountError>),
+        super::plugin_target::PluginTargetError,
+    > {
+        let _guard = self.load_guard.lock().await;
+        let instance = self.resolve_plugin_target(target, access).await?;
+        let result = self.reload_plugin_instance_locked(&instance).await;
+        Ok((instance, result))
+    }
+
+    pub(super) async fn reload_plugin_instance_locked(
+        &self,
+        instance: &PluginInstanceKey,
+    ) -> Result<PluginStatus, MountError> {
+        let id = &instance.plugin_id;
+        let prepared = match self.preflight_reload(instance).await {
             Ok(prepared) => Some(prepared),
             Err(PrepareError::Refused { .. }) => None,
             // Nothing is serving: behave like a plain mount, which records
             // the failure on the row.
-            Err(_) if !self.is_mounted(id) => None,
+            Err(_) if !self.is_mounted(instance) => None,
             Err(error) => {
                 let reason = match error {
                     PrepareError::Defect(reason) => reason,
@@ -350,7 +506,7 @@ impl ExtensionManager {
                 });
             }
         };
-        match self.unmount_inner(id).await {
+        match self.unmount_inner(instance).await {
             Ok(_) | Err(UnmountError::NotMounted(_)) => {}
             Err(UnmountError::NotFound(_)) => return Err(MountError::NotFound(id.to_string())),
             Err(error @ UnmountError::RuntimeOwnerResidual(_)) => {
@@ -360,7 +516,7 @@ impl ExtensionManager {
                 });
             }
         }
-        let result = self.mount_inner(id, prepared).await;
+        let result = self.mount_inner(instance, prepared).await;
         self.views().after_transition().await;
         self.sync_runtime_snapshots().await;
         result
@@ -368,8 +524,12 @@ impl ExtensionManager {
 
     /// [`Self::prepare_mount`] plus, for a WASM plugin, a compile of its guest
     /// module. Writes nothing.
-    async fn preflight_reload(&self, id: &str) -> Result<PreparedMount, PrepareError> {
-        let prepared = self.prepare_mount(id).await?;
+    async fn preflight_reload(
+        &self,
+        instance: &PluginInstanceKey,
+    ) -> Result<PreparedMount, PrepareError> {
+        let id = &instance.plugin_id;
+        let prepared = self.prepare_mount(instance).await?;
         let Some(manifest) = prepared
             .manifest
             .clone()
@@ -392,10 +552,17 @@ impl ExtensionManager {
         }
     }
 
-    /// Whether a version of `id` is mounted (running or declared Cold) —
-    /// the same test [`Self::mount_inner`] uses to refuse a second mount.
-    fn is_mounted(&self, id: &str) -> bool {
-        let owner_mounted = self.runtime_owner(id).is_some_and(|owner| {
+    async fn unambiguous_plugin_instance(&self, id: &str) -> Option<PluginInstanceKey> {
+        self.plugin_registry
+            .read()
+            .await
+            .get_plugin(id)
+            .map(PluginRecord::instance_key)
+    }
+
+    /// Whether this instance is running or declared Cold.
+    fn is_mounted(&self, instance: &PluginInstanceKey) -> bool {
+        let owner_mounted = self.runtime_owner_for(instance).is_some_and(|owner| {
             owner.provider.state() != crate::capability::provider::ProviderState::Disabled
         });
         owner_mounted
@@ -403,7 +570,7 @@ impl ExtensionManager {
                 .scopes
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .contains_key(id)
+                .contains_key(instance)
     }
 
     /// Dispose every mounted plugin, rediscover, mount every admitted
@@ -491,6 +658,14 @@ impl ExtensionManager {
         &self,
         mode: DiscoveryMode,
     ) -> ExtensionResult<LoadOutcome> {
+        self.discover_selected(mode, None).await
+    }
+
+    async fn discover_selected(
+        &self,
+        mode: DiscoveryMode,
+        selected: Option<&[PluginInstanceKey]>,
+    ) -> ExtensionResult<LoadOutcome> {
         let mut summary = LoadSummary::default();
         let mut mounted: Vec<String> = Vec::new();
         let mut failed: Vec<(String, MountError)> = Vec::new();
@@ -499,11 +674,6 @@ impl ExtensionManager {
             self.cache_state.write().await.discovered = false;
             self.unmount_all().await?;
             self.runtime_owners.lock().unwrap().clear();
-
-            // The loader's copy of every plugin's stored configuration must be
-            // current before anything loads — a plugin started with an empty
-            // config is a plugin the operator configured and cannot tell.
-            self.publish_plugin_settings().await;
         }
 
         // Discovery walk, adapter parse and manifest parse are synchronous
@@ -532,9 +702,10 @@ impl ExtensionManager {
             // discovery rebuilds rows only before any runtime has been
             // declared, leaving active runtime views untouched if a future
             // caller reaches this path with an already populated manager.
-            let declaration_can_rebuild = mode == DiscoveryMode::FullLoad
-                || (self.runtime_owners.lock().unwrap().is_empty()
-                    && self.scopes.lock().unwrap().is_empty());
+            let declaration_can_rebuild = selected.is_none()
+                && (mode == DiscoveryMode::FullLoad
+                    || (self.runtime_owners.lock().unwrap().is_empty()
+                        && self.scopes.lock().unwrap().is_empty()));
             if declaration_can_rebuild {
                 let mut registry = self.plugin_registry.write().await;
                 registry.clear();
@@ -546,18 +717,29 @@ impl ExtensionManager {
         // repeat id lost. `winners` only tracks SUCCESSFUL parses — a parse
         // failure must not poison it (a lower-priority copy with the same id
         // may still take over), so failures are deduped separately.
-        let mut winners: HashMap<String, PathBuf> = HashMap::new();
-        let mut failed_plugin_ids: HashSet<String> = HashSet::new();
+        let mut winners: HashMap<PluginInstanceKey, PathBuf> = HashMap::new();
+        let mut failed_instances = HashSet::new();
 
         for scanned in plan.dirs.into_iter().rev() {
             let ScannedDir {
                 found,
                 identified,
-                manifest,
                 legacy_marker,
             } = scanned;
             let dir_path = &found.path;
-            let output = match identified {
+            if let Some(selected) = selected {
+                let id = match &identified {
+                    Identified::Parsed(output) => &output.plugin_id,
+                    Identified::Unparsed { id, .. } => id,
+                };
+                if !selected
+                    .iter()
+                    .any(|key| key.scope == found.scope_key && key.plugin_id == *id)
+                {
+                    continue;
+                }
+            }
+            let mut output = match identified {
                 Identified::Parsed(output) => output,
                 Identified::Unparsed {
                     id: fallback_id,
@@ -570,7 +752,9 @@ impl ExtensionManager {
                     summary
                         .errors
                         .push(format!("{}: {}", dir_path.display(), error));
-                    if let Some(winner) = winners.get(&fallback_id) {
+                    let instance =
+                        PluginInstanceKey::new(found.scope_key.clone(), fallback_id.clone());
+                    if let Some(winner) = winners.get(&instance) {
                         // A higher-priority copy of this id already parsed and
                         // won the shadowing contest. This copy is a broken
                         // shadowed source, not the plugin: registering its
@@ -591,10 +775,10 @@ impl ExtensionManager {
                                 plugin_id: Some(fallback_id.clone()),
                                 source: Some("discovery".to_string()),
                             });
-                        failed_plugin_ids.insert(fallback_id.clone());
+                        failed_instances.insert(instance);
                         continue;
                     }
-                    if failed_plugin_ids.insert(fallback_id.clone()) {
+                    if failed_instances.insert(instance) {
                         self.plugin_registry
                             .write()
                             .await
@@ -610,7 +794,8 @@ impl ExtensionManager {
                 }
             };
             let plugin_id = output.plugin_id.clone();
-            if let Some(winner) = winners.get(&plugin_id) {
+            let instance = PluginInstanceKey::new(found.scope_key.clone(), plugin_id.clone());
+            if let Some(winner) = winners.get(&instance) {
                 tracing::info!(
                     plugin_id = %plugin_id, shadowed = %dir_path.display(), winner = %winner.display(),
                     "plugin id already registered from a higher-priority scope"
@@ -631,16 +816,17 @@ impl ExtensionManager {
                 summary.shadowed += 1;
                 continue;
             }
-            winners.insert(plugin_id.clone(), dir_path.clone());
+            winners.insert(instance.clone(), dir_path.clone());
 
             // A foreign tree (Claude Code's cache) is never written: no
             // marker migration there, whatever it contains.
             if found.origin != PluginOrigin::ClaudeCache && mode != DiscoveryMode::DeclarationsOnly
             {
-                self.migrate_legacy_disabled_marker(dir_path, &plugin_id, legacy_marker)
+                self.migrate_legacy_disabled_marker(dir_path, &instance, legacy_marker)
                     .await;
             }
 
+            let manifest = output.runtime_manifest.take();
             let record = Self::build_record(
                 &output,
                 dir_path.clone(),
@@ -648,7 +834,7 @@ impl ExtensionManager {
                 found.scope_key.clone(),
                 manifest.as_ref(),
             );
-            match self.admit(&plugin_id, found.origin).await {
+            match self.admit(&instance, found.origin).await {
                 Err(e @ MountError::Blocked { .. }) => {
                     tracing::info!(plugin_id = %plugin_id, origin = ?found.origin, "plugin skipped by owner trust policy (not in allowlist)");
                     summary.skipped_by_trust += 1;
@@ -684,7 +870,7 @@ impl ExtensionManager {
                 }
                 Ok(())
                     if super::runtime_owner::eligible(&output, manifest.as_ref())
-                        && self.runtime_owner(&plugin_id).is_none() =>
+                        && self.runtime_owner_for(&instance).is_none() =>
                 {
                     self.declare_cold(output, record, manifest.expect("eligible manifest"))
                         .await;
@@ -697,7 +883,7 @@ impl ExtensionManager {
                             .scopes
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
-                            .contains_key(&plugin_id) => {}
+                            .contains_key(&instance) => {}
                 Ok(()) => match self.mount_parsed(output, record, manifest).await {
                     Ok(_) => mounted.push(plugin_id),
                     Err(e) => {
@@ -731,16 +917,17 @@ impl ExtensionManager {
     async fn migrate_legacy_disabled_marker(
         &self,
         dir_path: &std::path::Path,
-        plugin_id: &str,
+        instance: &PluginInstanceKey,
         present: bool,
     ) {
+        let plugin_id = &instance.plugin_id;
         if !present {
             return;
         }
         let legacy_marker = dir_path.join(".disabled");
         {
             let mut candidate = self.plugins_config.read().await.clone();
-            candidate.set_enabled(plugin_id, false);
+            candidate.set_enabled_for(instance, false);
             if let Err(e) = self.commit_plugins_config_locked(candidate).await {
                 // Keep the marker for a later retry. A failed save must not
                 // publish an uncommitted live preference or erase its source.
@@ -795,33 +982,33 @@ impl ExtensionManager {
     /// What the load walk calls one discovered directory: its manifest's id,
     /// or — when the manifest does not parse — the id its error row gets.
     /// The one derivation `load_all` and `discovered_plugin_ids` share.
-    fn identify(&self, found: &super::DiscoveredExtensionDir) -> Identified {
-        Self::identify_with(&self.adapter_registry, found)
-    }
-
-    /// [`Self::identify`] without `&self`, for the blocking-pool scan.
+    /// Identify a candidate without creating an error row for an unrelated package.
     fn identify_with(
         adapters: &AdapterRegistry,
         found: &super::DiscoveredExtensionDir,
-    ) -> Identified {
-        match adapters.parse_dir(&found.path) {
-            Ok(output) => Identified::Parsed(output),
-            Err(e) => Identified::Unparsed {
+    ) -> Option<Identified> {
+        match adapters.parse_declarations(&found.path) {
+            Ok(output) => Some(Identified::Parsed(output)),
+            Err(e)
+                if e.is::<super::manifest::adapter::NoManifestAdapter>()
+                    && found.path.join("package.json").is_file() =>
+            {
+                None
+            }
+            Err(e) => Some(Identified::Unparsed {
                 id: Self::unparsed_plugin_id(&found.path, found.origin),
                 error: e.to_string(),
-            },
+            }),
         }
     }
 
     /// The synchronous half of one discovery pass, over owned inputs and no
     /// `&self`: walk (`collect_plugin_dirs_with`), identify every dir
-    /// (adapter parse — including shadowed dirs, as before), parse the
-    /// manifest of every parsed dir, and stat the legacy `.disabled` marker.
+    /// (adapter parse — including shadowed dirs, as before), and stat the
+    /// legacy `.disabled` marker.
     /// Blocking; runs on the blocking pool via `crate::skill::run_blocking_fs`
-    /// from [`Self::discover_and_mount`]. Writes nothing the async walk did
-    /// not already write (adapter `ensure_data_dir_if_referenced`, manifest
-    /// cache fill), so a scan whose awaiting future was dropped finishing
-    /// detached is harmless.
+    /// from [`Self::discover_and_mount`]. Reads package inputs without
+    /// provisioning plugin data directories.
     fn scan_plugins_blocking(
         discovery: &crate::discovery::DiscoveryManager,
         adapters: &AdapterRegistry,
@@ -831,22 +1018,15 @@ impl ExtensionManager {
         let dirs = collected
             .dirs
             .into_iter()
-            .map(|found| {
-                let identified = Self::identify_with(adapters, &found);
-                let manifest = match identified {
-                    Identified::Parsed(_) => {
-                        manifest::parse_manifest_from_dir_cached_global(&found.path).ok()
-                    }
-                    Identified::Unparsed { .. } => None,
-                };
+            .filter_map(|found| {
+                let identified = Self::identify_with(adapters, &found)?;
                 let legacy_marker = found.origin != PluginOrigin::ClaudeCache
                     && found.path.join(".disabled").exists();
-                ScannedDir {
+                Some(ScannedDir {
                     found,
                     identified,
-                    manifest,
                     legacy_marker,
-                }
+                })
             })
             .collect();
         Ok(ScanPlan {
@@ -874,7 +1054,10 @@ impl ExtensionManager {
             ids: collected
                 .dirs
                 .iter()
-                .map(|found| (self.identify(found).id().to_string(), found.origin))
+                .filter_map(|found| {
+                    let identified = Self::identify_with(&self.adapter_registry, found)?;
+                    Some((identified.id().to_string(), found.origin))
+                })
                 .collect(),
             unreadable: collected.unreadable,
         })
@@ -928,19 +1111,29 @@ impl ExtensionManager {
     /// origin-aware, so a Claude Code install with no preference stays off,
     /// and the refusal says whether an operator disabled it or nobody
     /// enabled it. Callers write the refusal onto the row.
-    pub(super) async fn admit(&self, id: &str, origin: PluginOrigin) -> Result<(), MountError> {
+    pub(super) async fn admit(
+        &self,
+        instance: &PluginInstanceKey,
+        origin: PluginOrigin,
+    ) -> Result<(), MountError> {
+        let id = &instance.plugin_id;
         let trust_allows = self
             .owner_trust_policy
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .allows(id, origin);
+            .allows_instance(instance, origin);
         if !trust_allows {
             return Err(MountError::Blocked {
                 id: id.to_string(),
                 origin: format!("{origin:?}"),
             });
         }
-        match self.plugins_config.read().await.activation(id, origin) {
+        match self
+            .plugins_config
+            .read()
+            .await
+            .activation_for(instance, origin)
+        {
             Activation::Enabled => Ok(()),
             Activation::Disabled => Err(MountError::Disabled(id.to_string())),
             Activation::NotEnabled => Err(MountError::NotEnabled(id.to_string())),
@@ -951,9 +1144,14 @@ impl ExtensionManager {
     ///
     /// The refusal has to be visible: "refused by policy" and "not installed"
     /// must not render the same.
-    async fn record_admission_refusal(&self, id: &str, origin: PluginOrigin, error: &MountError) {
+    async fn record_admission_refusal(
+        &self,
+        instance: &PluginInstanceKey,
+        origin: PluginOrigin,
+        error: &MountError,
+    ) {
         let mut reg = self.plugin_registry.write().await;
-        let Some(row) = reg.get_plugin_mut(id) else {
+        let Some(row) = reg.get_plugin_instance_mut(instance) else {
             return;
         };
         match error {
@@ -1010,12 +1208,13 @@ impl ExtensionManager {
     /// checks run first, against the state at commit time.
     async fn mount_inner(
         &self,
-        id: &str,
+        instance: &PluginInstanceKey,
         prepared: Option<PreparedMount>,
     ) -> Result<PluginStatus, MountError> {
-        if let Some(owner) = self.runtime_owner(id) {
+        let id = &instance.plugin_id;
+        if let Some(owner) = self.runtime_owner_for(instance) {
             if owner.provider.state() == crate::capability::provider::ProviderState::Cold {
-                self.admit(id, owner.record.origin).await?;
+                self.admit(instance, owner.record.origin).await?;
                 return Ok(PluginStatus::Cold);
             }
             if owner.provider.state() != crate::capability::provider::ProviderState::Disabled {
@@ -1026,22 +1225,23 @@ impl ExtensionManager {
             .scopes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .contains_key(id)
+            .contains_key(instance)
         {
             return Err(MountError::AlreadyMounted(id.to_string()));
         }
         let prepared = match prepared {
             Some(prepared) => prepared,
-            None => match self.prepare_mount(id).await {
+            None => match self.prepare_mount(instance).await {
                 Ok(prepared) => prepared,
                 Err(PrepareError::Unrecorded(error)) => return Err(error),
                 Err(PrepareError::Refused { origin, error }) => {
-                    self.record_admission_refusal(id, origin, &error).await;
+                    self.record_admission_refusal(instance, origin, &error)
+                        .await;
                     return Err(error);
                 }
                 Err(PrepareError::Defect(reason)) => {
                     let mut reg = self.plugin_registry.write().await;
-                    if let Some(row) = reg.get_plugin_mut(id) {
+                    if let Some(row) = reg.get_plugin_instance_mut(instance) {
                         row.status = PluginStatus::Error(reason.clone());
                         row.error = Some(reason.clone());
                     }
@@ -1052,7 +1252,7 @@ impl ExtensionManager {
                 }
             },
         };
-        self.commit_mount(id, prepared).await
+        self.commit_mount(instance, prepared).await
     }
 
     /// Locate, admit, parse and identity-check a plugin directory.
@@ -1060,30 +1260,30 @@ impl ExtensionManager {
     /// Writes nothing — no row status, no refusal record, no effect — so a
     /// reload can run it while the previous version keeps serving. The caller
     /// decides what a failure records (see [`PrepareError`]).
-    async fn prepare_mount(&self, id: &str) -> Result<PreparedMount, PrepareError> {
+    async fn prepare_mount(
+        &self,
+        instance: &PluginInstanceKey,
+    ) -> Result<PreparedMount, PrepareError> {
+        let id = &instance.plugin_id;
         let (root_dir, origin, scope_key) = self
             .plugin_registry
             .read()
             .await
-            .get_plugin(id)
+            .get_plugin_instance(instance)
             .map(|r| (r.root_dir.clone(), r.origin, r.scope_key.clone()))
             .ok_or_else(|| PrepareError::Unrecorded(MountError::NotFound(id.to_string())))?;
 
-        self.admit(id, origin)
+        self.admit(instance, origin)
             .await
             .map_err(|error| PrepareError::Refused { origin, error })?;
 
-        // Adapter parse + manifest parse are synchronous filesystem work:
-        // blocking pool, owned inputs. Cancellation (runtime shutdown) is a
-        // `Parse` error that writes nothing onto the row.
+        // Package parsing is synchronous filesystem work. Use the blocking
+        // pool with owned inputs. Cancellation writes nothing onto the row.
         let parsed = {
             let adapters = Arc::clone(&self.adapter_registry);
             let dir = root_dir.clone();
             crate::skill::run_blocking_fs("ExtensionManager::mount_inner.parse", move || {
-                adapters.parse_dir(&dir).map(|output| {
-                    let manifest = manifest::parse_manifest_from_dir_cached_global(&dir).ok();
-                    (output, manifest)
-                })
+                adapters.parse_dir_fresh(&dir)
             })
             .await
         };
@@ -1093,7 +1293,8 @@ impl ExtensionManager {
                 reason: "manifest parse was cancelled (runtime shutting down)".to_string(),
             }));
         };
-        let (output, manifest) = parsed.map_err(|e| PrepareError::Defect(e.to_string()))?;
+        let mut output = parsed.map_err(|e| PrepareError::Defect(e.to_string()))?;
+        let manifest = output.runtime_manifest.take();
         // The id that was authorised is the id that must run.
         //
         // The trust decision and the operator's preference were made for the
@@ -1118,7 +1319,7 @@ impl ExtensionManager {
     /// otherwise run the six mount effects.
     async fn commit_mount(
         &self,
-        id: &str,
+        instance: &PluginInstanceKey,
         prepared: PreparedMount,
     ) -> Result<PluginStatus, MountError> {
         let PreparedMount {
@@ -1131,8 +1332,8 @@ impl ExtensionManager {
         // Re-check admission for the identity that is about to run: the
         // operator's preference and the trust policy may have changed
         // between the first check and the parse.
-        if let Err(e) = self.admit(id, origin).await {
-            self.record_admission_refusal(id, origin, &e).await;
+        if let Err(e) = self.admit(instance, origin).await {
+            self.record_admission_refusal(instance, origin, &e).await;
             return Err(e);
         }
         let record = Self::build_record(&output, root_dir, origin, scope_key, manifest.as_ref());
@@ -1144,22 +1345,33 @@ impl ExtensionManager {
         self.mount_parsed(output, record, manifest).await
     }
 
+    /// Some effect registrars still share a logical-ID namespace. Reserve it
+    /// for the current instance until those registrations become scoped.
     /// The six effects, in [`super::effects::STEP_LABELS`] order. `record`
     /// already carries root_dir / origin / kind. Returns the row's status
     /// after the effects (see [`Self::mount`]).
     pub(super) async fn mount_parsed(
         &self,
-        output: AdapterOutput,
+        mut output: AdapterOutput,
         record: PluginRecord,
         // Parsed once off the runtime by the caller (the same value
         // `build_record` took `record.kind` from), not re-parsed here.
         manifest: Option<PluginManifest>,
     ) -> Result<PluginStatus, MountError> {
+        let instance = record.instance_key();
+        let runtime_key = instance.runtime_key();
         let id = record.id.clone();
         let root_dir = record.root_dir.clone();
         // The kind `build_record` derived — and counted the row's servers by —
         // not a second derivation that could disagree with it.
         let kind = record.kind;
+        if let Some(data_dir) =
+            AdapterRegistry::expand_plugin_variables(&mut output, &root_dir, &runtime_key)
+        {
+            if let Err(error) = tokio::fs::create_dir_all(&data_dir).await {
+                tracing::warn!(path = %data_dir.display(), %error, "failed to create plugin data directory");
+            }
+        }
 
         // Read what later steps need out of the capabilities BEFORE they move
         // into the registry.
@@ -1167,11 +1379,14 @@ impl ExtensionManager {
             .capabilities
             .iter()
             .filter_map(|c| match c {
-                CapabilityDeclaration::Skill(s) => Some(s.clone()),
+                CapabilityDeclaration::Skill(skill) => {
+                    let mut skill = skill.clone();
+                    skill.plugin_id.clone_from(&runtime_key);
+                    Some(skill)
+                }
                 _ => None,
             })
             .collect();
-        let command_infos = slash_effect::plugin_command_skill_infos(&command_skills);
         let has_services = output
             .capabilities
             .iter()
@@ -1179,17 +1394,18 @@ impl ExtensionManager {
         // One list, parsed once by `mcp_config::parse_declared_servers`: the
         // row counts it and step 3 spawns it, both only when
         // `kind.starts_mcp_servers()` (otherwise the row counts 0 and says why).
-        let declared_servers: Vec<crate::mcp::McpManagerConfig> = output
+        let mut declared_servers: Vec<_> = output
             .capabilities
             .iter()
-            .filter_map(|c| match c {
-                CapabilityDeclaration::McpServer(s) => Some(s.clone()),
+            .filter_map(|capability| match capability {
+                CapabilityDeclaration::McpServer(server) => Some(server.clone()),
                 _ => None,
             })
             .collect();
 
+        let mut command_infos = slash_effect::plugin_command_skill_infos(&command_skills);
         let shell = record.clone();
-        let mut scope = EffectScope::new(id.clone());
+        let mut scope = EffectScope::new(runtime_key.clone());
 
         // 1. registry_row — cannot fail (refused capabilities become diagnostics).
         scope.effect(
@@ -1206,7 +1422,15 @@ impl ExtensionManager {
         // 2. wasm_module
         if kind == PluginKind::Wasm {
             if let Some(m) = &manifest {
-                match loader::load_wasm_effect(Arc::clone(&self.plugin_loader), m).await {
+                let settings = self.plugin_settings_for_instance(&instance).await;
+                match loader::load_wasm_effect_with_settings(
+                    Arc::clone(&self.plugin_loader),
+                    &instance.runtime_key(),
+                    m,
+                    &settings,
+                )
+                .await
+                {
                     Ok(d) => scope.effect("wasm_module", d),
                     Err(e) => {
                         return Err(self
@@ -1229,8 +1453,32 @@ impl ExtensionManager {
         // command name their tools before they reach the catalog.
         let mut declared_mcp_servers: Vec<String> = Vec::new();
         if kind.starts_mcp_servers() {
-            let settings = self.plugin_settings_for_runtime(&id).await;
-            mcp_config::provision_data_dir(&id, &root_dir, &declared_servers);
+            let settings = self.plugin_settings_for_instance(&instance).await;
+            for server in &mut declared_servers {
+                let declared_server = server.id.clone();
+                if let Err(reason) =
+                    mcp_config::bind_server_to_instance(server, &runtime_key, &root_dir)
+                {
+                    return Err(self.fail_mount(scope, shell, "mcp_server", reason).await);
+                }
+                if declared_server != server.id {
+                    for allowed in command_infos
+                        .iter_mut()
+                        .filter_map(|info| info.allowed_tools.as_mut())
+                    {
+                        for name in allowed {
+                            if let Some(scoped) = crate::tools::handlers::mcp::scoped_tool_name(
+                                &declared_server,
+                                &server.id,
+                                name,
+                            ) {
+                                *name = scoped;
+                            }
+                        }
+                    }
+                }
+            }
+            mcp_config::provision_data_dir(&runtime_key, &root_dir, &declared_servers);
             let configs = mcp_config::with_operator_env(declared_servers, &settings);
             first_server = configs.keys().min().cloned();
             declared_mcp_servers = configs.keys().cloned().collect();
@@ -1252,7 +1500,7 @@ impl ExtensionManager {
                                 // status when the actor has answered every start. The
                                 // watcher ends in this step's disposer, so its verdict
                                 // never lands on the row of a later mount of this id.
-                                let watcher = self.watch_server_starts(&id, receivers).await;
+                                let watcher = self.watch_server_starts(&instance, receivers).await;
                                 scope.effect("mcp_server", stop_watcher_then(watcher, d));
                             }
                             Err(e) => {
@@ -1266,7 +1514,7 @@ impl ExtensionManager {
 
         // 4. service — never fails the mount; per-service outcomes are on the rows.
         if has_services {
-            scope.effect("service", self.start_services_effect(&id).await);
+            scope.effect("service", self.start_services_effect(&runtime_key).await);
         }
 
         // 5. memory_extension
@@ -1346,18 +1594,18 @@ impl ExtensionManager {
                 manager_attached: false,
                 servers: &[],
             });
-            readiness::write_readiness(&self.plugin_registry, &id, status).await;
+            readiness::write_readiness(&self.plugin_registry, &instance, status).await;
         }
 
         self.scopes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(id.clone(), scope);
+            .insert(instance.clone(), scope);
         let status = self
             .plugin_registry
             .read()
             .await
-            .get_plugin(&id)
+            .get_plugin_instance(&instance)
             .map_or(PluginStatus::Loaded, |r| r.status.clone());
         tracing::info!(plugin_id = %id, kind = ?kind, status = %status.label(), "plugin mounted");
         Ok(status)
@@ -1375,7 +1623,7 @@ impl ExtensionManager {
         let id = shell.id.clone();
         {
             let mut registry = self.plugin_registry.write().await;
-            registry.disable_plugin(&id);
+            registry.disable_plugin_instance(&shell.instance_key());
         }
         let report = scope.dispose().await;
         if !report.all_ok() {
@@ -1418,7 +1666,7 @@ impl ExtensionManager {
     /// whose row it writes.
     async fn watch_server_starts(
         &self,
-        plugin_id: &str,
+        instance: &PluginInstanceKey,
         receivers: Vec<(String, ServerStartReceiver)>,
     ) -> Option<WatcherStop> {
         if receivers.is_empty() {
@@ -1432,7 +1680,7 @@ impl ExtensionManager {
             .collect();
         readiness::write_readiness(
             &self.plugin_registry,
-            plugin_id,
+            instance,
             readiness::derive_readiness(&readiness::ReadinessInputs {
                 manager_attached: true,
                 servers: &unanswered,
@@ -1442,12 +1690,13 @@ impl ExtensionManager {
 
         let views = self.views();
         let transitions = Arc::clone(&self.load_guard);
-        let plugin_id = plugin_id.to_string();
+        let instance = instance.clone();
         let (alive, gone) = tokio::sync::oneshot::channel::<()>();
         let handle = tokio::spawn(async move {
             // Dropped with this future — on completion or on abort — which is
             // what `WatcherStop::gone` waits for.
             let _alive = alive;
+            let plugin_id = &instance.plugin_id;
             let mut servers: Vec<(String, readiness::ServerStart)> =
                 Vec::with_capacity(receivers.len());
             for (server_id, rx) in receivers {
@@ -1480,7 +1729,7 @@ impl ExtensionManager {
             });
             // The registry write lock is released inside `write_readiness`,
             // before the recompute takes its own locks.
-            if readiness::write_readiness(&views.plugin_registry, &plugin_id, status).await {
+            if readiness::write_readiness(&views.plugin_registry, &instance, status).await {
                 // Pending/Loaded → Error: the plugin's skills, agents, hooks and
                 // tools leave the views. Pending → Loaded keeps the plugin
                 // active and changes no view, so it recomputes nothing.
@@ -1534,8 +1783,12 @@ impl ExtensionManager {
 
     // ── Unmount ───────────────────────────────────────────────────────────
 
-    async fn unmount_inner(&self, id: &str) -> Result<DisposeReport, UnmountError> {
-        if let Some(owner) = self.runtime_owner(id) {
+    async fn unmount_inner(
+        &self,
+        instance: &PluginInstanceKey,
+    ) -> Result<DisposeReport, UnmountError> {
+        let id = &instance.plugin_id;
+        if let Some(owner) = self.runtime_owner_for(instance) {
             return self.retained_owner_stop(owner).await;
         }
         // Compatibility scopes have no RuntimeOwner/canonical authority.
@@ -1543,10 +1796,16 @@ impl ExtensionManager {
             .scopes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .remove(id);
+            .remove(instance);
         let Some(scope) = scope else {
             return Err(
-                if self.plugin_registry.read().await.get_plugin(id).is_some() {
+                if self
+                    .plugin_registry
+                    .read()
+                    .await
+                    .get_plugin_instance(instance)
+                    .is_some()
+                {
                     UnmountError::NotMounted(id.to_owned())
                 } else {
                     UnmountError::NotFound(id.to_owned())
@@ -1555,8 +1814,8 @@ impl ExtensionManager {
         };
         let shell = {
             let mut registry = self.plugin_registry.write().await;
-            let shell = registry.get_plugin(id).cloned();
-            registry.disable_plugin(id);
+            let shell = registry.get_plugin_instance(instance).cloned();
+            registry.disable_plugin_instance(instance);
             shell
         };
         let report = scope.dispose().await;
@@ -1680,25 +1939,24 @@ impl ExtensionManager {
             .cloned()
             .collect();
         for owner in owners {
-            match self.unmount_inner(&owner.record.id).await {
+            match self.unmount_inner(&owner.record.instance_key()).await {
                 Ok(_) | Err(UnmountError::NotMounted(_)) => {}
                 Err(error) => return Err(super::error::ExtensionError::Runtime(error.to_string())),
             }
         }
-        let scopes: Vec<EffectScope> = self
+        let scopes: Vec<_> = self
             .scopes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .drain()
-            .map(|(_, s)| s)
             .collect();
         {
             let mut registry = self.plugin_registry.write().await;
-            for scope in &scopes {
-                registry.disable_plugin(scope.plugin_id());
+            for (instance, _) in &scopes {
+                registry.disable_plugin_instance(instance);
             }
         }
-        for scope in scopes {
+        for (_, scope) in scopes {
             let report = scope.dispose().await;
             if !report.all_ok() {
                 tracing::warn!(?report, "scope did not dispose cleanly during reload");
@@ -1710,21 +1968,28 @@ impl ExtensionManager {
     // ── Test-only introspection ───────────────────────────────────────────
 
     #[cfg(test)]
+    fn inspect_unique_scope<T>(
+        &self,
+        id: &str,
+        inspect: impl FnOnce(&EffectScope) -> T,
+    ) -> Option<T> {
+        let scopes = self.scopes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut matching = scopes.iter().filter(|(key, _)| key.plugin_id == id);
+        let (_, scope) = matching.next()?;
+        if matching.next().is_some() {
+            return None;
+        }
+        Some(inspect(scope))
+    }
+
+    #[cfg(test)]
     pub(crate) fn scope_steps(&self, id: &str) -> Option<Vec<&'static str>> {
-        self.scopes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(id)
-            .map(EffectScope::steps)
+        self.inspect_unique_scope(id, EffectScope::steps)
     }
 
     #[cfg(test)]
     pub(crate) fn scope_skipped(&self, id: &str) -> Option<Vec<(&'static str, String)>> {
-        self.scopes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(id)
-            .map(|s| s.skipped().to_vec())
+        self.inspect_unique_scope(id, |scope| scope.skipped().to_vec())
     }
 }
 
@@ -1732,8 +1997,8 @@ impl ExtensionManager {
 /// Stop owns the one scope only after withdrawal/drain/join have succeeded.
 struct OwnerStopContext {
     views: Views,
-    scopes: Arc<std::sync::Mutex<std::collections::HashMap<String, EffectScope>>>,
-    owners: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<RuntimeOwner>>>>,
+    scopes: Arc<std::sync::Mutex<HashMap<PluginInstanceKey, EffectScope>>>,
+    owners: Arc<std::sync::Mutex<HashMap<PluginInstanceKey, Arc<RuntimeOwner>>>>,
     control: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -1757,7 +2022,8 @@ impl OwnerStopContext {
     ) -> Result<DisposeReport, UnmountError> {
         use super::runtime_owner::OwnerFailure;
         use crate::capability::provider::ProviderState;
-        let id = &owner.record.id;
+        let instance = owner.record.instance_key();
+        let id = &instance.plugin_id;
         let residual = || UnmountError::RuntimeOwnerResidual(id.clone());
         if state_error {
             return Err(residual());
@@ -1779,8 +2045,12 @@ impl OwnerStopContext {
                 }
                 let _ = owner.provider.transition(ProviderState::Disabled);
             }
-            self.views.plugin_registry.write().await.disable_plugin(id);
-            self.owners.lock().unwrap().remove(id);
+            self.views
+                .plugin_registry
+                .write()
+                .await
+                .disable_plugin_instance(&instance);
+            self.owners.lock().unwrap().remove(&instance);
             return Err(UnmountError::NotMounted(id.clone()));
         }
         let receipt = owner.receipt.lock().unwrap().clone();
@@ -1841,7 +2111,7 @@ impl OwnerStopContext {
             .owners
             .lock()
             .unwrap()
-            .get(id)
+            .get(&instance)
             .is_some_and(|current| Arc::ptr_eq(current, owner))
         {
             owner.failures.lock().unwrap().push(OwnerFailure::Stop(
@@ -1850,7 +2120,7 @@ impl OwnerStopContext {
             let _ = owner.provider.transition(ProviderState::Failed);
             return Err(residual());
         }
-        let scope = self.scopes.lock().unwrap().remove(id);
+        let scope = self.scopes.lock().unwrap().remove(&instance);
         if scope.is_none() && owner.identity.lock().unwrap().is_some() {
             owner
                 .failures
@@ -1860,7 +2130,11 @@ impl OwnerStopContext {
             let _ = owner.provider.transition(ProviderState::Failed);
             return Err(residual());
         }
-        self.views.plugin_registry.write().await.disable_plugin(id);
+        self.views
+            .plugin_registry
+            .write()
+            .await
+            .disable_plugin_instance(&instance);
         let report = match scope {
             Some(scope) => scope.dispose().await,
             None => DisposeReport::empty(id),
@@ -1887,7 +2161,7 @@ impl OwnerStopContext {
             .write()
             .await
             .register_plugin(row);
-        self.owners.lock().unwrap().remove(id);
+        self.owners.lock().unwrap().remove(&instance);
         drop(drain);
         Ok(report)
     }
@@ -2030,6 +2304,60 @@ mod tests {
         crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(&aleph_home, dir)
     }
 
+    fn project_instance(root: &Path, id: &str) -> PluginInstanceKey {
+        PluginInstanceKey::new(ScopeKey::project(root), id.to_owned())
+    }
+
+    #[tokio::test]
+    async fn same_id_winners_are_independent_per_canonical_scope() {
+        use crate::discovery::ProjectPluginParent;
+
+        let temp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(temp.path());
+        let project_a = temp.path().join("project-a");
+        let project_b = temp.path().join("project-b");
+        let global = crate::extension::default_plugins_dir();
+        let shared_a = project_a.join(".aleph/plugins");
+        let local_a = project_a.join(".aleph/plugins.local");
+        let shared_b = project_b.join(".aleph/plugins");
+        for parent in [&global, &shared_a, &local_a, &shared_b] {
+            let manifest_dir = parent.join("same-id/.claude-plugin");
+            std::fs::create_dir_all(&manifest_dir).unwrap();
+            std::fs::write(manifest_dir.join("plugin.toml"), "name = \"same-id\"\n").unwrap();
+        }
+        let (mut manager, _) = isolated_manager(temp.path()).await;
+        manager.extra_plugin_parents = vec![
+            ProjectPluginParent {
+                project_root: project_a.clone(),
+                dir: shared_a,
+            },
+            ProjectPluginParent {
+                project_root: project_a.join(".aleph/.."),
+                dir: local_a.clone(),
+            },
+            ProjectPluginParent {
+                project_root: project_b.clone(),
+                dir: shared_b.clone(),
+            },
+        ];
+        manager.load_all().await.unwrap();
+        let records: HashMap<_, _> = manager
+            .list_plugin_records()
+            .await
+            .into_iter()
+            .filter(|record| record.id == "same-id")
+            .map(|record| (record.scope_key, record.root_dir))
+            .collect();
+        assert_eq!(
+            records,
+            HashMap::from([
+                (ScopeKey::Global, global.join("same-id")),
+                (ScopeKey::project(&project_a), local_a.join("same-id")),
+                (ScopeKey::project(&project_b), shared_b.join("same-id")),
+            ])
+        );
+    }
+
     /// Same shape as `mod.rs::tests::isolated_manager`, duplicated here rather
     /// than made `pub(super)` because the two test modules will diverge (this
     /// one grows the six-effect fixture in P1.13).
@@ -2088,7 +2416,7 @@ mod tests {
         let dir = root.join("plugins").join("lazy-wasm");
         std::fs::create_dir_all(&dir).unwrap();
         use crate::extension::runtime::wasm::tests::guest_fixture::{
-            manifest_with_guest, PAYLOAD_A,
+            PAYLOAD_A, manifest_with_guest,
         };
         let manifest = manifest_with_guest(&dir, "lazy-wasm", PAYLOAD_A);
         crate::extension::runtime::wasm::tests::guest_fixture::write_barrier_guest(
@@ -2120,7 +2448,7 @@ handler = "handler"
     async fn tool_only_wasm_discovery_stays_cold_without_mounting_a_vm() {
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
-        write_cold_tool_wasm_fixture(tmp.path());
+        write_cold_tool_wasm_fixture(&tmp.path().join("aleph-state"));
         let (manager, _) = isolated_manager(tmp.path()).await;
         let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
         let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
@@ -2150,16 +2478,18 @@ handler = "handler"
         assert_eq!(canonical.revision(), revision + 1);
         let publication = canonical.canonical_publication();
         assert_eq!(publication.entries().len(), 1);
-        assert!(canonical
-            .capture_entry("lazy_tool")
-            .is_some_and(|lease| lease.is_cold_declaration()));
+        assert!(
+            canonical
+                .capture_entry("lazy_tool")
+                .is_some_and(|lease| lease.is_cold_declaration())
+        );
     }
 
     #[tokio::test]
     async fn stage_h_concurrent_discovery_yields_one_cold_owner_without_publication() {
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
-        write_cold_tool_wasm_fixture(tmp.path());
+        write_cold_tool_wasm_fixture(&tmp.path().join("aleph-state"));
         let (manager, _) = isolated_manager(tmp.path()).await;
         let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
         let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
@@ -2188,16 +2518,18 @@ handler = "handler"
         drop(loader);
         assert_eq!(canonical.revision(), 1);
         assert_eq!(canonical.canonical_publication().entries().len(), 1);
-        assert!(canonical
-            .capture_entry("lazy_tool")
-            .is_some_and(|lease| lease.is_cold_declaration()));
+        assert!(
+            canonical
+                .capture_entry("lazy_tool")
+                .is_some_and(|lease| lease.is_cold_declaration())
+        );
     }
 
     #[tokio::test]
     async fn stage_h_discovery_then_boot_publishes_once_for_the_same_owner() {
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
-        write_cold_tool_wasm_fixture(tmp.path());
+        write_cold_tool_wasm_fixture(&tmp.path().join("aleph-state"));
         let (manager, _) = isolated_manager(tmp.path()).await;
         let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
         let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
@@ -2234,7 +2566,7 @@ handler = "handler"
     async fn stage_h_reload_invalidates_discovery_and_replaces_cold_owner() {
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
-        write_cold_tool_wasm_fixture(tmp.path());
+        write_cold_tool_wasm_fixture(&tmp.path().join("aleph-state"));
         let (manager, _) = isolated_manager(tmp.path()).await;
         let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
         let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
@@ -2278,16 +2610,20 @@ handler = "handler"
             .await
             .unwrap();
 
-        let listed = PluginManageTool::call_on(
-            &manager,
-            PluginManageArgs {
-                action: PluginAction::List,
-                name: None,
-                source: None,
-                query: None,
-                config: None,
-                enforce: None,
-            },
+        let listed = crate::projects::with_project_root(
+            Some(tmp.path().to_path_buf()),
+            PluginManageTool::call_on(
+                &manager,
+                PluginManageArgs {
+                    action: PluginAction::List,
+                    name: None,
+                    selector: None,
+                    source: None,
+                    query: None,
+                    config: None,
+                    enforce: None,
+                },
+            ),
         )
         .await
         .unwrap();
@@ -2301,22 +2637,32 @@ handler = "handler"
         assert_eq!(probe.guest_instance_dropped(), 0);
         drop(loader);
 
-        let enabled = PluginManageTool::call_on(
-            &manager,
-            PluginManageArgs {
-                action: PluginAction::Enable,
-                name: Some("lazy-wasm".to_owned()),
-                source: None,
-                query: None,
-                config: None,
-                enforce: None,
-            },
+        let enabled = crate::projects::with_project_root(
+            Some(tmp.path().to_path_buf()),
+            PluginManageTool::call_on(
+                &manager,
+                PluginManageArgs {
+                    action: PluginAction::Enable,
+                    name: Some("lazy-wasm".to_owned()),
+                    selector: None,
+                    source: None,
+                    query: None,
+                    config: None,
+                    enforce: None,
+                },
+            ),
         )
         .await
         .unwrap();
         assert_eq!(enabled.data["ok"], true);
         assert_eq!(canonical.revision(), 2);
-        assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        assert!(
+            manager
+                .plugin_loader
+                .read()
+                .await
+                .is_loaded(&project_instance(tmp.path(), "lazy-wasm").runtime_key())
+        );
     }
 
     /// Explicitly record "the operator wants `lazy-wasm` loaded" in the
@@ -2348,7 +2694,7 @@ handler = "handler"
 
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
-        write_cold_tool_wasm_fixture(tmp.path());
+        write_cold_tool_wasm_fixture(&tmp.path().join("aleph-state"));
         let (manager, _) = isolated_manager(tmp.path()).await;
         let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
         let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
@@ -2406,7 +2752,7 @@ handler = "handler"
 
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
-        write_cold_tool_wasm_fixture(tmp.path());
+        write_cold_tool_wasm_fixture(&tmp.path().join("aleph-state"));
         let (manager, _) = isolated_manager(tmp.path()).await;
         let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
         let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
@@ -2465,7 +2811,7 @@ handler = "handler"
         use crate::extension::plugin_state::PluginRuntimeOutcome;
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
-        write_cold_tool_wasm_fixture(tmp.path());
+        write_cold_tool_wasm_fixture(&tmp.path().join("aleph-state"));
         let (manager, _) = isolated_manager(tmp.path()).await;
         let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
         let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
@@ -2509,11 +2855,13 @@ handler = "handler"
             .expect("stop must drain and dispose the exact owner scope");
         assert!(report.all_ok(), "{report:?}");
         assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
-        assert!(manager
-            .get_plugin_registry()
-            .await
-            .list_tools_for_plugin("lazy-wasm")
-            .is_empty());
+        assert!(
+            manager
+                .get_plugin_registry()
+                .await
+                .list_tools_for_plugin("lazy-wasm")
+                .is_empty()
+        );
         assert!(manager.runtime_owner("lazy-wasm").is_none());
         assert!(!manager.owner_is_current(&stale_owner));
         let replacement = manager
@@ -2534,9 +2882,188 @@ handler = "handler"
         );
     }
 
+    #[tokio::test]
+    async fn same_id_projects_publish_independent_cold_wasm_owners() {
+        use crate::capability::backend::TOOL_NAMESPACE;
+        use crate::capability::descriptor::CapabilityId;
+        use crate::capability::facade::{Reference, Zahir};
+        use crate::capability::ownership::VisibilityScope;
+        use crate::discovery::ProjectPluginParent;
+        use crate::extension::plugin_target::{PluginAccess, PluginTarget};
+        use crate::extension::runtime::wasm::tests::guest_fixture::{
+            PAYLOAD_B, manifest_with_guest,
+        };
+        use crate::extension::visibility::VisibilityCtx;
+
+        let temp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(temp.path());
+        let project_a = temp.path().join("a");
+        let project_b = temp.path().join("b");
+        write_cold_tool_wasm_fixture(&project_a);
+        write_cold_tool_wasm_fixture(&project_b);
+        manifest_with_guest(&project_b.join("plugins/lazy-wasm"), "lazy-wasm", PAYLOAD_B);
+
+        let tree = Arc::new(crate::capability::ownership::OwnershipTree::new());
+        let (mut manager, _) =
+            isolated_manager_with_ownership_tree(temp.path(), tree.clone()).await;
+        manager.extra_plugin_parents = [&project_a, &project_b]
+            .into_iter()
+            .map(|root| ProjectPluginParent {
+                project_root: root.clone(),
+                dir: root.join("plugins"),
+            })
+            .collect();
+        let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
+        let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
+        manager
+            .set_tool_handler_registry(canonical.clone())
+            .await
+            .unwrap();
+        manager.load_all().await.unwrap();
+
+        let instance =
+            |root: &Path| PluginInstanceKey::new(ScopeKey::project(root), "lazy-wasm".to_owned());
+        let a = instance(&project_a);
+        let b = instance(&project_b);
+        let registry = manager.plugin_registry.read().await;
+        assert_eq!(
+            registry.get_plugin_instance(&a).unwrap().status,
+            PluginStatus::Cold
+        );
+        assert_eq!(
+            registry.get_plugin_instance(&b).unwrap().status,
+            PluginStatus::Cold
+        );
+        drop(registry);
+        let owner_a = manager.runtime_owner_for(&a).expect("project A cold owner");
+        let owner_b = manager.runtime_owner_for(&b).expect("project B cold owner");
+        assert_ne!(owner_a.owner_generation, owner_b.owner_generation);
+
+        for (instance, project) in [(&a, &project_a), (&b, &project_b)] {
+            let access =
+                PluginAccess::Scoped(VisibilityCtx::from_project_root(Some(project.clone())));
+            let result = manager
+                .set_plugin_target_enabled(
+                    &PluginTarget::Exact(instance.selector()),
+                    &access,
+                    true,
+                    true,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(result.actual_state, "loaded", "{}", instance.selector());
+        }
+        assert!(manager.owner_is_current(&owner_a));
+        assert!(manager.owner_is_current(&owner_b));
+
+        let provider_a = a.tool_provider_name("lazy_tool");
+        let provider_b = b.tool_provider_name("lazy_tool");
+        assert_ne!(provider_a, provider_b);
+        let facade =
+            crate::capability::zahir_facade::ZahirFacade::new(canonical.as_ref().clone(), tree);
+        let reference = |provider: &str| Reference {
+            id: CapabilityId {
+                namespace: TOOL_NAMESPACE.into(),
+                name: provider.into(),
+            },
+            visibility: VisibilityScope::default(),
+        };
+        let lease_a = crate::projects::with_project_root(Some(project_a.clone()), async {
+            facade.resolve(reference(&provider_a)).unwrap()
+        })
+        .await;
+        let lease_b = crate::projects::with_project_root(Some(project_b.clone()), async {
+            facade.resolve(reference(&provider_b)).unwrap()
+        })
+        .await;
+        assert!(matches!(
+            facade.resolve(reference(&provider_a)),
+            Err(crate::capability::facade::ResolveError::NotVisible)
+        ));
+        crate::projects::with_project_root(Some(project_b.clone()), async {
+            assert!(facade.validate_lease(&lease_a).is_err());
+            assert!(facade.lookup_descriptor(&reference(&provider_a)).is_none());
+            assert!(facade.lookup_descriptor(&reference(&provider_b)).is_some());
+        })
+        .await;
+        for (project, provider, payload) in [
+            (&project_a, &provider_a, "A"),
+            (&project_b, &provider_b, "B"),
+        ] {
+            let result = crate::projects::with_project_root(
+                Some(project.clone()),
+                b3_call_canonical_as(canonical.clone(), provider, "lazy_tool"),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.value, serde_json::json!(payload));
+        }
+        assert!(
+            crate::projects::with_project_root(
+                Some(project_b.clone()),
+                b3_call_canonical(canonical.clone(), &provider_a),
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            crate::projects::with_project_root(
+                None,
+                b3_call_canonical(canonical.clone(), &provider_a),
+            )
+            .await
+            .is_err()
+        );
+
+        manifest_with_guest(&project_a.join("plugins/lazy-wasm"), "lazy-wasm", PAYLOAD_B);
+        let access =
+            PluginAccess::Scoped(VisibilityCtx::from_project_root(Some(project_a.clone())));
+        let (_, reload) = manager
+            .reload_plugin_target(&PluginTarget::Exact(a.selector()), &access)
+            .await
+            .unwrap();
+        assert_eq!(reload.unwrap(), PluginStatus::Cold);
+        manager
+            .activate_owner(manager.runtime_owner_for(&a).unwrap())
+            .await
+            .unwrap();
+        crate::projects::with_project_root(Some(project_a.clone()), async {
+            assert!(facade.validate_lease(&lease_a).is_err());
+            assert!(facade.resolve(reference(&provider_a)).is_ok());
+            assert_eq!(
+                b3_call_canonical(canonical.clone(), &provider_a)
+                    .await
+                    .unwrap()
+                    .value,
+                serde_json::json!("B")
+            );
+        })
+        .await;
+        crate::projects::with_project_root(Some(project_b.clone()), async {
+            assert!(facade.validate_lease(&lease_b).is_ok());
+            assert_eq!(
+                b3_call_canonical(canonical.clone(), &provider_b)
+                    .await
+                    .unwrap()
+                    .value,
+                serde_json::json!("B")
+            );
+        })
+        .await;
+    }
+
     async fn b3_call_canonical(
         registry: Arc<crate::tools::ToolHandlerRegistry>,
         name: &str,
+    ) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
+        b3_call_canonical_as(registry, name, name).await
+    }
+
+    async fn b3_call_canonical_as(
+        registry: Arc<crate::tools::ToolHandlerRegistry>,
+        provider_name: &str,
+        request_name: &str,
     ) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
         use crate::tools::service::ToolService;
         let publication = registry.canonical_publication();
@@ -2547,12 +3074,13 @@ handler = "handler"
             Arc::new(crate::capability::ownership::OwnershipTree::new()),
         );
         assert!(projection.bind_canonical_facade(Arc::clone(&facade)));
-        if let Some(entry) = publication.entry(name) {
+        if let Some(entry) = publication.entry(provider_name) {
             projection.register(Box::new(
                 crate::tools::adapters::McpRegistryTool::from_registry_entry(
                     Arc::clone(&entry.handler),
                     &entry.descriptor,
-                ),
+                )
+                .with_request_name(request_name.to_owned()),
             ));
         }
         let service =
@@ -2562,7 +3090,7 @@ handler = "handler"
                 turn_id: crate::session::events::TurnId::nil(),
                 call_id: "b3-real-guest".into(),
             }),
-            service.execute(name, serde_json::json!({})),
+            service.execute(request_name, serde_json::json!({})),
         )
         .await?;
         output.value = serde_json::from_str(output.value.as_str().unwrap())
@@ -2606,9 +3134,13 @@ handler = "handler"
         Arc<crate::tools::ToolHandlerRegistry>,
         Arc<RuntimeOwner>,
     ) {
-        write_cold_tool_wasm_fixture(root);
-        let manifest = root.join("plugins/lazy-wasm/aleph.plugin.toml");
-        std::fs::write(&manifest, format!("{}\n[[tools]]\nname = \"other_tool\"\ndescription = \"Second tool on the same owner\"\nhandler = \"handler\"\n", std::fs::read_to_string(&manifest).unwrap())).unwrap();
+        let global_home = crate::discovery::aleph_plugins_dir().unwrap();
+        let global_home = global_home.parent().unwrap();
+        let manifest = global_home.join("plugins/lazy-wasm/aleph.plugin.toml");
+        if !manifest.exists() {
+            write_cold_tool_wasm_fixture(global_home);
+            std::fs::write(&manifest, format!("{}\n[[tools]]\nname = \"other_tool\"\ndescription = \"Second tool on the same owner\"\nhandler = \"handler\"\n", std::fs::read_to_string(&manifest).unwrap())).unwrap();
+        }
         let (manager, _) = isolated_manager_with_ownership_tree(root, tree).await;
         let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
         manager
@@ -2789,34 +3321,46 @@ handler = "handler"
 
         let row = manager.get_plugin_record("lazy-wasm").await.unwrap();
         assert_eq!(row.status, PluginStatus::Cold);
-        assert!(manager
-            .discovered_plugin_ids()
-            .unwrap()
-            .ids
-            .iter()
-            .any(|(id, _)| id == "lazy-wasm"));
-        assert!(manager
-            .get_plugin_registry()
-            .await
-            .list_tools_for_plugin("lazy-wasm")
-            .is_empty());
-        assert!(manager
-            .active_plugin_tools_snapshot()
-            .iter()
-            .any(|tool| tool.plugin_id == "lazy-wasm" && tool.name == "lazy_tool"));
-        assert!(manager
-            .mounted_plugin_tools_snapshot()
-            .iter()
-            .all(|tool| tool.plugin_id != "lazy-wasm"));
+        assert!(
+            manager
+                .discovered_plugin_ids()
+                .unwrap()
+                .ids
+                .iter()
+                .any(|(id, _)| id == "lazy-wasm")
+        );
+        assert!(
+            manager
+                .get_plugin_registry()
+                .await
+                .list_tools_for_plugin("lazy-wasm")
+                .is_empty()
+        );
+        assert!(
+            manager
+                .active_plugin_tools_snapshot()
+                .iter()
+                .any(|tool| tool.plugin_id == "lazy-wasm" && tool.name == "lazy_tool")
+        );
+        assert!(
+            manager
+                .mounted_plugin_tools_snapshot()
+                .iter()
+                .all(|tool| tool.plugin_id != "lazy-wasm")
+        );
         assert_eq!(canonical.canonical_publication().entries().len(), 2);
-        assert!(canonical
-            .capture_entry("lazy_tool")
-            .is_some_and(|lease| lease.is_cold_declaration()));
+        assert!(
+            canonical
+                .capture_entry("lazy_tool")
+                .is_some_and(|lease| lease.is_cold_declaration())
+        );
         assert!(!facade.describe(Scope::default()).capabilities.is_empty());
-        assert!(!facade
-            .project(TransportTarget::Mcp, Scope::default())
-            .capabilities
-            .is_empty());
+        assert!(
+            !facade
+                .project(TransportTarget::Mcp, Scope::default())
+                .capabilities
+                .is_empty()
+        );
 
         let loader = manager.plugin_loader.read().await;
         let probe = loader.wasm_load_probe();
@@ -2903,9 +3447,11 @@ handler = "handler"
         assert_eq!(probe.guest_byte_reads(), 1);
         assert_eq!(probe.guest_instance_created(), 1);
         drop(loader);
-        assert!(canonical
-            .capture_entry("lazy_tool")
-            .is_some_and(|lease| !lease.is_cold_declaration()));
+        assert!(
+            canonical
+                .capture_entry("lazy_tool")
+                .is_some_and(|lease| !lease.is_cold_declaration())
+        );
         assert!(manager.unmount("lazy-wasm").await.unwrap().all_ok());
     }
     #[tokio::test]
@@ -2958,7 +3504,7 @@ handler = "handler"
     async fn stage_g_production_host_replacement_fences_stale_facade_and_drops_exact_owner() {
         use crate::extension::plugin_state::PluginRuntimeOutcome;
         use crate::extension::runtime::wasm::tests::guest_fixture::{
-            manifest_with_guest, PAYLOAD_B,
+            PAYLOAD_B, manifest_with_guest,
         };
 
         let tmp = tempfile::tempdir().unwrap();
@@ -3012,7 +3558,7 @@ handler = "handler"
         assert_eq!(probe.guest_instance_dropped(), 0);
 
         manifest_with_guest(
-            &tmp.path().join("plugins/lazy-wasm"),
+            &tmp.path().join("aleph-state/plugins/lazy-wasm"),
             "lazy-wasm",
             PAYLOAD_B,
         );
@@ -3024,12 +3570,14 @@ handler = "handler"
         assert!(owner.provider.acquire_call(old_generation).is_err());
         assert!(!old_receipt.is_dropped());
         assert_eq!(probe.guest_instance_dropped(), 0);
-        assert!(manager
-            .plugin_loader
-            .read()
-            .await
-            .call_bound(&binding, serde_json::json!({}))
-            .is_err());
+        assert!(
+            manager
+                .plugin_loader
+                .read()
+                .await
+                .call_bound(&binding, serde_json::json!({}))
+                .is_err()
+        );
         let stale = b4_execute_canonical(&service, "stage-g-stale").await;
         // The stale facade is fenced from the OLD incarnation, but the live
         // canonical registry now resolves the name to the REPLACEMENT's cold
@@ -3100,7 +3648,7 @@ handler = "handler"
         use crate::capability::provider::ProviderState;
         use crate::extension::plugin_state::PluginRuntimeOutcome;
         use crate::extension::runtime::wasm::tests::guest_fixture::{
-            manifest_with_guest, PAYLOAD_B,
+            PAYLOAD_B, manifest_with_guest,
         };
 
         let tmp = tempfile::tempdir().unwrap();
@@ -3133,7 +3681,7 @@ handler = "handler"
         );
 
         manifest_with_guest(
-            &tmp.path().join("plugins/lazy-wasm"),
+            &tmp.path().join("aleph-state/plugins/lazy-wasm"),
             "lazy-wasm",
             PAYLOAD_B,
         );
@@ -3145,12 +3693,14 @@ handler = "handler"
         assert!(owner.provider.acquire_call(old_generation).is_err());
         assert!(!old_receipt.is_dropped());
         assert_eq!(probe.guest_instance_dropped(), 0);
-        assert!(manager
-            .plugin_loader
-            .read()
-            .await
-            .call_bound(&binding, serde_json::json!({}))
-            .is_err());
+        assert!(
+            manager
+                .plugin_loader
+                .read()
+                .await
+                .call_bound(&binding, serde_json::json!({}))
+                .is_err()
+        );
 
         drop(owner);
         drop(old);
@@ -3201,7 +3751,11 @@ handler = "handler"
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
         let (manager, _, owner) = b3_cold_manager(tmp.path()).await;
-        std::fs::remove_file(tmp.path().join("plugins/lazy-wasm/lazy-wasm.wasm")).unwrap();
+        std::fs::remove_file(
+            tmp.path()
+                .join("aleph-state/plugins/lazy-wasm/lazy-wasm.wasm"),
+        )
+        .unwrap();
 
         let failed = manager
             .set_plugin_enabled("lazy-wasm", true)
@@ -3211,10 +3765,12 @@ handler = "handler"
         assert_eq!(failed.runtime_outcome, PluginRuntimeOutcome::Failed);
         assert_eq!(failed.error_phase, Some(PluginControlPhase::Reconcile));
         assert_eq!(failed.actual_state, "failed");
-        assert!(failed
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("wasm_module")));
+        assert!(
+            failed
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("wasm_module"))
+        );
         assert_eq!(owner.provider.state(), ProviderState::Failed);
         assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
         let probe = manager.plugin_loader.read().await.wasm_load_probe();
@@ -3230,7 +3786,9 @@ handler = "handler"
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
         let (manager, _, owner) = b3_cold_manager(tmp.path()).await;
-        let wasm_path = tmp.path().join("plugins/lazy-wasm/lazy-wasm.wasm");
+        let wasm_path = tmp
+            .path()
+            .join("aleph-state/plugins/lazy-wasm/lazy-wasm.wasm");
         let invalid_bytes = b"stage-f-invalid-wasm";
         std::fs::write(&wasm_path, invalid_bytes).unwrap();
 
@@ -3266,19 +3824,26 @@ handler = "handler"
         assert_eq!(first.runtime_outcome, PluginRuntimeOutcome::Mounted);
         let revision = canonical.revision();
         let root = tmp.path().join("second-manager");
+        std::fs::create_dir(&root).unwrap();
         let (other, _, loser) = b3_cold_manager_with_registry(&root, canonical.clone()).await;
 
-        assert!(other.set_plugin_enabled("lazy-wasm", true).await.is_err());
+        let error = other
+            .set_plugin_enabled("lazy-wasm", true)
+            .await
+            .unwrap_err();
+        assert!(error.outcome.persisted, "{error}");
         assert_eq!(loser.provider.state(), ProviderState::Failed);
-        assert!(loser
-            .failures
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|failure| matches!(
-                failure,
-                OwnerFailure::Publication(PluginPublicationError::ScopeOccupied)
-            )));
+        assert!(
+            loser
+                .failures
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|failure| matches!(
+                    failure,
+                    OwnerFailure::Publication(PluginPublicationError::ScopeOccupied)
+                ))
+        );
         assert!(!other.plugin_loader.read().await.is_loaded("lazy-wasm"));
         assert_eq!(canonical.revision(), revision);
         assert!(canonical.capture_entry("lazy_tool").is_some());
@@ -3302,7 +3867,7 @@ handler = "handler"
             .scopes
             .lock()
             .unwrap()
-            .get_mut("lazy-wasm")
+            .get_mut(&PluginInstanceKey::global("lazy-wasm"))
             .unwrap()
             .effect(
                 "service",
@@ -3318,18 +3883,20 @@ handler = "handler"
         assert!(owner.acquire_permit().await.is_err());
         assert!(canonical.capture_entry("lazy_tool").is_none());
         assert!(owner.receipt.lock().unwrap().is_some());
-        assert!(owner
-            .failures
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|failure| matches!(
-                failure,
-                OwnerFailure::Dispose(report)
-                    if report
-                        .failures()
-                    .any(|(step, cause)| step == "service" && cause == "stage-f disposer fault")
-            )));
+        assert!(
+            owner
+                .failures
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|failure| matches!(
+                    failure,
+                    OwnerFailure::Dispose(report)
+                        if report
+                            .failures()
+                        .any(|(step, cause)| step == "service" && cause == "stage-f disposer fault")
+                ))
+        );
     }
 
     #[tokio::test]
@@ -3341,18 +3908,22 @@ handler = "handler"
             manager.get_plugin_record("lazy-wasm").await.unwrap().status,
             PluginStatus::Cold
         );
-        assert!(manager
-            .get_plugin_registry()
-            .await
-            .list_tools_for_plugin("lazy-wasm")
-            .is_empty());
+        assert!(
+            manager
+                .get_plugin_registry()
+                .await
+                .list_tools_for_plugin("lazy-wasm")
+                .is_empty()
+        );
         // The COLD declaration published at discovery IS the canonical
         // publication: the tool surface is advertised before the guest is
         // ready, so the publication holds the cold declarations.
         assert_eq!(canonical.canonical_publication().entries().len(), 2);
-        assert!(canonical
-            .capture_entry("lazy_tool")
-            .is_some_and(|lease| lease.is_cold_declaration()));
+        assert!(
+            canonical
+                .capture_entry("lazy_tool")
+                .is_some_and(|lease| lease.is_cold_declaration())
+        );
         {
             let loader = manager.plugin_loader.read().await;
             let probe = loader.wasm_load_probe();
@@ -3379,8 +3950,11 @@ handler = "handler"
                     .expect("activation must create one observed instance"),
             )
         };
-        let guest_bytes =
-            std::fs::read(tmp.path().join("plugins/lazy-wasm/lazy-wasm.wasm")).unwrap();
+        let guest_bytes = std::fs::read(
+            tmp.path()
+                .join("aleph-state/plugins/lazy-wasm/lazy-wasm.wasm"),
+        )
+        .unwrap();
         assert_eq!(probe.guest_byte_reads(), 1);
         assert_eq!(probe.guest_bytes(), guest_bytes.len());
         assert_eq!(probe.guest_instance_created(), 1);
@@ -3396,7 +3970,7 @@ handler = "handler"
     #[tokio::test]
     async fn stage_e_wasm_reload_drops_old_instance_once_before_new_instance_can_drop() {
         use crate::extension::runtime::wasm::tests::guest_fixture::{
-            manifest_with_guest, PAYLOAD_B,
+            PAYLOAD_B, manifest_with_guest,
         };
 
         let tmp = tempfile::tempdir().unwrap();
@@ -3429,7 +4003,7 @@ handler = "handler"
         assert_eq!(probe.guest_instance_dropped(), 0);
 
         manifest_with_guest(
-            &tmp.path().join("plugins/lazy-wasm"),
+            &tmp.path().join("aleph-state/plugins/lazy-wasm"),
             "lazy-wasm",
             PAYLOAD_B,
         );
@@ -3438,12 +4012,14 @@ handler = "handler"
             PluginStatus::Cold
         );
         assert!(!old.validate(&canonical.canonical_publication()));
-        assert!(manager
-            .plugin_loader
-            .read()
-            .await
-            .call_bound(&binding, serde_json::json!({}))
-            .is_err());
+        assert!(
+            manager
+                .plugin_loader
+                .read()
+                .await
+                .call_bound(&binding, serde_json::json!({}))
+                .is_err()
+        );
         assert!(!old_receipt.is_dropped());
         assert_eq!(probe.guest_instance_dropped(), 0);
         drop(owner);
@@ -3483,7 +4059,9 @@ handler = "handler"
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
         let (manager, _, _) = b3_cold_manager(tmp.path()).await;
-        let wasm_path = tmp.path().join("plugins/lazy-wasm/lazy-wasm.wasm");
+        let wasm_path = tmp
+            .path()
+            .join("aleph-state/plugins/lazy-wasm/lazy-wasm.wasm");
         let invalid_bytes = b"stage-e-invalid-wasm";
         std::fs::write(&wasm_path, invalid_bytes).unwrap();
         let owner = manager.runtime_owner("lazy-wasm").unwrap();
@@ -3501,7 +4079,7 @@ handler = "handler"
     #[tokio::test]
     async fn b4_production_canonical_route_returns_checked_real_guest_payload() {
         use crate::extension::runtime::wasm::tests::guest_fixture::{
-            manifest_with_checked_input_guest, PAYLOAD_A,
+            PAYLOAD_A, manifest_with_checked_input_guest,
         };
         use crate::tools::service::{ToolError, ToolService};
 
@@ -3511,7 +4089,7 @@ handler = "handler"
         // The real guest traps unless the production JSON ABI carries these
         // exact arguments to the bound export, not merely a matching tool name.
         manifest_with_checked_input_guest(
-            &tmp.path().join("plugins/lazy-wasm"),
+            &tmp.path().join("aleph-state/plugins/lazy-wasm"),
             "lazy-wasm",
             PAYLOAD_A,
             r#"{"name":"handler","arguments":{"probe":"b4"}}"#,
@@ -3556,7 +4134,7 @@ handler = "handler"
     async fn b4_production_canonical_reload_rejects_admitted_a_before_guest_and_runs_b() {
         use crate::capability::provider::ProviderState;
         use crate::extension::runtime::wasm::tests::guest_fixture::{
-            manifest_with_guest, PAYLOAD_B,
+            PAYLOAD_B, manifest_with_guest,
         };
         use crate::tools::service::ToolError;
 
@@ -3607,7 +4185,7 @@ handler = "handler"
             "the production handler passed sealed authority and is waiting for the loader"
         );
         manifest_with_guest(
-            &tmp.path().join("plugins/lazy-wasm"),
+            &tmp.path().join("aleph-state/plugins/lazy-wasm"),
             "lazy-wasm",
             PAYLOAD_B,
         );
@@ -3673,7 +4251,7 @@ handler = "handler"
     #[tokio::test]
     async fn b3_ready_real_guest_reload_and_old_receipt_are_incarnation_fenced() {
         use crate::extension::runtime::wasm::tests::guest_fixture::{
-            manifest_with_guest, PAYLOAD_B,
+            PAYLOAD_B, manifest_with_guest,
         };
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
@@ -3715,7 +4293,7 @@ handler = "handler"
         );
         assert!(old.validate(&publication));
         manifest_with_guest(
-            &tmp.path().join("plugins/lazy-wasm"),
+            &tmp.path().join("aleph-state/plugins/lazy-wasm"),
             "lazy-wasm",
             PAYLOAD_B,
         );
@@ -3737,20 +4315,23 @@ handler = "handler"
         manager.activate_owner(replacement.clone()).await.unwrap();
         let current = canonical.canonical_publication();
         assert!(!old.validate(&current));
-        assert!(old
-            .entry()
-            .handler
-            .invoke(serde_json::json!({}))
-            .await
-            .is_err());
+        assert!(
+            old.entry()
+                .handler
+                .invoke(serde_json::json!({}))
+                .await
+                .is_err()
+        );
         assert!(receipt.revoke().is_err());
         assert_eq!(canonical.revision(), current.revision());
-        assert!(manager
-            .plugin_loader
-            .read()
-            .await
-            .call_bound(&binding, serde_json::json!({}))
-            .is_err());
+        assert!(
+            manager
+                .plugin_loader
+                .read()
+                .await
+                .call_bound(&binding, serde_json::json!({}))
+                .is_err()
+        );
         assert_eq!(
             b3_call_canonical(canonical.clone(), "lazy_tool")
                 .await
@@ -3826,8 +4407,8 @@ handler = "handler"
     }
 
     #[tokio::test]
-    async fn b3_cancelled_waiter_does_not_release_guest_permit_and_starting_stop_joins_without_deadlock(
-    ) {
+    async fn b3_cancelled_waiter_does_not_release_guest_permit_and_starting_stop_joins_without_deadlock()
+     {
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
         let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
@@ -3931,11 +4512,12 @@ handler = "handler"
             } else {
                 let count = count.clone();
                 let fails = stage == "dispose-error";
+                let instance = owner.record.instance_key();
                 manager
                     .scopes
                     .lock()
                     .unwrap()
-                    .get_mut("lazy-wasm")
+                    .get_mut(&instance)
                     .unwrap()
                     .effect(
                         "service",
@@ -3968,10 +4550,12 @@ handler = "handler"
             if stage == "drain" {
                 assert!(owner.admission.available_permits() < RuntimeOwner::MAX_IN_FLIGHT as usize);
                 // Even a tool export cannot bypass stopping through hooks.
-                assert!(manager
-                    .execute_plugin_hook("lazy-wasm", "handler", serde_json::json!({}))
-                    .await
-                    .is_err());
+                assert!(
+                    manager
+                        .execute_plugin_hook("lazy-wasm", "handler", serde_json::json!({}))
+                        .await
+                        .is_err()
+                );
             }
             first.abort();
             assert!(first.await.unwrap_err().is_cancelled());
@@ -4012,8 +4596,10 @@ handler = "handler"
     async fn b3_mounted_hook_without_runtime_owner_fails_closed_before_guest_execution() {
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
-        write_cold_tool_wasm_fixture(tmp.path());
-        let manifest = tmp.path().join("plugins/lazy-wasm/aleph.plugin.toml");
+        write_cold_tool_wasm_fixture(&tmp.path().join("aleph-state"));
+        let manifest = tmp
+            .path()
+            .join("aleph-state/plugins/lazy-wasm/aleph.plugin.toml");
         let manifest_text = std::fs::read_to_string(&manifest).unwrap();
         std::fs::write(&manifest, manifest_text).unwrap();
         let (manager, _) = isolated_manager(tmp.path()).await;
@@ -4039,7 +4625,11 @@ handler = "handler"
             .bind_wasm("lazy-wasm", "handler")
             .unwrap()
             .block_guest_for_test(entered, guest_release);
-        manager.runtime_owners.lock().unwrap().remove("lazy-wasm");
+        manager
+            .runtime_owners
+            .lock()
+            .unwrap()
+            .remove(&PluginInstanceKey::global("lazy-wasm"));
 
         let call = tokio::spawn({
             let manager = manager.clone();
@@ -4075,16 +4665,20 @@ handler = "handler"
         let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
         manager.activate_owner(owner.clone()).await.unwrap();
         let revision = canonical.revision();
-        assert!(manager
-            .execute_plugin_hook("lazy-wasm", "handler", serde_json::json!({}))
-            .await
-            .is_err());
-        assert!(manager
-            .plugin_loader
-            .read()
-            .await
-            .execute_hook("lazy-wasm", "handler", serde_json::json!({}))
-            .is_err());
+        assert!(
+            manager
+                .execute_plugin_hook("lazy-wasm", "handler", serde_json::json!({}))
+                .await
+                .is_err()
+        );
+        assert!(
+            manager
+                .plugin_loader
+                .read()
+                .await
+                .execute_hook("lazy-wasm", "handler", serde_json::json!({}))
+                .is_err()
+        );
         assert_eq!(
             owner.admission.available_permits(),
             RuntimeOwner::MAX_IN_FLIGHT as usize
@@ -4111,7 +4705,7 @@ handler = "handler"
             .scopes
             .lock()
             .unwrap()
-            .get_mut("lazy-wasm")
+            .get_mut(&owner.record.instance_key())
             .unwrap()
             .effect(
                 "service",
@@ -4156,15 +4750,17 @@ handler = "handler"
             loser.provider.state(),
             crate::capability::provider::ProviderState::Failed
         );
-        assert!(loser
-            .failures
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|failure| matches!(
-                failure,
-                OwnerFailure::Publication(PluginPublicationError::ScopeOccupied)
-            )));
+        assert!(
+            loser
+                .failures
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|failure| matches!(
+                    failure,
+                    OwnerFailure::Publication(PluginPublicationError::ScopeOccupied)
+                ))
+        );
         assert!(!other.plugin_loader.read().await.is_loaded("lazy-wasm"));
         assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
         assert_eq!(canonical.revision(), revision);
@@ -4211,12 +4807,14 @@ handler = "handler"
             current.provider.state(),
             crate::capability::provider::ProviderState::Failed
         );
-        assert!(current
-            .failures
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|failure| matches!(failure, OwnerFailure::Revoke(_))));
+        assert!(
+            current
+                .failures
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|failure| matches!(failure, OwnerFailure::Revoke(_)))
+        );
         assert!(current.acquire_permit().await.is_err());
         assert!(manager.owner_is_current(&current));
         assert!(manager.scope_steps("lazy-wasm").is_some());
@@ -4242,7 +4840,11 @@ handler = "handler"
                 owner.receipt.lock().unwrap().take();
                 None
             } else {
-                manager.scopes.lock().unwrap().remove("lazy-wasm")
+                manager
+                    .scopes
+                    .lock()
+                    .unwrap()
+                    .remove(&owner.record.instance_key())
             };
             assert!(matches!(
                 manager.unmount("lazy-wasm").await,
@@ -4252,15 +4854,17 @@ handler = "handler"
                 owner.provider.state(),
                 crate::capability::provider::ProviderState::Failed
             );
-            assert!(owner
-                .failures
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|failure| matches!(
-                    (missing_receipt, failure),
-                    (true, OwnerFailure::MissingReceipt) | (false, OwnerFailure::MissingScope)
-                )));
+            assert!(
+                owner
+                    .failures
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|failure| matches!(
+                        (missing_receipt, failure),
+                        (true, OwnerFailure::MissingReceipt) | (false, OwnerFailure::MissingScope)
+                    ))
+            );
             assert!(owner.acquire_permit().await.is_err());
             assert!(manager.owner_is_current(&owner));
             assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
@@ -4292,7 +4896,7 @@ handler = "handler"
             .scopes
             .lock()
             .unwrap()
-            .get_mut("lazy-wasm")
+            .get_mut(&owner.record.instance_key())
             .unwrap()
             .effect(
                 "service",
@@ -4310,12 +4914,14 @@ handler = "handler"
             "residual retains exact mount evidence"
         );
         assert!(owner.receipt.lock().unwrap().is_none());
-        assert!(owner
-            .failures
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|failure| matches!(failure, OwnerFailure::Publication(_))));
+        assert!(
+            owner
+                .failures
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|failure| matches!(failure, OwnerFailure::Publication(_)))
+        );
         assert!(owner.failures.lock().unwrap().iter().any(|failure| matches!(failure, OwnerFailure::Dispose(report) if report.failures().any(|(step, cause)| step == "service" && cause == "publish cleanup fault"))));
         // Discovery published the cold batch; failed activation withdrew it.
         assert_eq!(canonical.revision(), 2);
@@ -4347,12 +4953,14 @@ handler = "handler"
             assert!(owner.receipt.lock().unwrap().is_none());
             assert!(canonical.canonical_publication().entries().is_empty());
             assert!(owner.identity.lock().unwrap().is_none());
-            assert!(owner
-                .failures
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|failure| matches!(failure, OwnerFailure::Publication(_))));
+            assert!(
+                owner
+                    .failures
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|failure| matches!(failure, OwnerFailure::Publication(_)))
+            );
             assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
             assert!(manager.scope_steps("lazy-wasm").is_none());
             assert_eq!(canonical.revision(), before + 1);
@@ -4369,9 +4977,11 @@ handler = "handler"
                 events.try_recv(),
                 Err(tokio::sync::broadcast::error::TryRecvError::Empty)
             ));
-            assert!(canonical
-                .reconcile_plugin_tools(Default::default())
-                .is_err());
+            assert!(
+                canonical
+                    .reconcile_plugin_tools(Default::default())
+                    .is_err()
+            );
         }
     }
 
@@ -4406,12 +5016,14 @@ handler = "handler"
             live
         );
         assert_eq!(manager.scope_steps("alpha"), steps);
-        assert!(manager
-            .get_plugin_record("alpha")
-            .await
-            .unwrap()
-            .status
-            .is_active());
+        assert!(
+            manager
+                .get_plugin_record("alpha")
+                .await
+                .unwrap()
+                .status
+                .is_active()
+        );
         assert!(!manager.get_plugin_registry().await.list_skills().is_empty());
     }
 
@@ -4437,20 +5049,32 @@ handler = "handler"
         assert_eq!(failed.runtime_outcome, PluginRuntimeOutcome::Failed);
         assert_eq!(failed.actual_state, "failed");
         assert!(failed.error.as_deref().unwrap().contains("wasm_module"));
-        assert!(failed
-            .cleanup_report
-            .iter()
-            .any(|s| s.step == "registry_row" && s.error.is_none()));
-        assert!(PluginsConfig::load(&cfg_path)
-            .unwrap()
-            .is_enabled_for("qa-wasm", PluginOrigin::Workspace));
-        assert!(manager
-            .plugins_config
-            .read()
-            .await
-            .is_enabled_for("qa-wasm", PluginOrigin::Workspace));
+        assert!(
+            failed
+                .cleanup_report
+                .iter()
+                .any(|s| s.step == "registry_row" && s.error.is_none())
+        );
+        assert!(
+            PluginsConfig::load(&cfg_path)
+                .unwrap()
+                .is_enabled_for("qa-wasm", PluginOrigin::Workspace)
+        );
+        assert!(
+            manager
+                .plugins_config
+                .read()
+                .await
+                .is_enabled_for("qa-wasm", PluginOrigin::Workspace)
+        );
         assert!(manager.scope_steps("qa-wasm").is_none());
-        assert!(!manager.plugin_loader.read().await.is_loaded("qa-wasm"));
+        assert!(
+            !manager
+                .plugin_loader
+                .read()
+                .await
+                .is_loaded(&project_instance(tmp.path(), "qa-wasm").runtime_key())
+        );
         // Same desired value is a retry, not a bool no-op. Repair only the guest.
         std::fs::write(&module, crate::extension::loader::EMPTY_WASM_MODULE).unwrap();
         let retry = manager.set_plugin_enabled("qa-wasm", true).await.unwrap();
@@ -4459,7 +5083,13 @@ handler = "handler"
         assert_eq!(retry.actual_state, "loaded");
         assert_ne!(retry.operation_id, failed.operation_id);
         assert_eq!(retry.provider_generation, None);
-        assert!(manager.plugin_loader.read().await.is_loaded("qa-wasm"));
+        assert!(
+            manager
+                .plugin_loader
+                .read()
+                .await
+                .is_loaded(&project_instance(tmp.path(), "qa-wasm").runtime_key())
+        );
         let _ = manager.set_plugin_enabled("qa-wasm", false).await.unwrap();
     }
 
@@ -4473,9 +5103,11 @@ handler = "handler"
         assert!(outcome.persisted);
         assert_eq!(outcome.runtime_outcome, PluginRuntimeOutcome::NotDiscovered);
         assert_eq!(outcome.actual_state, "not_discovered");
-        assert!(!PluginsConfig::load(&path)
-            .unwrap()
-            .is_enabled_for("absent", PluginOrigin::Global));
+        assert!(
+            !PluginsConfig::load(&path)
+                .unwrap()
+                .is_enabled_for("absent", PluginOrigin::Global)
+        );
         assert!(manager.get_plugin_record("absent").await.is_none());
     }
 
@@ -4496,7 +5128,7 @@ handler = "handler"
             .scopes
             .lock()
             .unwrap()
-            .get_mut("alpha")
+            .get_mut(&project_instance(tmp.path(), "alpha"))
             .unwrap()
             .effect(
                 "mcp_server",
@@ -4520,14 +5152,21 @@ handler = "handler"
             Poll::Ready(())
         })
         .await;
-        assert!(!PluginsConfig::load(&path)
-            .unwrap()
-            .is_enabled_for("alpha", PluginOrigin::Workspace));
-        assert!(!manager
-            .plugins_config
-            .read()
-            .await
-            .is_enabled_for("alpha", PluginOrigin::Workspace));
+        let instance = project_instance(tmp.path(), "alpha");
+        assert_eq!(
+            PluginsConfig::load(&path)
+                .unwrap()
+                .activation_for(&instance, PluginOrigin::Workspace),
+            Activation::Disabled
+        );
+        assert_eq!(
+            manager
+                .plugins_config
+                .read()
+                .await
+                .activation_for(&instance, PluginOrigin::Workspace),
+            Activation::Disabled
+        );
         release_tx.send(()).unwrap();
         let (disabled, enabled) = tokio::join!(disable, enable);
         let disabled = disabled.unwrap();
@@ -4537,15 +5176,20 @@ handler = "handler"
         assert_eq!(enabled.runtime_outcome, PluginRuntimeOutcome::Mounted);
         assert_eq!(enabled.actual_state, "loaded");
         assert_ne!(disabled.operation_id, enabled.operation_id);
-        assert!(PluginsConfig::load(&path)
-            .unwrap()
-            .is_enabled_for("alpha", PluginOrigin::Workspace));
-        assert!(manager
-            .get_plugin_record("alpha")
-            .await
-            .unwrap()
-            .status
-            .is_active());
+        assert_eq!(
+            PluginsConfig::load(&path)
+                .unwrap()
+                .activation_for(&instance, PluginOrigin::Workspace),
+            Activation::Enabled
+        );
+        assert!(
+            manager
+                .get_plugin_record("alpha")
+                .await
+                .unwrap()
+                .status
+                .is_active()
+        );
         assert!(manager.scope_steps("alpha").is_some());
         let _ = manager.set_plugin_enabled("alpha", false).await.unwrap();
     }
@@ -4562,7 +5206,7 @@ handler = "handler"
             .scopes
             .lock()
             .unwrap()
-            .get_mut("alpha")
+            .get_mut(&project_instance(tmp.path(), "alpha"))
             .unwrap()
             .effect(
                 "mcp_server",
@@ -4577,11 +5221,10 @@ handler = "handler"
         assert_eq!(failed.error_phase, Some(PluginControlPhase::Cleanup));
         assert_eq!(failed.runtime_outcome, PluginRuntimeOutcome::Failed);
         assert_eq!(failed.actual_state, "failed");
-        assert!(failed
-            .cleanup_report
-            .iter()
-            .any(|s| s.step == "mcp_server"
-                && s.error.as_deref() == Some("injected cleanup failure")));
+        assert!(
+            failed.cleanup_report.iter().any(|s| s.step == "mcp_server"
+                && s.error.as_deref() == Some("injected cleanup failure"))
+        );
         let repeated = manager
             .set_plugin_enabled("alpha", false)
             .await
@@ -4590,11 +5233,13 @@ handler = "handler"
         assert!(repeated.persisted && !repeated.preference_changed);
         assert_eq!(repeated.error_phase, Some(PluginControlPhase::Cleanup));
         assert_eq!(repeated.actual_state, "failed");
-        assert!(repeated
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("injected cleanup failure"));
+        assert!(
+            repeated
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("injected cleanup failure")
+        );
         // This proves truthful reporting only, NOT retained/retryable P3 ownership.
         assert!(manager.scope_steps("alpha").is_none());
     }
@@ -4608,11 +5253,24 @@ handler = "handler"
         use crate::builtin_tools::plugin_manage::{
             PluginAction, PluginManageArgs, PluginManageTool,
         };
+        use crate::extension::plugin_target::{PluginAccess, PluginTarget};
         use crate::gateway::handlers::{extensions, plugins};
+        let instance = manager
+            .unambiguous_plugin_instance("qa-wasm")
+            .await
+            .unwrap();
+        let ScopeKey::Project(root) = &instance.scope else {
+            panic!("expected project fixture");
+        };
+        let target = PluginTarget::Bare(instance.plugin_id.clone());
+        let access = PluginAccess::Scoped(
+            crate::extension::visibility::VisibilityCtx::from_project_root(Some(root.clone())),
+        );
         let rpc = plugins::set_enabled_via_registry(
             manager,
             Some(serde_json::json!(71)),
-            "qa-wasm",
+            &target,
+            &access,
             enabled,
         )
         .await;
@@ -4620,6 +5278,8 @@ handler = "handler"
             manager,
             Some(serde_json::json!(72)),
             "qa-wasm",
+            None,
+            &access,
             enabled,
         )
         .await;
@@ -4633,20 +5293,24 @@ handler = "handler"
             assert_eq!(data["ok"], false);
             outcomes.push(data["outcome"].clone());
         }
-        let tool = PluginManageTool::call_on(
-            manager,
-            PluginManageArgs {
-                action: if enabled {
-                    PluginAction::Enable
-                } else {
-                    PluginAction::Disable
+        let tool = crate::projects::with_project_root(
+            Some(root.clone()),
+            PluginManageTool::call_on(
+                manager,
+                PluginManageArgs {
+                    action: if enabled {
+                        PluginAction::Enable
+                    } else {
+                        PluginAction::Disable
+                    },
+                    name: Some("qa-wasm".to_owned()),
+                    selector: None,
+                    source: None,
+                    query: None,
+                    config: None,
+                    enforce: None,
                 },
-                name: Some("qa-wasm".to_owned()),
-                source: None,
-                query: None,
-                config: None,
-                enforce: None,
-            },
+            ),
         )
         .await
         .unwrap();
@@ -4673,7 +5337,13 @@ handler = "handler"
             assert_eq!(outcome["actual_state"], "loaded");
         }
         assert_eq!(std::fs::read(&path).unwrap(), disk);
-        assert!(manager.plugin_loader.read().await.is_loaded("qa-wasm"));
+        assert!(
+            manager
+                .plugin_loader
+                .read()
+                .await
+                .is_loaded(&project_instance(tmp.path(), "qa-wasm").runtime_key())
+        );
         manager.plugins_config_path = path;
         let _ = manager.set_plugin_enabled("qa-wasm", false).await.unwrap();
     }
@@ -4695,9 +5365,11 @@ handler = "handler"
             assert_eq!(outcome["actual_state"], "failed");
             assert!(!outcome["cleanup_report"].as_array().unwrap().is_empty());
         }
-        assert!(PluginsConfig::load(&path)
-            .unwrap()
-            .is_enabled_for("qa-wasm", PluginOrigin::Workspace));
+        assert!(
+            PluginsConfig::load(&path)
+                .unwrap()
+                .is_enabled_for("qa-wasm", PluginOrigin::Workspace)
+        );
         assert!(manager.scope_steps("qa-wasm").is_none());
     }
 
@@ -4708,7 +5380,7 @@ handler = "handler"
         status: PluginStatus,
     ) -> (PluginRecord, Disposer) {
         use crate::extension::runtime::wasm::tests::guest_fixture::{
-            manifest_with_guest, PAYLOAD_A,
+            PAYLOAD_A, manifest_with_guest,
         };
 
         let manifest = manifest_with_guest(dir, id, PAYLOAD_A);
@@ -4768,7 +5440,11 @@ handler = "handler"
                 module_disposer().await
             }),
         );
-        manager.scopes.lock().unwrap().insert(row.id.clone(), scope);
+        manager
+            .scopes
+            .lock()
+            .unwrap()
+            .insert(row.instance_key(), scope);
 
         let mut unmount = Box::pin(manager.unmount("c2s-unmount"));
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -4783,14 +5459,18 @@ handler = "handler"
             manager.get_plugin_record(&row.id).await.unwrap().status,
             PluginStatus::Disabled
         );
-        assert!(manager
-            .call_plugin_tool(&row.id, HANDLER, serde_json::json!({}))
-            .await
-            .is_err());
-        assert!(manager
-            .execute_plugin_hook(&row.id, HANDLER, serde_json::json!({}))
-            .await
-            .is_err());
+        assert!(
+            manager
+                .call_plugin_tool(&row.id, HANDLER, serde_json::json!({}))
+                .await
+                .is_err()
+        );
+        assert!(
+            manager
+                .execute_plugin_hook(&row.id, HANDLER, serde_json::json!({}))
+                .await
+                .is_err()
+        );
         assert_eq!(
             manager
                 .get_plugin_loader()
@@ -4924,7 +5604,11 @@ handler = "handler"
         }
         for scope in scopes {
             let id = scope.plugin_id().to_string();
-            manager.scopes.lock().unwrap().insert(id, scope);
+            manager
+                .scopes
+                .lock()
+                .unwrap()
+                .insert(PluginInstanceKey::global(&id), scope);
         }
         let mut task = Box::pin(manager.unmount_all());
         let first = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -5029,7 +5713,7 @@ handler = "handler"
     ) -> (PluginRecord, Disposer) {
         use crate::extension::manifest::HookSection;
         use crate::extension::runtime::wasm::tests::guest_fixture::{
-            manifest_with_guest, PAYLOAD_A,
+            PAYLOAD_A, manifest_with_guest,
         };
 
         let mut manifest = manifest_with_guest(dir, id, PAYLOAD_A);
@@ -5203,10 +5887,18 @@ handler = "handler"
             .into_iter()
             .map(|t| t.name)
             .collect();
-        assert!(names.contains(&"alpha:hello".to_string()), "{names:?}");
+        assert!(
+            names.contains(&format!(
+                "{}:hello",
+                project_instance(tmp.path(), "alpha").runtime_key()
+            )),
+            "{names:?}"
+        );
         let hooks = manager.hook_executor_snapshot().await.inventory();
         assert!(
-            hooks.iter().any(|h| h.source == "alpha"),
+            hooks
+                .iter()
+                .any(|h| h.source == project_instance(tmp.path(), "alpha").runtime_key()),
             "hook view derived after mount: {hooks:?}"
         );
     }
@@ -5245,7 +5937,8 @@ handler = "handler"
                 .find(|t| t.name == name)
                 .unwrap_or_else(|| panic!("{name} not in the catalog"))
         };
-        let review = row("alpha:review");
+        let owner = project_instance(tmp.path(), "alpha").runtime_key();
+        let review = row(&format!("{owner}:review"));
         assert_eq!(
             review.routing_capabilities.as_deref(),
             Some(
@@ -5257,13 +5950,19 @@ handler = "handler"
             ),
             "CC `allowed-tools` arrives as Aleph names"
         );
-        assert_eq!(review.usage.as_deref(), Some("/alpha:review [pr-number]"));
+        assert_eq!(
+            review.usage.as_deref(),
+            Some(format!("/{owner}:review [pr-number]").as_str())
+        );
         assert_eq!(review.param_hint.as_deref(), Some("[pr-number]"));
         // A command that declares nothing keeps the full surface and the
         // generic usage line.
-        let hello = row("alpha:hello");
+        let hello = row(&format!("{owner}:hello"));
         assert!(hello.routing_capabilities.is_none());
-        assert_eq!(hello.usage.as_deref(), Some("/alpha:hello [input]"));
+        assert_eq!(
+            hello.usage.as_deref(),
+            Some(format!("/{owner}:hello [input]").as_str())
+        );
         assert!(hello.param_hint.is_none());
     }
 
@@ -5294,21 +5993,23 @@ handler = "handler"
         manager.load_all().await.unwrap();
 
         let rows = catalog.list_all().await;
+        let owner = project_instance(tmp.path(), "mcp-cmd").runtime_key();
+        let server = mcp_config::plugin_server_id(&owner, "srv");
         let own = rows
             .iter()
-            .find(|t| t.name == "mcp-cmd:own")
+            .find(|t| t.name == format!("{owner}:own"))
             .expect("a declared server's tool is admitted before the server starts");
         assert_eq!(
             own.routing_capabilities.as_deref(),
             Some(
                 &[
                     "file_read".to_string(),
-                    "plugin_mcp-cmd_srv__do_thing".to_string()
+                    crate::tools::handlers::mcp::qualified_tool_name(&server, "do_thing")
                 ][..]
             )
         );
         assert!(
-            !rows.iter().any(|t| t.name == "mcp-cmd:foreign"),
+            !rows.iter().any(|t| t.name == format!("{owner}:foreign")),
             "a server the plugin does not declare stays refused"
         );
     }
@@ -5331,14 +6032,11 @@ handler = "handler"
     }
 
     #[tokio::test]
-    async fn a_malformed_lower_priority_copy_does_not_replace_the_healthy_winner() {
+    async fn a_malformed_global_copy_does_not_replace_the_healthy_project_instance() {
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
-        // The project copy (priority 20) is healthy.
         write_static_plugin(tmp.path(), "alpha");
-        // The global copy (priority 10) of the same id is malformed. It is
-        // discovered after the winner and must not take the winner's row.
-        let global_dir = tmp.path().join("aleph-state/plugins/alpha");
+        let global_dir = crate::extension::default_plugins_dir().join("alpha");
         std::fs::create_dir_all(global_dir.join(".claude-plugin")).unwrap();
         std::fs::write(
             global_dir.join(".claude-plugin/plugin.toml"),
@@ -5349,23 +6047,17 @@ handler = "handler"
         let (manager, _) = isolated_manager(tmp.path()).await;
         manager.load_all().await.unwrap();
 
-        let row = manager
-            .get_plugin_record("alpha")
-            .await
-            .expect("the healthy copy keeps the row");
-        assert!(row.status.is_active(), "{:?}", row.status);
-        assert_eq!(
-            row.root_dir,
-            tmp.path().join("plugins/alpha"),
-            "the winning copy is the project one"
-        );
-        let diagnostics = manager.get_plugin_registry().await.diagnostics().to_vec();
-        assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.message.contains("shadowed") && d.message.contains("alpha")),
-            "{diagnostics:?}"
-        );
+        let registry = manager.get_plugin_registry().await;
+        let project = registry
+            .get_plugin_instance(&project_instance(tmp.path(), "alpha"))
+            .expect("the healthy project instance keeps its row");
+        assert!(project.status.is_active(), "{:?}", project.status);
+        assert_eq!(project.root_dir, tmp.path().join("plugins/alpha"));
+        let global = registry
+            .get_plugin_instance(&PluginInstanceKey::new(ScopeKey::Global, "alpha".into()))
+            .expect("the malformed global instance keeps its own row");
+        assert!(matches!(global.status, PluginStatus::Error(_)));
+        assert_eq!(global.root_dir, global_dir);
     }
 
     #[tokio::test]
@@ -5460,10 +6152,15 @@ handler = "handler"
             .into_iter()
             .map(|t| t.name)
             .collect();
-        assert!(!names.contains(&"alpha:hello".to_string()));
+        assert!(!names.contains(&format!(
+            "{}:hello",
+            project_instance(tmp.path(), "alpha").runtime_key()
+        )));
         let hooks = manager.hook_executor_snapshot().await.inventory();
         assert!(
-            !hooks.iter().any(|h| h.source == "alpha"),
+            !hooks
+                .iter()
+                .any(|h| h.source == project_instance(tmp.path(), "alpha").runtime_key()),
             "hook view derived after unmount: {hooks:?}"
         );
 
@@ -5594,7 +6291,7 @@ handler = "handler"
             .await
             .inventory()
             .into_iter()
-            .filter(|h| h.source == "alpha")
+            .filter(|h| h.source == project_instance(tmp.path(), "alpha").runtime_key())
             .flat_map(|h| h.actions)
             .collect();
         assert!(
@@ -5672,7 +6369,8 @@ handler = "handler"
         let old = canonical.capture_entry("lazy_tool").unwrap();
 
         std::fs::write(
-            tmp.path().join("plugins/lazy-wasm/lazy-wasm.wasm"),
+            tmp.path()
+                .join("aleph-state/plugins/lazy-wasm/lazy-wasm.wasm"),
             b"not a wasm module",
         )
         .unwrap();
@@ -5691,12 +6389,14 @@ handler = "handler"
             serde_json::json!("A"),
             "the old instance keeps serving"
         );
-        assert!(manager
-            .get_plugin_record("lazy-wasm")
-            .await
-            .unwrap()
-            .error
-            .is_none());
+        assert!(
+            manager
+                .get_plugin_record("lazy-wasm")
+                .await
+                .unwrap()
+                .error
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -5723,12 +6423,14 @@ handler = "handler"
         let (manager, _) = isolated_manager(tmp.path()).await;
         // No set_tool_catalog: the CLI shape.
         manager.load_all().await.unwrap();
-        assert!(manager
-            .get_plugin_record("alpha")
-            .await
-            .unwrap()
-            .status
-            .is_active());
+        assert!(
+            manager
+                .get_plugin_record("alpha")
+                .await
+                .unwrap()
+                .status
+                .is_active()
+        );
         assert_eq!(manager.scope_steps("alpha").unwrap(), vec!["registry_row"]);
         let skipped = manager.scope_skipped("alpha").unwrap();
         assert_eq!(skipped.len(), 1);
@@ -5982,16 +6684,20 @@ priority = 60
         );
         assert!(before.loaded.is_empty() && before.memory.is_empty() && before.services.is_empty());
 
-        assert!(manager
-            .set_plugin_enabled("qa-wasm", true)
-            .await
-            .unwrap()
-            .changed());
-        assert!(manager
-            .set_plugin_enabled("qa-mcp", true)
-            .await
-            .unwrap()
-            .changed());
+        assert!(
+            manager
+                .set_plugin_enabled("qa-wasm", true)
+                .await
+                .unwrap()
+                .changed()
+        );
+        assert!(
+            manager
+                .set_plugin_enabled("qa-mcp", true)
+                .await
+                .unwrap()
+                .changed()
+        );
         assert_eq!(
             manager.scope_steps("qa-wasm").unwrap(),
             vec![
@@ -6048,16 +6754,18 @@ priority = 60
                 ("qa-wasm".to_string(), "loaded".to_string())
             ]
         );
-        assert_eq!(during.loaded, vec!["qa-wasm".to_string()]);
+        let wasm = project_instance(tmp.path(), "qa-wasm").runtime_key();
+        let mcp = project_instance(tmp.path(), "qa-mcp").runtime_key();
+        assert_eq!(during.loaded, vec![wasm.clone()]);
         assert_eq!(
             during.memory,
             vec!["QA MCP".to_string(), "QA WASM".to_string()]
         );
         assert!(
-            during.slash.contains(&"qa-wasm:hello".to_string())
-                && during.slash.contains(&"qa-mcp:ping".to_string())
+            during.slash.contains(&format!("{wasm}:hello"))
+                && during.slash.contains(&format!("{mcp}:ping"))
         );
-        assert!(during.hook_view.contains(&"qa-wasm".to_string()));
+        assert!(during.hook_view.contains(&wasm));
         assert_eq!(
             during.capability_rows,
             (0, 1, 1, 2, 1) // tools, hooks(PreToolUse), services(ticker), skills(hello, ping), agents(helper)
@@ -6065,7 +6773,7 @@ priority = 60
         // auto_start = true and the empty WASM module has no `start_ticker`
         // export, so `start_service` records a Failed row — only the
         // `service` disposer's `forget_plugin` removes it.
-        assert_eq!(during.services, vec!["qa-wasm:ticker".to_string()]);
+        assert_eq!(during.services, vec![format!("{wasm}:ticker")]);
 
         // The empty fixture has no stop_ticker export: removal still runs,
         // but the control result must expose its cleanup failure, not bool true.
@@ -6079,15 +6787,19 @@ priority = 60
             stopped.error_phase,
             Some(super::super::plugin_state::PluginControlPhase::Cleanup)
         );
-        assert!(stopped
-            .cleanup_report
-            .iter()
-            .any(|step| step.step == "service" && step.error.is_some()));
-        assert!(manager
-            .set_plugin_enabled("qa-mcp", false)
-            .await
-            .unwrap()
-            .changed());
+        assert!(
+            stopped
+                .cleanup_report
+                .iter()
+                .any(|step| step.step == "service" && step.error.is_some())
+        );
+        assert!(
+            manager
+                .set_plugin_enabled("qa-mcp", false)
+                .await
+                .unwrap()
+                .changed()
+        );
         let after = snapshot(&manager, &memory, &catalog).await;
         let mut expected = before;
         expected
@@ -6228,7 +6940,7 @@ priority = 60
             .await
             .inventory()
             .into_iter()
-            .filter(|h| h.source == "p2-hooky")
+            .filter(|h| h.source == project_instance(dir.path(), "p2-hooky").runtime_key())
             .map(|h| h.project_root)
             .collect();
         assert!(
@@ -6258,7 +6970,7 @@ priority = 60
         let names: Vec<String> = snapshot
             .hook_configs_for_test()
             .iter()
-            .filter(|h| h.plugin_name == "p4-spelling")
+            .filter(|h| h.plugin_name == project_instance(dir.path(), "p4-spelling").runtime_key())
             .map(crate::extension::HookConfig::event_name)
             .collect();
         assert_eq!(names, vec!["PreToolUse".to_string()]);
@@ -6332,7 +7044,10 @@ priority = 60
         before_sources.sort();
         assert_eq!(
             before_sources,
-            vec!["p3a-hooky".to_string(), "user:global".to_string()],
+            vec![
+                project_instance(dir.path(), "p3a-hooky").runtime_key(),
+                "user:global".to_string()
+            ],
             "fixture must seed exactly one plugin hook and one user hook"
         );
 
@@ -6539,8 +7254,8 @@ priority = 60
     /// (判据 §8) — and `activation_settled` completes because the watcher has
     /// nothing left to await.
     #[tokio::test]
-    async fn mount_with_a_silent_manager_is_pending_on_the_server_and_a_dropped_answer_stays_a_wait(
-    ) {
+    async fn mount_with_a_silent_manager_is_pending_on_the_server_and_a_dropped_answer_stays_a_wait()
+     {
         use crate::mcp::manager::McpManagerActor;
         let dir = tempfile::tempdir().unwrap();
         let _home = isolated_home(dir.path());
@@ -6552,8 +7267,9 @@ priority = 60
         manager.set_mcp_handle(handle);
 
         manager.load_all().await.unwrap();
+        let owner = project_instance(dir.path(), "p3-quiet").runtime_key();
         let want = PluginStatus::Pending {
-            waiting_on: vec!["mcp:plugin:p3-quiet/srv".into()],
+            waiting_on: vec![format!("mcp:plugin:{owner}/srv")],
         };
         assert_eq!(
             manager.get_plugin_record("p3-quiet").await.unwrap().status,
@@ -6590,12 +7306,14 @@ priority = 60
         manager.load_all().await.unwrap();
         manager.activation_settled().await;
         let end = manager.get_plugin_record("p3-live").await.unwrap();
+        let owner = project_instance(dir.path(), "p3-live").runtime_key();
+        let server = mcp_config::plugin_server_id(&owner, "srv");
         match end.status {
-            PluginStatus::Error(ref e) => assert!(e.contains("plugin:p3-live/srv"), "{e}"),
+            PluginStatus::Error(ref e) => assert!(e.contains(&server), "{e}"),
             other => panic!("a nonexistent binary must end in Error, got {other:?}"),
         }
         assert_eq!(
-            end.error.as_deref().map(|e| e.contains("p3-live/srv")),
+            end.error.as_deref().map(|e| e.contains(&server)),
             Some(true)
         );
     }
@@ -6721,12 +7439,18 @@ priority = 60
         let skill = crate::utils::paths::plugin_skill_dirs()
             .iter()
             .any(|d| d.plugin_id == id);
+        let owner = manager
+            .get_plugin_record(id)
+            .await
+            .unwrap()
+            .instance_key()
+            .runtime_key();
         let hook = manager
             .hook_executor_snapshot()
             .await
             .inventory()
             .iter()
-            .any(|h| h.source == id);
+            .any(|h| h.source == owner);
         (skill, hook)
     }
 
@@ -6810,12 +7534,13 @@ priority = 60
         );
 
         // That transition disposes this mount (what `unmount` does under the lock).
-        let report = tokio::time::timeout(WAIT, manager.unmount_inner("p3-parked"))
-            .await
-            .expect(
-                "disposing a mount whose watcher waits on the transition lock must not deadlock",
-            )
-            .unwrap();
+        let report = tokio::time::timeout(
+            WAIT,
+            manager.unmount_inner(&project_instance(dir.path(), "p3-parked")),
+        )
+        .await
+        .expect("disposing a mount whose watcher waits on the transition lock must not deadlock")
+        .unwrap();
         assert!(report.all_ok(), "{report:?}");
         drop(transition);
         tokio::time::timeout(WAIT, manager.activation_settled())
@@ -6857,7 +7582,7 @@ priority = 60
             .scopes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .remove("p3-dropped")
+            .remove(&project_instance(dir.path(), "p3-dropped"))
             .expect("mounted");
         drop(scope); // never disposed
 

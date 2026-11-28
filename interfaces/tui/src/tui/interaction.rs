@@ -1071,6 +1071,7 @@ fn outstanding_questions(pending: &PendingClarification) -> Vec<AskUserQuestion>
                 .map(|label| AskUserOption {
                     label: label.clone(),
                     description: None,
+                    preview: None,
                 })
                 .collect(),
             multi_select: false,
@@ -1178,6 +1179,7 @@ mod tests {
                 .map(|label| AskUserOption {
                     label: (*label).into(),
                     description: None,
+                    preview: None,
                 })
                 .collect(),
             multi_select,
@@ -1197,6 +1199,7 @@ mod tests {
                 options: vec![AskUserOption {
                     label: "yes".into(),
                     description: Some("approved".into()),
+                    preview: None,
                 }],
                 ..question("q1", "Secret?", &[], secret, false)
             }],

@@ -148,7 +148,8 @@ impl AlephTool for HubCatalogSearchTool {
         // `installed` / `update_available` mean the same thing here as on a
         // Panel card — same functions, not a second implementation. Both reads
         // are best-effort by design.
-        let installed = crate::hub::reconcile::collect_installed(self.mcp.clone()).await;
+        let access = crate::extension::plugin_target::PluginAccess::for_run();
+        let installed = crate::hub::reconcile::collect_installed(self.mcp.clone(), &access).await;
         let origins = self.cache.origins().await.unwrap_or_else(|e| {
             tracing::warn!("hub_catalog_search: install origin read failed: {e}");
             Vec::new()

@@ -71,6 +71,10 @@ impl OsSandboxDriverTrait for CwdRecordingDriver {
         })
     }
 
+    fn supports_shell_lifecycle(&self) -> bool {
+        true
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,
@@ -82,6 +86,7 @@ impl OsSandboxDriverTrait for CwdRecordingDriver {
         _profile: &OsSandboxProfile,
         _timeout: Duration,
         _max_output_bytes: usize,
+        _lifecycle: Option<&alephcore::sandbox::shell_lifecycle::ShellLifecycle>,
     ) -> Result<SandboxOutput, SandboxError> {
         self.seen.write().await.push(cwd.to_path_buf());
         Ok(SandboxOutput {
@@ -263,7 +268,7 @@ async fn a_background_job_lands_in_the_same_directory_as_a_foreground_one() {
             .await
             .expect("spawn");
         assert!(
-            spawned.stdout.contains(r#""status":"running""#),
+            spawned.stdout.contains(r#""status":"starting""#),
             "expected a background handle, got: {}",
             spawned.stdout
         );

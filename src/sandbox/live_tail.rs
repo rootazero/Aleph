@@ -49,6 +49,8 @@ pub struct LiveSnapshot {
     pub stderr: Vec<u8>,
     pub stdout_total: u64,
     pub stderr_total: u64,
+    /// A captured stream hit the block floor or exceeded its checkable context.
+    pub(crate) withhold: bool,
 }
 
 impl LiveSnapshot {
@@ -67,6 +69,7 @@ struct Ring {
     head: usize,
     cap: usize,
     total: u64,
+    withhold: bool,
 }
 
 impl Ring {
@@ -76,6 +79,7 @@ impl Ring {
             head: 0,
             cap,
             total: 0,
+            withhold: false,
         }
     }
 
@@ -114,7 +118,7 @@ impl Ring {
     /// remaining bytes simply have not been read yet — we drop that partial
     /// sequence rather than let a lossy conversion stamp a U+FFFD onto a
     /// character that is about to arrive intact.
-    fn snapshot(&self) -> Vec<u8> {
+    fn retained(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.buf.len());
         if self.buf.len() < self.cap {
             out.extend_from_slice(&self.buf);
@@ -126,7 +130,44 @@ impl Ring {
                 out.extend_from_slice(head);
             }
         }
-        trim_to_utf8_boundaries(out)
+        out
+    }
+
+    /// Check the overlap before eviction, including lines that no caller ever
+    /// reads. Overlong unbroken lines cannot be verified once their prefix is
+    /// gone; conservatively latch non-disclosure instead of guessing.
+    fn check_before_eviction(&mut self, bytes: &[u8]) {
+        if self.withhold || bytes.is_empty() {
+            return;
+        }
+        use crate::secrets::leak_detector::{default_patterns_bytes, is_block_class_secret};
+        let retained = self.retained();
+        let trailing = retained
+            .rsplit(|&byte| byte == b'\n')
+            .next()
+            .unwrap_or_default();
+        for (index, line) in bytes.split_inclusive(|&byte| byte == b'\n').enumerate() {
+            let prefix = if index == 0 { trailing } else { &[] };
+            let content_len = line.len() - usize::from(line.ends_with(b"\n"));
+            if prefix.len().saturating_add(content_len) > self.cap {
+                self.withhold = true;
+                return;
+            }
+            let joined;
+            let candidate = if prefix.is_empty() {
+                line
+            } else {
+                joined = [prefix, line].concat();
+                &joined
+            };
+            if default_patterns_bytes()
+                .iter()
+                .any(|(name, pattern)| is_block_class_secret(name) && pattern.is_match(candidate))
+            {
+                self.withhold = true;
+                return;
+            }
+        }
     }
 }
 
@@ -183,6 +224,7 @@ pub struct LiveTail {
     stdout: Mutex<Ring>,
     stderr: Mutex<Ring>,
     child: Mutex<ChildSlot>,
+    check_before_eviction: bool,
 }
 
 impl LiveTail {
@@ -192,6 +234,14 @@ impl LiveTail {
         Self::with_capacity(LIVE_TAIL_BYTES)
     }
 
+    /// A shell tail that checks block-class output before ring eviction.
+    pub(crate) fn for_shell() -> Self {
+        Self {
+            check_before_eviction: true,
+            ..Self::new()
+        }
+    }
+
     /// A tail retaining `cap` bytes per stream. Exposed for tests that want to
     /// exercise ring wrap without pushing 8 KiB.
     #[must_use]
@@ -199,6 +249,7 @@ impl LiveTail {
         Self {
             stdout: Mutex::new(Ring::new(cap)),
             stderr: Mutex::new(Ring::new(cap)),
+            check_before_eviction: false,
             child: Mutex::new(ChildSlot {
                 pid: None,
                 hook: None,
@@ -255,6 +306,9 @@ impl LiveTail {
             LiveStream::Stdout => self.stdout.lock().unwrap_or_else(|e| e.into_inner()),
             LiveStream::Stderr => self.stderr.lock().unwrap_or_else(|e| e.into_inner()),
         };
+        if self.check_before_eviction {
+            ring.check_before_eviction(bytes);
+        }
         ring.push(bytes);
     }
 
@@ -264,19 +318,28 @@ impl LiveTail {
     /// with respect to the other stream's drain loop.
     #[must_use]
     pub fn snapshot(&self) -> LiveSnapshot {
-        let (stdout, stdout_total) = {
+        let mut snapshot = self.source_snapshot();
+        snapshot.stdout = trim_to_utf8_boundaries(snapshot.stdout);
+        snapshot.stderr = trim_to_utf8_boundaries(snapshot.stderr);
+        snapshot
+    }
+
+    /// Untrimmed bytes; the origin of each slice is `total - len`.
+    pub(crate) fn source_snapshot(&self) -> LiveSnapshot {
+        let (stdout, stdout_total, stdout_withheld) = {
             let ring = self.stdout.lock().unwrap_or_else(|e| e.into_inner());
-            (ring.snapshot(), ring.total)
+            (ring.retained(), ring.total, ring.withhold)
         };
-        let (stderr, stderr_total) = {
+        let (stderr, stderr_total, stderr_withheld) = {
             let ring = self.stderr.lock().unwrap_or_else(|e| e.into_inner());
-            (ring.snapshot(), ring.total)
+            (ring.retained(), ring.total, ring.withhold)
         };
         LiveSnapshot {
             stdout,
             stderr,
             stdout_total,
             stderr_total,
+            withhold: stdout_withheld || stderr_withheld,
         }
     }
 }

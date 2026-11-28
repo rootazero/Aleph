@@ -83,7 +83,13 @@ mod spawn;
 pub use config::BusyQueueConfig;
 pub use deliver::{deliver_with_ticket, run_queued_reporter, DeliveryOutcome};
 pub use durable::{QueuedRunPayload, SettleReason};
-pub use spawn::{spawn_queued_chat_run, spawn_queued_run};
+#[cfg(target_os = "linux")]
+pub(crate) use spawn::paired_shell_owners_for_run;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use spawn::with_paired_shell_worker_fixture;
+pub use spawn::{
+    spawn_panel_queued_run, spawn_queued_chat_run, spawn_queued_run, PanelShellOwners,
+};
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};

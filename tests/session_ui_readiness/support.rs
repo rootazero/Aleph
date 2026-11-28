@@ -1095,7 +1095,7 @@ async fn serve_calls(
                     let request = JsonRpcRequest::new(call.method, Some(params), Some(json!("readiness-rpc")));
                     let result = trusted_caller(&call.user, RPC_HANDLER.scope((), async {
                         match call.method {
-                            "chat.send" => crate::server_init::handle_chat_send_with_engine(request, context.engine.clone(), context.events.clone(), context.router.clone(), context.agents.clone(), context.config.clone(), None, context.providers.clone(), context.store.clone(), None, context.run_manager.clone()).await,
+                            "chat.send" => crate::server_init::handle_chat_send_with_engine(request, None, context.engine.clone(), context.events.clone(), context.router.clone(), context.agents.clone(), context.config.clone(), None, context.providers.clone(), context.store.clone(), None, context.run_manager.clone()).await,
                             "chat.abort" => alephcore::gateway::handlers::chat::handle_abort(request, context.run_manager.clone(), context.store.clone()).await,
                             _ => crate::server_init::handle_run_with_engine(request, context.engine.clone(), context.events.clone(), context.router.clone(), context.agents.clone(), context.config.clone(), None, context.store.clone(), None).await,
                         }

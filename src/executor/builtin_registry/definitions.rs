@@ -3651,7 +3651,12 @@ mod tests {
     /// sibling `skill_read` registration uses, so the model can express the
     /// filter the handler has always honoured. Only that one row moved: every
     /// other row in the table below is the measurement it was.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 103_671;
+    ///
+    /// 2026-11-27: measured 104_185 B. The optional `ask_user` preview grows
+    /// its schema by 102 B. Existing changes account for the remaining 412 B
+    /// (`bash` +249, `session_decompress` +105, `artifact_publish` +76,
+    /// `desktop` -18).
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_185;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3682,10 +3687,10 @@ mod tests {
     const REGISTRY_SCHEMA_BASELINE: &[(&str, usize)] = &[
         ("agent_identity", 978),
         ("answer_call", 194),
-        ("artifact_publish", 841),
-        ("ask_user", 2678),
+        ("artifact_publish", 917),
+        ("ask_user", 2780),
         ("automation", 1244),
-        ("bash", 2182),
+        ("bash", 2431),
         ("call_status", 278),
         ("cancel_output", 275),
         ("channel_directory", 627),
@@ -3696,7 +3701,7 @@ mod tests {
         ("code_exec", 2080),
         ("context_plugin", 638),
         ("ctx_search", 548),
-        ("desktop", 20273),
+        ("desktop", 20255),
         ("file_edit", 2480),
         ("file_ops", 2989),
         ("file_read", 594),
@@ -3730,7 +3735,7 @@ mod tests {
         ("search", 2411),
         ("self_config", 2931),
         ("self_manage", 328),
-        ("session_decompress", 996),
+        ("session_decompress", 1101),
         ("session_list", 931),
         ("session_send", 827),
         ("skill_list", 281),

@@ -195,6 +195,8 @@ impl ReadySnapshot {
 #[derive(Clone)]
 pub struct CanonicalEntryLease {
     entry: RegistryEntry,
+    #[cfg(target_os = "linux")]
+    registry: Weak<RegistryShared>,
     revision: u64,
     provider_generation: u64,
 }
@@ -536,6 +538,8 @@ impl RegistryEntry {
 #[derive(Clone)]
 pub struct CanonicalPublication {
     entries: Arc<HashMap<String, RegistryEntry>>,
+    #[cfg(target_os = "linux")]
+    registry: Weak<RegistryShared>,
     revision: u64,
     closed: bool,
     provider_state: ProviderState,
@@ -594,6 +598,8 @@ impl CanonicalPublication {
         }
         Some(CanonicalEntryLease {
             entry,
+            #[cfg(target_os = "linux")]
+            registry: self.registry.clone(),
             revision: self.revision,
             provider_generation: self.provider_generation,
         })
@@ -1872,6 +1878,55 @@ impl ToolHandlerRegistry {
         }
     }
 
+    /// Shell input requires the exact built-in publication of this registry,
+    /// not just an equivalent descriptor or a coincident revision.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn commit_shell_pipe_attempt(
+        &self,
+        capture: &CanonicalEntryLease,
+        tree: &crate::capability::ownership::OwnershipTree,
+        owner: &crate::capability::ownership::CapturedBinding,
+        attempt: crate::sandbox::shell_input::ShellPipeAttempt,
+    ) -> Result<
+        crate::sandbox::shell_input::ShellEffectResult,
+        crate::sandbox::shell_input::ShellEffectDenied,
+    > {
+        use crate::sandbox::shell_input::ShellEffectDenied;
+        if capture.entry.descriptor.name != "bash"
+            || capture.entry.descriptor.source != ToolSource::Builtin
+            || capture.entry.ready.is_some()
+            || capture.entry.cold.is_some()
+            || !capture.registry.ptr_eq(&Arc::downgrade(&self.shared))
+        {
+            return Err(ShellEffectDenied::Stale);
+        }
+        let provider = self
+            .provider
+            .try_lifecycle_guard()
+            .ok_or(ShellEffectDenied::Busy)?;
+        provider
+            .acquire_call(capture.provider_generation)
+            .map_err(|_| ShellEffectDenied::Stale)?;
+        let (_publication, current) = self
+            .shared
+            .try_guard_current()
+            .ok_or(ShellEffectDenied::Busy)?;
+        if current.closed || current.revision != capture.revision {
+            return Err(ShellEffectDenied::Stale);
+        }
+        let live = current
+            .value
+            .entry("bash")
+            .ok_or(ShellEffectDenied::Stale)?;
+        if live.descriptor != capture.entry.descriptor
+            || live.ready.is_some()
+            || live.cold.is_some()
+        {
+            return Err(ShellEffectDenied::Stale);
+        }
+        tree.commit_shell_pipe_attempt(owner, attempt)
+    }
+
     /// Capture only the requested entry from the same immutable read boundary
     /// as `canonical_publication`, without wrapping or hashing unrelated entries.
     #[must_use]
@@ -1880,6 +1935,8 @@ impl ToolHandlerRegistry {
         let entry = read.callable_entry(self, read.state.value.entry(name)?)?;
         Some(CanonicalEntryLease {
             entry,
+            #[cfg(target_os = "linux")]
+            registry: Arc::downgrade(&self.shared),
             revision: read.state.revision,
             provider_generation: read.provider_generation,
         })
@@ -2084,6 +2141,8 @@ impl ToolHandlerRegistry {
         );
         CanonicalPublication {
             entries,
+            #[cfg(target_os = "linux")]
+            registry: Arc::downgrade(&self.shared),
             revision: read.state.revision,
             closed: read.state.closed,
             provider_state: read.provider_state,

@@ -59,6 +59,9 @@ impl std::str::FromStr for PluginTemplate {
 // `aleph plugin init`
 // ---------------------------------------------------------------------------
 
+const WASM_TARGET: &str = "wasm32-wasip1";
+const WASM_MODULE: &str = "plugin";
+
 /// Scaffold a new plugin project.
 pub fn init(name: &str, template: PluginTemplate, target_dir: Option<&Path>) -> CliResult<()> {
     let target = target_dir.map_or_else(|| PathBuf::from(name), std::path::Path::to_path_buf);
@@ -78,7 +81,7 @@ pub fn init(name: &str, template: PluginTemplate, target_dir: Option<&Path>) -> 
         PluginTemplate::Wasm => {
             println!("Next steps:");
             println!("  cd {}", target.display());
-            println!("  cargo build --target wasm32-wasi --release");
+            println!("  cargo build --target {WASM_TARGET} --release");
             println!("  al plugin validate .");
         }
         PluginTemplate::Static => {
@@ -126,9 +129,9 @@ pub fn scaffold_plugin(target: &Path, name: &str, template: PluginTemplate) -> C
         "a template must not scaffold a runtime the host cannot load"
     );
     let entry = match template {
-        PluginTemplate::Mcp => ".mcp.json",
-        PluginTemplate::Wasm => "target/wasm32-wasi/release/plugin.wasm",
-        PluginTemplate::Static => "SKILL.md",
+        PluginTemplate::Mcp => ".mcp.json".to_owned(),
+        PluginTemplate::Wasm => format!("target/{WASM_TARGET}/release/{WASM_MODULE}.wasm"),
+        PluginTemplate::Static => "SKILL.md".to_owned(),
     };
 
     // Only the WASM template declares a handler-backed tool: a handler is an
@@ -205,7 +208,8 @@ fn scaffold_mcp(target: &Path, name: &str) -> CliResult<()> {
   "type": "module",
   "main": "src/index.mjs",
   "dependencies": {{
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.25.0"
   }}
 }}
 "#
@@ -246,7 +250,7 @@ await server.connect(new StdioServerTransport());
 }
 
 fn scaffold_wasm(target: &Path, name: &str) -> CliResult<()> {
-    let cargo_name = name.replace('-', "_");
+    let cargo_name = name.replace(['-', '.'], "_");
 
     // Cargo.toml
     let cargo_toml = format!(
@@ -256,6 +260,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
+name = "{WASM_MODULE}"
 crate-type = ["cdylib"]
 
 [dependencies]
@@ -707,7 +712,7 @@ fn check_wasm_target() -> DoctorCheck {
         .output();
     let has_wasi = result.as_ref().is_ok_and(|o| {
         let output = String::from_utf8_lossy(&o.stdout);
-        output.contains("wasm32-wasi") || output.contains("wasm32-wasip1")
+        output.lines().any(|target| target == WASM_TARGET)
     });
     DoctorCheck {
         name: "wasm-target".into(),
@@ -715,9 +720,9 @@ fn check_wasm_target() -> DoctorCheck {
         passed: has_wasi,
         required: false,
         message: if has_wasi {
-            "wasm32-wasi target installed".into()
+            format!("{WASM_TARGET} target installed")
         } else {
-            "Not found. Run: rustup target add wasm32-wasip1".into()
+            format!("Not found. Run: rustup target add {WASM_TARGET}")
         },
     }
 }

@@ -45,11 +45,15 @@ pub fn build_sandbox(
     // Installed BEFORE the command policy so an explicitly user-blocked command
     // is vetoed first. A malformed custom-rule regex fails *safe* (logged and
     // skipped) rather than aborting sandbox construction.
-    let kernel = crate::exec::SecurityKernel::from_config(shell_security);
-    if shell_security.enable_custom_patterns {
-        hooks = hooks.with_before(Arc::new(
-            crate::sandbox::security_kernel_hook::SecurityKernelHook::new(kernel),
-        ));
+    let operator = shell_security.enable_custom_patterns.then(|| {
+        Arc::new(
+            crate::sandbox::security_kernel_hook::SecurityKernelHook::new(
+                crate::exec::SecurityKernel::from_config(shell_security),
+            ),
+        )
+    });
+    if let Some(operator) = &operator {
+        hooks = hooks.with_before(operator.clone());
     }
 
     // Command-policy hard-filter runs FIRST so a catastrophic command is
@@ -58,10 +62,8 @@ pub fn build_sandbox(
     // curated defaults rather than booting with no content filter. Every arm
     // installs a hook carrying at least the catastrophic hardline floor — no
     // config path leaves disk-wipe / fork-bomb protection off.
-    match cfg.command_policy.clone().into_policy() {
-        Ok(Some(policy)) => {
-            hooks = hooks.with_before(Arc::new(CommandPolicyHook::new(policy)));
-        }
+    let command_policy = match cfg.command_policy.clone().into_policy() {
+        Ok(Some(policy)) => policy,
         Ok(None) => {
             // User disabled the *tunable* policy, but the catastrophic floor is
             // not negotiable: install a hardline-only hook so fork bombs / disk
@@ -70,9 +72,7 @@ pub fn build_sandbox(
                 target: "command_policy",
                 "command policy disabled by config — hardline catastrophic floor remains active"
             );
-            hooks = hooks.with_before(Arc::new(CommandPolicyHook::new(
-                crate::sandbox::command_policy::CommandPolicy::hardline_only(),
-            )));
+            crate::sandbox::command_policy::CommandPolicy::hardline_only()
         }
         Err(e) => {
             tracing::error!(
@@ -80,14 +80,13 @@ pub fn build_sandbox(
                 error = %e,
                 "command policy config invalid — falling back to default ruleset"
             );
-            let policy = crate::sandbox::command_policy::CommandPolicy::defaults(
-                cfg.command_policy.enforcement,
-            );
-            hooks = hooks.with_before(Arc::new(CommandPolicyHook::new(policy)));
+            crate::sandbox::command_policy::CommandPolicy::defaults(cfg.command_policy.enforcement)
         }
-    }
-
-    let mut hooks = hooks.with_before(Arc::new(RateLimitHook::new(rate_limiter)));
+    };
+    let command_hook = Arc::new(CommandPolicyHook::new(command_policy));
+    let mut hooks = hooks
+        .with_before(command_hook.clone())
+        .with_before(Arc::new(RateLimitHook::new(rate_limiter)));
 
     // Load-aware admission gate for heavy (Dangerous-class) execution.
     // Sourced from `cfg` (no extra `build_sandbox` parameter → no caller
@@ -102,6 +101,13 @@ pub fn build_sandbox(
     let ws = WorkspaceSandbox::new(cfg.workspace_root.clone(), driver, approval, hooks)
         .with_timeout(Duration::from_secs(cfg.default_timeout_seconds))
         .with_max_output_bytes(cfg.max_output_bytes);
+    #[cfg(target_os = "linux")]
+    let ws = ws.with_shell_policy(super::shell_policy::ShellPolicy::new(
+        cfg,
+        shell_security,
+        command_hook,
+        operator,
+    ));
     Arc::new(ws)
 }
 
@@ -169,6 +175,7 @@ mod tests {
             _profile: &OsSandboxProfile,
             _timeout: Duration,
             _max_output_bytes: usize,
+            _lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
         ) -> Result<SandboxOutput, SandboxError> {
             unreachable!("factory tests should not invoke driver.run");
         }
@@ -440,6 +447,7 @@ mod tests {
             _profile: &OsSandboxProfile,
             _timeout: Duration,
             _max_output_bytes: usize,
+            _lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
         ) -> Result<SandboxOutput, SandboxError> {
             Ok(SandboxOutput {
                 stdout: b"ok".to_vec(),

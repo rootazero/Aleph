@@ -8,8 +8,8 @@
 
 use std::collections::HashMap;
 
-use crate::extension::marketplace::{MarketplaceManager, BUILTIN_MARKETPLACE_NAME};
 use crate::extension::PluginScope;
+use crate::extension::marketplace::{BUILTIN_MARKETPLACE_NAME, MarketplaceManager};
 use crate::hub::catalog_client::ALEPH_HUB_ID;
 use crate::hub::secrets::secret_ref;
 use crate::hub::types::{ExtensionEntry, InstallSpec, McpTransport};
@@ -82,9 +82,16 @@ pub(crate) fn mcp_config_from_spec(
 /// Outcome of a successful install.
 #[derive(Debug, Clone)]
 pub enum InstallOutcome {
-    Mcp { id: String },
-    Plugin { path: String },
-    Skill { path: String },
+    Mcp {
+        id: String,
+    },
+    Plugin {
+        path: String,
+        selector: Option<String>,
+    },
+    Skill {
+        path: String,
+    },
 }
 
 /// The install-registry row for the skill installed at `path`.
@@ -127,7 +134,7 @@ pub fn skill_outcome_json(skills_dir: Option<&std::path::Path>, path: &str) -> s
 pub struct InstallContext<'a> {
     pub entry: &'a ExtensionEntry,
     pub mcp: Option<&'a McpManagerHandle>,
-    pub marketplace: Option<&'a MarketplaceManager>,
+    pub marketplace: Option<crate::sync_primitives::Arc<MarketplaceManager>>,
     /// env/header field name -> stored vault secret name.
     pub secret_refs: HashMap<String, String>,
     /// non-secret env field name -> user-submitted plain value.
@@ -518,11 +525,9 @@ pub async fn run_install(
     ctx: &InstallContext<'_>,
 ) -> Result<InstallOutcome, String> {
     match spec {
-        InstallSpec::McpStdio { command, .. } if !command_available(command) => {
-            Err(format!(
-                "required command '{command}' not found on PATH — install its runtime (e.g. node/python) and retry"
-            ))
-        }
+        InstallSpec::McpStdio { command, .. } if !command_available(command) => Err(format!(
+            "required command '{command}' not found on PATH — install its runtime (e.g. node/python) and retry"
+        )),
         InstallSpec::McpStdio { .. } | InstallSpec::McpRemote { .. } => {
             let mcp = ctx.mcp.ok_or("MCP manager unavailable")?;
             let id = mcp_server_id(&ctx.entry.id);
@@ -564,19 +569,25 @@ pub async fn run_install(
                 Ok(InstallOutcome::Skill { path })
             } else {
                 // Plugin install via the marketplace path (SHA-256 + atomic copy).
-                let marketplace = ctx.marketplace.ok_or("marketplace unavailable")?;
+                let marketplace = ctx.marketplace.clone().ok_or("marketplace unavailable")?;
+                let manager = crate::extension::try_extension_manager()
+                    .ok_or("extension manager unavailable")?;
                 let marketplace_name = plugin_marketplace_name(&ctx.entry.source_id);
-                let installed = marketplace.install_to_scope(
-                    &ctx.entry.name,
-                    marketplace_name,
-                    PluginScope::User,
-                    None,
-                )?;
+                let (installed, instance) = manager
+                    .install_marketplace_plugin(
+                        marketplace,
+                        ctx.entry.name.clone(),
+                        marketplace_name.map(str::to_owned),
+                        PluginScope::User,
+                        &crate::extension::plugin_target::PluginAccess::global(),
+                    )
+                    .await?;
                 for warning in &installed.warnings {
                     tracing::warn!(plugin = ctx.entry.name, "{}", warning);
                 }
                 Ok(InstallOutcome::Plugin {
                     path: installed.path.display().to_string(),
+                    selector: Some(instance.selector()),
                 })
             }
         }

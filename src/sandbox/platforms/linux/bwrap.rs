@@ -75,21 +75,17 @@ pub struct BubblewrapDriver {
     /// `generate_args` fail closed with [`SandboxError::UnsupportedPolicy`];
     /// the default empty vec leaves the floor off and the driver unchanged.
     deny_read_globs: Vec<String>,
+    #[cfg(feature = "test-helpers")]
+    test_sandbox_init: Option<PathBuf>,
 }
 
 impl BubblewrapDriver {
     pub fn new() -> Self {
-        Self {
-            options: LinuxSandboxOptions::default(),
-            deny_read_globs: Vec::new(),
-        }
+        Self::with_options_and_deny_globs(LinuxSandboxOptions::default(), Vec::new())
     }
 
     pub fn with_options(options: LinuxSandboxOptions) -> Self {
-        Self {
-            options,
-            deny_read_globs: Vec::new(),
-        }
+        Self::with_options_and_deny_globs(options, Vec::new())
     }
 
     /// Build a driver that records `SandboxConfig.deny_read_globs`.
@@ -105,7 +101,16 @@ impl BubblewrapDriver {
         Self {
             options,
             deny_read_globs,
+            #[cfg(feature = "test-helpers")]
+            test_sandbox_init: None,
         }
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[doc(hidden)]
+    pub fn with_test_sandbox_init(mut self, path: PathBuf) -> Self {
+        self.test_sandbox_init = Some(path);
+        self
     }
 
     fn find_bwrap(&self) -> Option<PathBuf> {
@@ -607,6 +612,27 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn supports_shell_lifecycle(&self) -> bool {
+        true
+    }
+
+    #[cfg(target_os = "linux")]
+    fn can_run_fixed_jsonl(&self) -> bool {
+        self.fixed_jsonl_preflight()
+    }
+
+    async fn run_fixed_jsonl(
+        &self,
+        workspace: &std::fs::File,
+        profile: &OsSandboxProfile,
+        timeout: Duration,
+        max_output_bytes: usize,
+        lifecycle: &crate::sandbox::shell_lifecycle::ShellLifecycle,
+    ) -> Result<SandboxOutput, SandboxError> {
+        self.run_jsonl_consumer(workspace, profile, timeout, max_output_bytes, lifecycle)
+            .await
+    }
+
     async fn run(
         &self,
         program: &str,
@@ -617,6 +643,7 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
         profile: &OsSandboxProfile,
         timeout: Duration,
         max_output_bytes: usize,
+        lifecycle: Option<&crate::sandbox::shell_lifecycle::ShellLifecycle>,
     ) -> Result<SandboxOutput, SandboxError> {
         let bwrap_path = self
             .find_bwrap()
@@ -768,16 +795,26 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
                 None
             };
 
-        let child = cmd
-            .spawn()
-            .map_err(|e| SandboxError::ExecutionFailed(format!("failed to spawn bwrap: {e}")))?;
+        let mut spawn = || {
+            cmd.spawn()
+                .map_err(|e| SandboxError::ExecutionFailed(format!("failed to spawn bwrap: {e}")))
+        };
+        let child = match lifecycle {
+            Some(control) => control.spawn(spawn),
+            None => spawn(),
+        }?;
 
         // `_cgroup_scope` is kept alive across the await so its Drop —
         // which rmdir's the cgroup directory — only fires after the
         // child has been reaped by the helper.
-        run_child_with_drain(child, stdin, timeout, max_output_bytes).await
+        if let Some(control) = lifecycle {
+            control.ready();
+        }
+        run_child_with_drain(child, stdin, timeout, max_output_bytes, lifecycle).await
     }
 }
+
+mod jsonl;
 
 impl Default for BubblewrapDriver {
     fn default() -> Self {

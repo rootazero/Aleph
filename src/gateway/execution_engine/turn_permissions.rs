@@ -368,6 +368,55 @@ pub(super) fn plan_restore_tier(
     )
 }
 
+fn stored_exec_tier(
+    meta: &crate::gateway::session_store::types::SessionMetadata,
+) -> Result<Option<ExecTier>, &serde_json::Value> {
+    use crate::config::types::policies::EXEC_TIER_SESSION_KEY;
+
+    let Some(raw) = meta
+        .identity_meta
+        .as_ref()
+        .and_then(|identity| identity.custom.get(EXEC_TIER_SESSION_KEY))
+    else {
+        return Ok(None);
+    };
+    raw.as_str()
+        .and_then(ExecTier::from_id)
+        .map(Some)
+        .ok_or(raw)
+}
+
+/// Re-derive `bash` permission from the live paired route's guarded facts.
+/// A request tier, channel overlay, skill grant, or plan handoff is not a
+/// durable authority for delivery. The caller excludes those route shapes.
+#[cfg(target_os = "linux")]
+pub(super) fn paired_shell_permission(
+    config: &crate::Config,
+    session: &crate::gateway::session_store::types::SessionMetadata,
+    agent: &AgentInstance,
+    role: crate::gateway::security::store::UserRole,
+) -> Result<crate::extension::PermissionAction, crate::sandbox::shell_input::ShellEffectDenied> {
+    use crate::config::types::policies::effective_permission;
+    use crate::sandbox::shell_input::ShellEffectDenied;
+
+    let stored = stored_exec_tier(session).map_err(|_| ShellEffectDenied::Stale)?;
+    let tier = resolve_exec_tier(
+        config.policies.exec_tier,
+        None,
+        stored,
+        Some(role.wire_role()),
+    );
+    let merged = ToolPermissionsConfig::merge(
+        &config.policies.tool_permissions,
+        &agent.config().tool_permissions(),
+    );
+    Ok(effective_permission(
+        Some(&merged),
+        Some(tier),
+        builtin_tool_facts("bash"),
+    ))
+}
+
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
     /// Effective execution tier + explicit tool permission policy for this turn.
     /// Two inputs to one enforcement chokepoint
@@ -549,8 +598,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         &self,
         session_key: &crate::gateway::router::SessionKey,
     ) -> Option<ExecTier> {
-        use crate::config::types::policies::EXEC_TIER_SESSION_KEY;
-
         let store = self.session_manager.as_ref()?;
         let meta = match store.get_metadata(session_key).await {
             Ok(meta) => meta?,
@@ -559,19 +606,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 return None;
             }
         };
-        let raw = meta
-            .identity_meta?
-            .custom
-            .get(EXEC_TIER_SESSION_KEY)?
-            .as_str()?
-            .to_string();
-        match ExecTier::from_id(&raw) {
-            Some(tier) => Some(tier),
-            None => {
-                warn!(
-                    value = %raw,
-                    "Unknown session exec_tier — falling back to the global tier"
-                );
+        match stored_exec_tier(&meta) {
+            Ok(tier) => tier,
+            Err(raw) => {
+                if let Some(value) = raw.as_str() {
+                    warn!(%value, "Unknown session exec_tier — falling back to the global tier");
+                }
                 None
             }
         }

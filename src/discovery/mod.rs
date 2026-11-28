@@ -14,6 +14,7 @@ pub use paths::*;
 pub use types::*;
 
 use scanner::DirectoryScanner;
+pub(crate) use scanner::{has_plugin_manifest, plugin_candidates};
 
 use std::path::PathBuf;
 use thiserror::Error;

@@ -7,13 +7,13 @@
 use super::*;
 use crate::builtin_tools::skill_reader::ReadSkillTool;
 use crate::config::types::policies::ToolPermissionsConfig;
-use crate::extension::hooks::{ConsentEntry, ConsentStatus, ShellHookConsent, SKILL_INLINE_EVENT};
-use crate::extension::visibility::ScopeKey;
 use crate::extension::PermissionAction;
-use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult as LoopToolResult};
+use crate::extension::hooks::{ConsentEntry, ConsentStatus, SKILL_INLINE_EVENT, ShellHookConsent};
+use crate::extension::visibility::ScopeKey;
 use crate::tools::AlephTool;
-use crate::utils::paths::{publish_plugin_skill_dirs, IsolatedAlephHome, PublishedPluginSkillDir};
-use serde_json::{json, Value};
+use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult as LoopToolResult};
+use crate::utils::paths::{IsolatedAlephHome, PublishedPluginSkillDir, publish_plugin_skill_dirs};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 /// `skill_read` as the builtin registry dispatches it — the production tool,
@@ -102,6 +102,7 @@ impl Fixture {
         let f = Self::new("plug-root/skills", skill, commands);
         publish_plugin_skill_dirs(vec![PublishedPluginSkillDir {
             dir: f.skills.clone(),
+            exact_file: false,
             plugin_id: "plug".into(),
             scope_key: ScopeKey::Global,
             plugin_root: f.plugin_root(),

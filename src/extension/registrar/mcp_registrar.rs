@@ -114,8 +114,8 @@ impl Drop for InlineMcpHandle {
 }
 
 use crate::agents::{AgentDef, McpServerSpec};
-use crate::harness::trace::LoopTraceEvent;
 use crate::harness::TraceSink;
+use crate::harness::trace::LoopTraceEvent;
 use std::collections::HashSet;
 
 /// Per-agent MCP server scope (P3 Stage I).
@@ -185,23 +185,29 @@ impl McpScope {
         // view. The guard is scoped to drop before Phase 2 so the registry lock
         // is never held across the inline-spawn await points.
         {
+            use crate::extension::plugin_target::{PluginAccess, PluginTarget, resolve_target};
+
             let reg = registry.read().await;
+            let access = PluginAccess::for_run();
+            let resolve =
+                |name: &str| resolve_target(&reg, &PluginTarget::Bare(name.to_owned()), &access);
             for spec in &agent_def.mcp_servers {
                 match spec {
                     McpServerSpec::Reference { name } => {
+                        let instance = resolve(name)
+                            .map_err(|_| McpScopeError::ReferenceNotFound(name.clone()))?;
                         if !reg
-                            .get_plugin(name)
-                            .is_some_and(|plugin| plugin.status.is_active())
+                            .get_plugin_instance(&instance)
+                            .is_some_and(|row| row.status.is_active())
                         {
                             return Err(McpScopeError::ReferenceNotFound(name.clone()));
                         }
-                        for tool in reg.list_tools_for_plugin(name) {
-                            tools.push(tool.clone());
-                        }
+                        let owner = instance.runtime_key();
+                        tools.extend(reg.list_tools_for_plugin(&owner).into_iter().cloned());
                         references.insert(name.clone());
                     }
                     McpServerSpec::Inline { name, config } => {
-                        if reg.get_plugin(name).is_some() {
+                        if resolve(name).is_ok() {
                             return Err(McpScopeError::NameConflict(name.clone()));
                         }
                         inline_specs.push((name.clone(), config.clone()));
@@ -378,7 +384,7 @@ async fn spawn_inline(
     })
 }
 
-use crate::extension::effects::{async_disposer, Disposer};
+use crate::extension::effects::{Disposer, async_disposer};
 use crate::mcp::{McpManagerConfig, McpManagerHandle};
 use std::collections::HashMap;
 use tokio::sync::oneshot;
@@ -733,7 +739,7 @@ mod tests {
                     Ok(McpManagerEvent::ServerStarted { server_id, .. })
                         if server_id == "plugin:qa/never" =>
                     {
-                        break true
+                        break true;
                     }
                     Ok(_) => continue,
                     Err(_) => break false,

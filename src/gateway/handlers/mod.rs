@@ -204,15 +204,15 @@ pub use config::{handle_get_full_config, handle_patch_config};
 pub use identity::{IdentityHandlerContext, SharedIdentityCtx};
 
 use crate::gateway::event_bus::GatewayEventBus;
-use crate::gateway::security::store::SecurityStore;
 use crate::gateway::security::SharedTokenManager;
+use crate::gateway::security::store::SecurityStore;
 use crate::sync_primitives::{Arc, AsyncRwLock};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
 use super::protocol::{
-    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND,
+    INTERNAL_ERROR, INVALID_PARAMS, JsonRpcRequest, JsonRpcResponse, METHOD_NOT_FOUND,
     SERVICE_UNAVAILABLE,
 };
 
@@ -230,8 +230,8 @@ fn service_unavailable(req: JsonRpcRequest, reason: &'static str) -> JsonRpcResp
 /// Each call loads (or creates) the ledger from `~/.aleph/runtimes/ledger.json`.
 /// This avoids threading shared state through the registry while remaining correct —
 /// the ledger is persisted on disk, so concurrent callers see the same data.
-pub fn make_runtime_ledger(
-) -> Result<Arc<AsyncRwLock<crate::runtimes::ledger::CapabilityLedger>>, String> {
+pub fn make_runtime_ledger()
+-> Result<Arc<AsyncRwLock<crate::runtimes::ledger::CapabilityLedger>>, String> {
     let dir = crate::runtimes::get_runtimes_dir().map_err(|e| format!("runtimes dir: {e}"))?;
     let ledger = crate::runtimes::ledger::CapabilityLedger::load_or_create(dir.join("ledger.json"));
     Ok(Arc::new(AsyncRwLock::new(ledger)))
@@ -1311,6 +1311,11 @@ impl HandlerRegistry {
                 Some(context) if panel_capabilities::is_context_method(&request.method) => {
                     panel_capabilities::handle_with_context(request.clone(), context).await
                 }
+                _ if plugins::is_management_method(&request.method)
+                    || request.method == "commands.list" =>
+                {
+                    plugins::with_plugin_access(panel_context, handler(request.clone())).await
+                }
                 _ => handler(request.clone()).await,
             },
             Some(RegisteredHandler::Voice(handler)) => {
@@ -1321,7 +1326,7 @@ impl HandlerRegistry {
                     request.id.clone(),
                     METHOD_NOT_FOUND,
                     format!("Method not found: {}", request.method),
-                )
+                );
             }
         };
         self.project_panel_snapshot(request, response, voice_events_live)
@@ -1358,7 +1363,10 @@ impl HandlerRegistry {
         }
         if let Some(result) = response.result.as_mut() {
             if self.memory_nebula_mounted() {
-                panel_capabilities::project_memory_nebula(result);
+                panel_capabilities::project_memory_nebula(
+                    result,
+                    self.has_method(aleph_protocol::memory_graph::GRAPH_MUTATE_NOTE_METHOD),
+                );
             }
             if voice_events_live
                 && [

@@ -143,6 +143,9 @@ pub struct ScopedToolService {
     /// (sandbox escalation, `requires_confirmation`, `ask_user`) can route a
     /// prompt back to the originating channel.
     pub(super) turn_context: Option<crate::tools::turn_context::TurnContext>,
+    #[cfg(target_os = "linux")]
+    pub(super) paired_shell:
+        Option<crate::gateway::execution_engine::shell_effect::PairedShellRoute>,
     /// Layer 2 of the tool-result budget: persists oversized outputs to
     /// disk and replaces them with a compact marker before they enter
     /// the conversation history.
@@ -315,14 +318,32 @@ impl ScopedToolService {
         // Request-time rewriter pass: extensions / host code may rewrite
         // descriptions or schemas without touching the underlying registry
         // entry. Runs after gating so removed tools are not visited.
-        self.apply_definition_rewriters(&mut defs);
+        self.rewrite_request_definitions(&mut defs);
 
         defs
+    }
+
+    fn rewrite_request_definitions(&self, definitions: &mut [ToolDefinition]) {
+        self.apply_definition_rewriters(definitions);
+        #[cfg(target_os = "linux")]
+        if let Some(bash) = definitions
+            .iter_mut()
+            .find(|definition| definition.name == "bash")
+        {
+            if self.can_offer_shell_jsonl() {
+                crate::builtin_tools::bash_jsonl::extend_definition(bash);
+            }
+        }
     }
 }
 
 #[async_trait]
 impl ToolService for ScopedToolService {
+    #[cfg(all(feature = "test-helpers", target_os = "linux"))]
+    fn paired_shell_test_service(&self) -> Option<&Self> {
+        Some(self)
+    }
+
     /// The tier this chokepoint will enforce, straight from the method the
     /// gate itself calls — including a `PlanGate` that a human has already
     /// released. One derivation, two readers (the gate, and the sub-agent
@@ -405,7 +426,7 @@ impl ToolService for ScopedToolService {
         // budget probe, single-tool catalogue refresh) sees the same
         // definition that `list()` / `metadata_schema()` would publish.
         if let Some(ref mut d) = def {
-            self.apply_definition_rewriters(std::slice::from_mut(d));
+            self.rewrite_request_definitions(std::slice::from_mut(d));
         }
         def
     }
@@ -429,6 +450,15 @@ impl ToolService for ScopedToolService {
             .0
     }
 
+    async fn execute_shell_jsonl(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        self.dispatch_shell_jsonl(name, input, cancel).await
+    }
+
     /// [`Self::execute_with_cancel`], plus the post-guardrail `effective_input`
     /// the handler actually ran with (see
     /// [`ToolService::execute_with_cancel_effective`]). The second tuple
@@ -439,6 +469,10 @@ impl ToolService for ScopedToolService {
         input: Value,
         cancel: CancellationToken,
     ) -> (Result<ToolOutput, ToolError>, Option<Value>) {
+        if crate::builtin_tools::bash_jsonl::is_private(name, &input) {
+            return (self.execute_shell_jsonl(name, input, cancel).await, None);
+        }
+
         use futures::FutureExt;
         use std::panic::AssertUnwindSafe;
         use tracing::Instrument;
@@ -668,11 +702,18 @@ impl ToolService for ScopedToolService {
         }
 
         let gen_now = self.cache_generation.load(Ordering::Acquire);
+        // The paired route can lose its live authority without a registry or
+        // health generation change. Derive its profile from current owners.
+        #[cfg(target_os = "linux")]
+        let cacheable = self.paired_shell.is_none();
+        #[cfg(not(target_os = "linux"))]
+        let cacheable = true;
 
-        // Cache hit?
-        if let Some(ref cached) = **self.schema_cache.load() {
-            if cached.0 == gen_now {
-                return Arc::clone(&cached.1);
+        if cacheable {
+            if let Some(ref cached) = **self.schema_cache.load() {
+                if cached.0 == gen_now {
+                    return Arc::clone(&cached.1);
+                }
             }
         }
 
@@ -690,8 +731,10 @@ impl ToolService for ScopedToolService {
             .map(ToolDefinition::to_metadata_definition)
             .collect::<Vec<_>>()
             .into();
-        self.schema_cache
-            .store(Arc::new(Some((gen_now, Arc::clone(&schema)))));
+        if cacheable {
+            self.schema_cache
+                .store(Arc::new(Some((gen_now, Arc::clone(&schema)))));
+        }
         schema
     }
 }

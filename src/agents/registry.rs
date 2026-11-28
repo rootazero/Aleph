@@ -13,6 +13,7 @@ use crate::agents::types::{AgentDef, AgentMode, AgentSource, ContextMode};
 #[derive(Debug, Clone)]
 pub struct PluginSubagent {
     pub scope_key: crate::extension::visibility::ScopeKey,
+    pub(crate) owner: Option<String>,
     pub def: AgentDef,
 }
 
@@ -65,7 +66,11 @@ pub fn visible_plugin_subagents(
 ) -> Vec<AgentDef> {
     plugin_subagents()
         .iter()
-        .filter(|p| crate::extension::visibility::visible_to(&p.scope_key, ctx))
+        .filter(|agent| match &agent.owner {
+            Some(owner) => crate::extension::try_extension_manager()
+                .is_some_and(|manager| manager.plugin_visible(owner, ctx)),
+            None => crate::extension::visibility::visible_to(&agent.scope_key, ctx),
+        })
         .map(|p| p.def.clone())
         .collect()
 }
@@ -833,9 +838,11 @@ mod tests {
     fn lookup_with_overlay_unknown_id_returns_none() {
         let registry = AgentRegistry::with_builtins();
         let project = tempfile::tempdir().unwrap();
-        assert!(registry
-            .lookup_with_overlay("nonexistent_agent_id", Some(project.path()))
-            .is_none());
+        assert!(
+            registry
+                .lookup_with_overlay("nonexistent_agent_id", Some(project.path()))
+                .is_none()
+        );
     }
 
     #[test]
@@ -957,10 +964,12 @@ mod tests {
         publish_plugin_subagents(vec![
             PluginSubagent {
                 scope_key: ScopeKey::Global,
+                owner: None,
                 def: AgentDef::new("plugin-delegate-xyz", AgentMode::SubAgent),
             },
             PluginSubagent {
                 scope_key: ScopeKey::Global,
+                owner: None,
                 def: plugin_explore,
             },
         ]);
@@ -1017,10 +1026,12 @@ mod tests {
         publish_plugin_subagents(vec![
             PluginSubagent {
                 scope_key: ScopeKey::project(p.path()),
+                owner: None,
                 def: AgentDef::new("p2-proj-agent", AgentMode::SubAgent),
             },
             PluginSubagent {
                 scope_key: ScopeKey::Global,
+                owner: None,
                 def: AgentDef::new("p2-global-agent", AgentMode::SubAgent),
             },
         ]);
@@ -1028,15 +1039,19 @@ mod tests {
 
         assert!(registry.resolve("p2-proj-agent", Some(p.path())).is_some());
         assert!(registry.resolve("p2-proj-agent", Some(q.path())).is_none());
-        assert!(registry
-            .resolve("p2-global-agent", Some(q.path()))
-            .is_some());
+        assert!(
+            registry
+                .resolve("p2-global-agent", Some(q.path()))
+                .is_some()
+        );
         // The Global-keyed agent is visible everywhere, including from the
         // project that owns the project-scoped one — `Global` is not merely
         // "the fallback outside `p`", it is unconditionally visible.
-        assert!(registry
-            .resolve("p2-global-agent", Some(p.path()))
-            .is_some());
+        assert!(
+            registry
+                .resolve("p2-global-agent", Some(p.path()))
+                .is_some()
+        );
 
         let in_p = registry.available_agent_ids(Some(p.path()));
         let in_q = registry.available_agent_ids(Some(q.path()));

@@ -31,6 +31,10 @@ mod run_trace_sinks;
 mod scratchpad_progress_sink;
 mod session_run_registry;
 mod settle;
+#[cfg(target_os = "linux")]
+pub(crate) mod shell_effect;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use shell_effect::tests::assert_paired_shell_effect_order;
 mod simple;
 mod slash_command;
 mod slash_command_body;

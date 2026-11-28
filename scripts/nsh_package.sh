@@ -129,10 +129,12 @@ case "$target" in
                     [ -n "$base" ] && [ -f "$candidate" ] && iscc="$candidate" && break
                 done
             done
+            rm -f "$out/$name-setup.exe"
             if [ -n "$iscc" ]; then
-                (cd "$out" && "$iscc" "$name.iss")
+                installer_dir="$(cygpath -w "$out")"
+                (cd "$out" && MSYS2_ARG_CONV_EXCL=/O "$iscc" "/O$installer_dir" "$name.iss")
+                [ -s "$out/$name-setup.exe" ] || fail "Inno Setup did not write $name-setup.exe"
             else
-                rm -f "$out/$name-setup.exe"
                 echo "nsh_package: removed the installer built without aleph-server (Inno Setup not found)" >&2
             fi
         fi

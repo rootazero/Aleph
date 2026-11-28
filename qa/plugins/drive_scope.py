@@ -14,7 +14,12 @@ Every claim about a flip is settled on the catalogue a client reads, never on
 the entry leaving the catalogue is the effect (判据 §4).
 """
 import asyncio
+import base64
+import io
+import subprocess
 import sys
+import tempfile
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "browser_managed"))
@@ -88,6 +93,48 @@ async def flip(rpc, action):
             f"changed={changed} {str(body)[:160]}")
 
 
+async def check_installs(rpc):
+    manifest = 'name = "{}"\nversion = "1.0.0"\n'
+    async def check(method, params, plugin, zip_install=False):
+        selector = f"g:{plugin}"
+        reply = await rpc.call(method, params)
+        result = reply.get("result") or {}
+        selectors = result.get("selectors") if zip_install else [(result.get("plugin") or {}).get("selector")]
+        L.check(f"{method} returns the exact installed instance", selectors == [selector],
+                str(reply)[:260])
+        duplicate = await rpc.call(method, params)
+        L.check(f"{method} refuses repeat publication", "error" in duplicate, str(duplicate)[:240])
+        listings = (await rpc.call("plugins.list", {})).get("result") or {}
+        instances = [r for r in listings.get("plugins", []) if r.get("selector") == selector]
+        L.check(f"{plugin} has exactly one listed instance", len(instances) == 1, str(instances)[:220])
+        removed = await rpc.call("plugins.uninstall", {"selector": selector})
+        L.check(f"{plugin} can be uninstalled with only its selector", "result" in removed, str(removed)[:220])
+        listings = (await rpc.call("plugins.list", {})).get("result") or {}
+        selectors = {r.get("selector") for r in listings.get("plugins", [])}
+        L.check(f"{plugin} alone leaves the inventory", selector not in selectors and f"g:{PLUGIN}" in selectors,
+                str(sorted(s for s in selectors if s)))
+
+    with tempfile.TemporaryDirectory(prefix="aleph-qa-scope-install-") as temporary:
+        for plugin in ("qa-scope-copy", "qa-scope-git"):
+            source = Path(temporary) / plugin
+            (source / ".claude-plugin").mkdir(parents=True)
+            (source / ".claude-plugin" / "plugin.toml").write_text(manifest.format(plugin))
+            if plugin.endswith("-git"):
+                subprocess.run(["git", "init", "-q", str(source)], check=True)
+                subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+                subprocess.run(["git", "-C", str(source), "-c", "user.name=Aleph QA", "-c",
+                                "user.email=qa@example.invalid", "-c", "commit.gpgsign=false",
+                                "commit", "-qm", "Fixture"], check=True)
+            await check("plugins.install", {"url": str(source)}, plugin)
+
+    plugin = "qa-scope-zip"
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as packed:
+        packed.writestr(f"{plugin}/.claude-plugin/plugin.toml", manifest.format(plugin))
+    await check("plugins.installFromZip", {"data": base64.b64encode(archive.getvalue()).decode()},
+                plugin, zip_install=True)
+
+
 async def main():
     async with ws_connect(WS) as ws:
         rpc = Rpc(ws)
@@ -105,6 +152,21 @@ async def main():
         L.check("plugins.list shows qa-scope loaded", st == "loaded", str(st))
         await poll(rpc, True, "slash command AND mock tool are in tools.catalog after boot")
 
+        selector = r.get("selector") if r else None
+        L.check("global row exposes an exact selector", selector == f"g:{PLUGIN}", str(selector))
+        unknown = "p:" + "0" * 64
+        for method, fields in (
+            ("plugins.disable", {"name": PLUGIN}),
+            ("plugins.reload", {"plugin_id": PLUGIN}),
+            ("plugin.update", {"name": PLUGIN}),
+            ("extensions.toggle", {"id": f"local:plugin:g:{PLUGIN}", "enabled": False}),
+        ):
+            reply = await rpc.call(method, {**fields, "selector": unknown})
+            L.check(f"{method} refuses an unknown exact selector", "error" in reply, str(reply)[:200])
+        st = await status(rpc)
+        L.check("unknown selectors leave the incumbent loaded", st == "loaded", str(st))
+        await poll(rpc, True, "unknown selectors leave both live contributions in the catalog")
+
         L.log("\n--- disable ---")
         await flip(rpc, "disable")
         st = await status(rpc)
@@ -113,9 +175,27 @@ async def main():
 
         L.log("\n--- enable again (the direction that used to do nothing) ---")
         await flip(rpc, "enable")
-        st = await status(rpc)
-        L.check("plugins.list shows loaded again", st == "loaded", str(st))
         await poll(rpc, True, "both entries are back in tools.catalog on enable")
+        for _ in range(100):
+            st = await status(rpc)
+            if st != "pending":
+                break
+            await asyncio.sleep(0.1)
+        L.check("plugins.list shows loaded again", st == "loaded", str(st))
+
+        reply = await rpc.call("extensions.toggle", {
+            "id": f"local:plugin:{selector}", "enabled": False,
+        })
+        L.check("Hub disables by exact row ID", (reply.get("result") or {}).get("ok") is True,
+                str(reply)[:200])
+        await poll(rpc, False, "the exact Hub toggle withdraws both live contributions")
+        reply = await rpc.call("plugins.enable", {"selector": selector})
+        L.check("plugin RPC enables by selector alone", (reply.get("result") or {}).get("ok") is True,
+                str(reply)[:200])
+        await poll(rpc, True, "the exact plugin toggle restores both live contributions")
+
+        await check_installs(rpc)
+        await poll(rpc, True, "the incumbent stays live after other installations and removals")
 
     return L.verdict()
 
