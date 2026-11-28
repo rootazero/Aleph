@@ -42,6 +42,7 @@ windows = { version = "0.62", features = [
     # macOS Swift-bridge AX layer). COM is needed to instantiate CUIAutomation.
     "Win32_UI_Accessibility",
     "Win32_System_Com",
+    "Win32_System_Ole", # UIA RuntimeId SAFEARRAY ownership and reads.
     # Offline SAPI dictation: locale mapping and a finite PCM IStream.
     "Win32_Globalization",
     "Win32_Media_Audio",
