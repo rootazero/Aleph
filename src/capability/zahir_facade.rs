@@ -408,6 +408,11 @@ impl ZahirFacade {
         facade
     }
 
+    /// The special source used by this facade's resolution and observation.
+    pub(crate) fn special_registry(&self) -> CapabilityHandlerRegistry {
+        self.specials.clone()
+    }
+
     fn install_source_events(&self) {
         let emitter = crate::capability::events::CapabilityEventEmitter::new(self.events.clone());
         self.policy.install_event_observer(emitter.clone());

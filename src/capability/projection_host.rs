@@ -599,7 +599,6 @@ impl ProjectionHost {
             registry,
             tree,
             facade,
-            CapabilityHandlerRegistry::new(),
             DEFAULT_PENDING_CAPACITY,
             diagnostics_enabled,
         )
@@ -620,7 +619,6 @@ impl ProjectionHost {
             registry,
             tree,
             facade,
-            CapabilityHandlerRegistry::new(),
             DEFAULT_PENDING_CAPACITY,
             diagnostics_enabled,
         )
@@ -642,14 +640,13 @@ impl ProjectionHost {
             tree.clone(),
             memory,
             policy,
-            specials.clone(),
+            specials,
             events,
         );
         Self::mount_sources(
             registry,
             tree,
             facade,
-            specials,
             DEFAULT_PENDING_CAPACITY,
             diagnostics_enabled,
         )
@@ -662,26 +659,18 @@ impl ProjectionHost {
         diagnostics_enabled: bool,
     ) -> Arc<Self> {
         let facade = ZahirFacade::new(registry.clone(), tree.clone());
-        Self::mount_sources(
-            registry,
-            tree,
-            facade,
-            CapabilityHandlerRegistry::new(),
-            capacity,
-            diagnostics_enabled,
-        )
+        Self::mount_sources(registry, tree, facade, capacity, diagnostics_enabled)
     }
 
     fn mount_sources(
         registry: ToolHandlerRegistry,
         tree: Arc<OwnershipTree>,
         facade: Arc<ZahirFacade>,
-        specials: CapabilityHandlerRegistry,
         capacity: usize,
         diagnostics_enabled: bool,
     ) -> Arc<Self> {
-        // Subscribe to BOTH live sources BEFORE reading the initial snapshot
-        // (subscribe-before-snapshot).
+        let specials = facade.special_registry();
+        // Subscribe to the live sources before reading the initial snapshot.
         let registry_rx = registry.subscribe_publications();
         let ownership_rx = tree.subscribe_changes();
         let special_rx = specials.subscribe();
@@ -1899,14 +1888,8 @@ mod tests {
         }
         let facade =
             ZahirFacade::new_with_specials(tools.clone(), Arc::clone(&tree), specials.clone());
-        let host = ProjectionHost::mount_sources(
-            tools,
-            tree,
-            facade,
-            specials.clone(),
-            DEFAULT_PENDING_CAPACITY,
-            false,
-        );
+        let host =
+            ProjectionHost::mount_sources(tools, tree, facade, DEFAULT_PENDING_CAPACITY, false);
         let mut consumer = host.attach(Scope::default());
         let initial = match recv_bounded(&mut consumer).await {
             ProjectionEvent::Snapshot(snapshot) => snapshot,
@@ -1975,7 +1958,6 @@ mod tests {
             tools.clone(),
             Arc::clone(&tree),
             facade,
-            specials.clone(),
             DEFAULT_PENDING_CAPACITY,
             false,
         );
