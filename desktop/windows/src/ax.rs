@@ -522,6 +522,7 @@ mod imp {
                             hwnd: HWND::default(),
                             pid: 0,
                             thread: 0,
+                            launch_stamp: 0,
                         },
                         root,
                         root_identity: identity,

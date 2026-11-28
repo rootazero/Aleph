@@ -45,19 +45,19 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use atspi::State;
 use atspi::proxy::accessible::AccessibleProxy;
+use atspi::State;
 use tokio::task::AbortHandle;
 use tokio::time::Instant;
 
 use aleph_desktop::traits::AccessibilityCapability;
-use aleph_desktop::{DesktopError, RankCandidate, Result, rank_candidates};
+use aleph_desktop::{rank_candidates, DesktopError, RankCandidate, Result};
 use aleph_protocol::desktop_bridge::methods::ax::{
-    AX_REFERENCE_TTL_SECS, AxActionResult, AxElement, AxLocator, AxMutation, AxReferenceAction,
+    clamp_max_nodes, AxActionResult, AxElement, AxLocator, AxMutation, AxReferenceAction,
     AxReferenceError, AxReferenceSnapshot, AxSnapshotRequest, AxSnapshotRow, AxVerification,
-    MAX_AX_REFERENCE_SNAPSHOTS, NativeAxReference, PerformActionParams, QueryByRoleParams,
-    QueryFocusedParams, QueryListResult, QueryResult, QueryTreeParams, SetValueParams,
-    clamp_max_nodes,
+    NativeAxReference, PerformActionParams, QueryByRoleParams, QueryFocusedParams, QueryListResult,
+    QueryResult, QueryTreeParams, SetValueParams, AX_REFERENCE_TTL_SECS,
+    MAX_AX_REFERENCE_SNAPSHOTS,
 };
 
 pub use bus::{bus_looks_reachable, frontmost_pid};
@@ -697,9 +697,7 @@ async fn act_on_target(
             write_value(&ifaces, matched, &value, Some(&dispatch)).await
         }
         AxMutation::Perform { action } => {
-            if !set.contains(atspi::Interface::Action)
-                || pick_action(&target.actions, &action).is_none()
-            {
+            if !set.contains(atspi::Interface::Action) || !target.actions.contains(&action) {
                 return Err(reference_error(
                     AxReferenceError::ActionUnsupported,
                     "The AT-SPI element does not offer the requested native action.",
@@ -897,7 +895,12 @@ async fn invoke_action(
         walk::canonical_action_names(&action).await
     };
 
-    let index = pick_action(&available, wanted).ok_or_else(|| {
+    let index = if dispatch.is_some() {
+        available.iter().position(|action| action == wanted)
+    } else {
+        pick_action(&available, wanted)
+    };
+    let index = index.ok_or_else(|| {
         if dispatch.is_some() {
             return reference_error(
                 AxReferenceError::ActionUnsupported,

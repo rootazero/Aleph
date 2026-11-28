@@ -2784,6 +2784,15 @@ mod post_observation {
             self.record(Call::NativeAction(action));
             if let Some(state) = &self.interactive {
                 if state
+                    .native_action_unsettled
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    return Err(aleph_desktop::DesktopError::AxReference {
+                        code: aleph_protocol::desktop_bridge::methods::ax::AxReferenceError::NativeActionUnsettled,
+                        message: "fixture AX provider still executing".into(),
+                    });
+                }
+                if state
                     .hold_native_action
                     .load(std::sync::atomic::Ordering::Acquire)
                 {
@@ -2819,6 +2828,10 @@ mod post_observation {
         escape_generation: std::sync::atomic::AtomicU64,
         frame_x: std::sync::atomic::AtomicU64,
         hold_native_action: std::sync::atomic::AtomicBool,
+        native_action_unsettled: std::sync::atomic::AtomicBool,
+        hold_identity: std::sync::atomic::AtomicBool,
+        identity_started: tokio::sync::Notify,
+        release_identity: tokio::sync::Notify,
         native_started: tokio::sync::Notify,
         release_native: tokio::sync::Notify,
     }
@@ -2840,6 +2853,15 @@ mod post_observation {
             &self,
             pid: i32,
         ) -> DesktopResult<Option<aleph_desktop::system_types::DesktopProcessIdentity>> {
+            if let Some(state) = &self.interactive {
+                if state
+                    .hold_identity
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    state.identity_started.notify_one();
+                    state.release_identity.notified().await;
+                }
+            }
             Ok(self.interactive.as_ref().map(|state| {
                 aleph_desktop::system_types::DesktopProcessIdentity {
                     pid,
@@ -2885,7 +2907,7 @@ mod post_observation {
     }
 
     #[derive(Default)]
-    struct InteractivePolicy(std::sync::atomic::AtomicBool);
+    struct InteractivePolicy(std::sync::atomic::AtomicBool, std::sync::atomic::AtomicBool);
 
     #[async_trait]
     impl crate::approval::ApprovalPolicy for InteractivePolicy {
@@ -2898,6 +2920,8 @@ mod post_observation {
                 ApprovalDecision::Deny {
                     reason: "fixture policy changed".into(),
                 }
+            } else if self.1.load(std::sync::atomic::Ordering::Acquire) {
+                ApprovalDecision::Allow
             } else {
                 ApprovalDecision::Ask {
                     prompt: "fixture policy requires approval".into(),
@@ -2977,6 +3001,10 @@ mod post_observation {
             escape_generation: AtomicU64::new(1),
             frame_x: AtomicU64::new(10),
             hold_native_action: false.into(),
+            native_action_unsettled: false.into(),
+            hold_identity: false.into(),
+            identity_started: tokio::sync::Notify::new(),
+            release_identity: tokio::sync::Notify::new(),
             native_started: tokio::sync::Notify::new(),
             release_native: tokio::sync::Notify::new(),
         });
@@ -3016,8 +3044,18 @@ mod post_observation {
             side_question: false,
             telecom_authority: None,
         };
+        let inner = Arc::new(inner);
+        let unattended_service = Arc::new(
+            ScopedToolService::new(inner.clone(), Default::default())
+                .with_exec_tier(ExecTier::Auto)
+                .with_unattended(true)
+                .with_turn_context(TurnContext {
+                    unattended: true,
+                    ..turn.clone()
+                }),
+        );
         let service = Arc::new(
-            ScopedToolService::new(Arc::new(inner), Default::default())
+            ScopedToolService::new(inner, Default::default())
                 .with_exec_tier(ExecTier::Auto)
                 .with_turn_context(turn.clone())
                 .with_operator_approval(requester),
@@ -3051,6 +3089,40 @@ mod post_observation {
             assert!(!serialized.contains("private fixture value"));
             row["token"].as_str().unwrap().to_owned()
         };
+        let token = crate::tools::turn_context::TURN_CONTEXT
+            .scope(turn.clone(), read())
+            .await;
+        let default_policy =
+            crate::approval::ConfigApprovalPolicy::new(crate::approval::PolicyConfig {
+                defaults: [(
+                    ActionType::DesktopType,
+                    crate::approval::DefaultDecision::Ask,
+                )]
+                .into(),
+                allowlist: vec![],
+                blocklist: vec![],
+            });
+        let raw_tool = DesktopTool::new()
+            .with_platform(platform.clone())
+            .with_approval_policy(Arc::new(default_policy));
+        let raw = crate::tools::turn_context::TURN_CONTEXT
+            .scope(
+                turn.clone(),
+                AlephTool::call(
+                    &raw_tool,
+                    serde_json::from_value(
+                        serde_json::json!({"action":"set_value", "element":token, "text":SECRET}),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(raw.data.as_ref().unwrap()["approval_required"]
+            .as_bool()
+            .unwrap());
+        assert!(!serde_json::to_string(&raw).unwrap().contains(SECRET));
+
         for (index, case) in ["reference-approved", "reference-superseded"]
             .into_iter()
             .enumerate()
@@ -3151,6 +3223,77 @@ mod post_observation {
         }
         assert_eq!(platform.calls.lock().unwrap().len(), 2);
         platform.calls.lock().unwrap().clear();
+        state.hold_native_action.store(false, Ordering::Release);
+        state.native_action_unsettled.store(true, Ordering::Release);
+        let token = TURN_CONTEXT.scope(turn.clone(), read()).await;
+        let allowed_tool = DesktopTool::new().with_platform(platform.clone());
+        let uncertain = TURN_CONTEXT.scope(turn.clone(), AlephTool::call(
+            &allowed_tool,
+            serde_json::from_value(serde_json::json!({"action":"ax_action", "element":token, "ax_action_name":"AXPress"})).unwrap(),
+        )).await.unwrap();
+        assert_eq!(uncertain.data.unwrap()["code"], "action_outcome_unknown");
+        let readback = TURN_CONTEXT.scope(turn.clone(), read_snapshot()).await;
+        assert_eq!(readback.data.unwrap()["code"], "action_pending");
+        state.launch_stamp.fetch_add(1, Ordering::Release);
+        loop {
+            if TURN_CONTEXT
+                .scope(turn.clone(), read_snapshot())
+                .await
+                .success
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        state
+            .native_action_unsettled
+            .store(false, Ordering::Release);
+        platform.calls.lock().unwrap().clear();
+        let token = TURN_CONTEXT.scope(turn.clone(), read()).await;
+        policy.1.store(true, Ordering::Release);
+        state.hold_identity.store(true, Ordering::Release);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut unattended = tokio::spawn({
+            let cancel = cancel.clone();
+            async move {
+                with_call_identity(
+                    Some(CallIdentity {
+                        turn_id: crate::session::events::TurnId::nil(),
+                        call_id: "reference-cancelled-before-dispatch".into(),
+                    }),
+                    unattended_service.execute_with_cancel(
+                        "desktop",
+                        serde_json::json!({
+                            "action":"ax_action", "element":token, "ax_action_name":"AXPress"
+                        }),
+                        cancel,
+                    ),
+                )
+                .await
+            }
+        });
+        tokio::select! {
+            _ = state.identity_started.notified() => {}
+            result = &mut unattended => panic!("Unattended call settled before checking its target: {result:?}"),
+        }
+        cancel.cancel();
+        assert!(unattended.await.unwrap().is_err());
+        state.hold_identity.store(false, Ordering::Release);
+        state.release_identity.notify_one();
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            state.native_started.notified(),
+        )
+        .await
+        .is_err());
+        assert!(platform.calls.lock().unwrap().is_empty());
+        policy.1.store(false, Ordering::Release);
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(
+                event,
+                crate::gateway::events::GatewayEventFrame::ApprovalRequested { .. }
+            ));
+        }
         let type_args = serde_json::json!({ "action":"type_text", "pid":PID, "text":SECRET, "force":true, "observe":"state" });
         let click_args =
             serde_json::json!({ "action":"click", "pid":PID, "x":12, "y":22, "window_id":WINDOW });

@@ -309,8 +309,7 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub force: Option<bool>,
 
-    /// Token from `desktop_ax_snapshot`, accepted by `set_value` and `ax_action`.
-    /// It identifies the driver-owned element for this session and observation.
+    /// `desktop_ax_snapshot` token for `set_value` or `ax_action`.
     /// Omit `pid`, `app`, `window_id`, `role`, `element_title`, `x` and `y`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub element: Option<String>,

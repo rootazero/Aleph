@@ -663,12 +663,10 @@ is. That path is refused by default (the operator can allow it with
 
 Start with `desktop_ax_snapshot`. Pass a row's `token` as `element` to
 `ax_action` with one of its advertised `actions`, or to `set_value` with `text`.
-Read the same application or window again to verify the effect. Each successful
-snapshot supersedes the session's prior tokens for that app. A stale reference
-requires a fresh snapshot. If the action is pending, wait for it to settle
-before observing or acting on the same target. Use `center` and `app_pid` only
-when explicitly acting by coordinates. Use a screenshot for visual state the
-accessibility data cannot describe.
+Read the same scope again to verify the effect. A new snapshot replaces this
+session's tokens for the app. Refresh stale refs and wait for pending actions
+before reading or acting on that target. `center` and `app_pid` support explicit
+coordinate actions. Use screenshots for visual state outside the AX tree.
 
 Driving a web page? Reach for the `browser_*` tools first — they read the DOM, so
 they are faster and exact. Come back to this tool for what the DOM cannot reach:

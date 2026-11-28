@@ -57,22 +57,22 @@ impl BridgeAccessibility {
                 )
                 .await;
             match transport {
-                Ok(_) => definitive.unwrap_or_else(|| Err(unknown_ax_outcome())),
+                Ok(_) => definitive.unwrap_or_else(|| Err(unsettled_ax_outcome())),
                 Err(err @ (DesktopError::BridgeBackoff(_) | DesktopError::BridgeDisabled(_))) => {
                     Err(err)
                 }
-                Err(_) => Err(unknown_ax_outcome()),
+                Err(_) => Err(unsettled_ax_outcome()),
             }
         })
         .await
-        .map_err(|_| unknown_ax_outcome())?
+        .map_err(|_| unsettled_ax_outcome())?
     }
 }
 
-fn unknown_ax_outcome() -> DesktopError {
+fn unsettled_ax_outcome() -> DesktopError {
     DesktopError::AxReference {
-        code: AxReferenceError::ActionOutcomeUnknown,
-        message: "The AX mutation outcome is unknown. Observe the app again.".into(),
+        code: AxReferenceError::NativeActionUnsettled,
+        message: "The application may still be processing the AX mutation.".into(),
     }
 }
 

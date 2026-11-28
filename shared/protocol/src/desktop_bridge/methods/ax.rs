@@ -298,6 +298,8 @@ pub enum AxReferenceError {
     ActionUnsupported,
     ActionPending,
     ActionOutcomeUnknown,
+    /// The provider may still be processing an already delivered mutation.
+    NativeActionUnsettled,
 }
 
 impl AxReferenceError {
@@ -310,6 +312,7 @@ impl AxReferenceError {
             Self::ActionUnsupported => "action_unsupported",
             Self::ActionPending => "action_pending",
             Self::ActionOutcomeUnknown => "action_outcome_unknown",
+            Self::NativeActionUnsettled => "native_action_unsettled",
         }
     }
 }

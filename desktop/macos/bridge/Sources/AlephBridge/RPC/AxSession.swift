@@ -165,6 +165,7 @@ enum AxReferenceRefusal: String {
     case elementDisabled = "element_disabled"
     case actionUnsupported = "action_unsupported"
     case actionOutcomeUnknown = "action_outcome_unknown"
+    case nativeActionUnsettled = "native_action_unsettled"
 
     var rpcError: RpcError {
         let message: String
@@ -174,6 +175,7 @@ enum AxReferenceRefusal: String {
         case .elementDisabled: message = "The referenced AX element is disabled"
         case .actionUnsupported: message = "The referenced AX element does not support this mutation"
         case .actionOutcomeUnknown: message = "The AX mutation outcome is unknown. Observe the app again."
+        case .nativeActionUnsettled: message = "The application may still be processing the AX mutation."
         }
         return RpcError(code: -32008, message: message, data: .object(["code": .string(rawValue)]))
     }
@@ -411,7 +413,7 @@ actor AxQuerier {
         return (collectByRole(root, role: role), budget)
     }
 
-    func snapshotReferences(_ params: AxSnapshotParams) throws -> AxReferenceSnapshot {
+    func snapshotReferences(_ params: AxSnapshotParams) async throws -> AxReferenceSnapshot {
         purgeReferenceSnapshots()
         let app: NSRunningApplication?
         if let pid = params.pid {
@@ -423,7 +425,9 @@ actor AxQuerier {
             throw RpcError(code: -32602, message: "No application PID was resolved for the AX snapshot", data: nil)
         }
 
-        let root = withTimeout(AXUIElementCreateApplication(pid))
+        guard let root = await appElement(pid: pid) else {
+            throw AxReferenceRefusal.staleReference.rpcError
+        }
         let maxNodes = clampMaxNodes(Int(params.max_nodes))
         let maxDepth = min(Int(params.max_depth), maxAxQueryDepth)
         let maxRows = Int(min(params.max_elements, UInt64(Self.maxReferenceRows)))
@@ -700,6 +704,7 @@ actor AxQuerier {
         switch error {
         case .success: return
         case .invalidUIElement: throw AxReferenceRefusal.staleReference.rpcError
+        case .cannotComplete: throw AxReferenceRefusal.nativeActionUnsettled.rpcError
         case .actionUnsupported, .attributeUnsupported, .illegalArgument:
             throw AxReferenceRefusal.actionUnsupported.rpcError
         default: throw AxReferenceRefusal.actionOutcomeUnknown.rpcError

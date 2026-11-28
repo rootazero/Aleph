@@ -569,23 +569,33 @@ async fn reference_counter_press(
     bridge: &SwiftBridge,
     request: &AxSnapshotRequest,
 ) -> AxReferenceAction {
-    let snapshot: AxReferenceSnapshot = bridge
-        .call(METHOD_SNAPSHOT_REFERENCES, request)
-        .await
-        .unwrap();
-    let row = snapshot
-        .elements
-        .into_iter()
-        .find(|row| row.element.title.as_deref() == Some(BUTTON_TITLE))
-        .expect("the fixture counter button is visible");
-    AxReferenceAction {
-        reference: row
-            .reference
-            .expect("the fixture counter button is actionable"),
-        mutation: AxMutation::Perform {
-            action: "AXPress".into(),
-        },
-    }
+    // A headless AppKit window may take several AX reads to become visible
+    // after launch or a long idle period. Wait for this fixture's own row.
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let snapshot: AxReferenceSnapshot = bridge
+                .call(METHOD_SNAPSHOT_REFERENCES, request)
+                .await
+                .unwrap();
+            if let Some(row) = snapshot
+                .elements
+                .into_iter()
+                .find(|row| row.element.title.as_deref() == Some(BUTTON_TITLE))
+            {
+                return AxReferenceAction {
+                    reference: row
+                        .reference
+                        .expect("the fixture counter button is actionable"),
+                    mutation: AxMutation::Perform {
+                        action: "AXPress".into(),
+                    },
+                };
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the fixture counter button becomes visible")
 }
 
 #[tokio::test]
@@ -629,7 +639,10 @@ async fn tier_a_ax_reference_expires_without_refresh() {
     let before = fixture.state();
     let request = reference_snapshot_request(before.pid);
     let oldest = reference_counter_press(&bridge, &request).await;
-    tokio::time::sleep(Duration::from_secs(AX_REFERENCE_TTL_SECS + 1)).await;
+    let elapsed = Duration::from_secs(AX_REFERENCE_TTL_SECS / 2);
+    tokio::time::sleep(elapsed).await;
+    let latest = reference_counter_press(&bridge, &request).await;
+    tokio::time::sleep(Duration::from_secs(AX_REFERENCE_TTL_SECS + 1) - elapsed).await;
     let error = bridge
         .call::<_, AxActionResult>(METHOD_ACT_ON_REFERENCE, oldest)
         .await
@@ -642,10 +655,9 @@ async fn tier_a_ax_reference_expires_without_refresh() {
         }
     ));
     assert_eq!(fixture.state().seq, before.seq);
-    let latest = reference_counter_press(&bridge, &request).await;
     let result: AxActionResult = bridge.call(METHOD_ACT_ON_REFERENCE, latest).await.unwrap();
     assert!(result.performed);
-    fixture.wait_until("a new lease to press the fixture button", |state| {
+    fixture.wait_until("the unexpired lease to press the fixture button", |state| {
         state.counter == before.counter + 1
     });
 }

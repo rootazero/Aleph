@@ -73,26 +73,37 @@ impl DesktopTool {
         let escape_generation = platform
             .escape_listener()
             .and_then(|listener| listener.abort_generation());
+        let dispatch_deadline = operator_approval::current_dispatch_deadline();
         let mut invocation = operator_approval::take_desktop_approval();
-        let mut operator_approved = false;
+        let mut approved_policy_request = None;
         if let (Some(policy), Some((kind, subject))) =
             (&self.approval_policy, super::classify_approval(args))
         {
-            let request = Self::approval_request(kind.clone(), &args.action, &subject);
+            let mut request = Self::approval_request(kind.clone(), &args.action, "");
+            request.target = subject;
+            request.display_target = match &mutation {
+                AxMutation::SetValue { .. } => "write a value to an accessibility element".into(),
+                AxMutation::Perform { .. } => "perform a native accessibility action".into(),
+            };
             let decision = crate::approval::lift_ask(policy.check(&request).await, kind);
             match decision {
                 ApprovalDecision::Allow => policy.record(&request, &decision).await,
                 ApprovalDecision::Deny { ref reason } => {
                     policy.record(&request, &decision).await;
-                    return DesktopOutput::failed(format!(
-                        "Action denied by approval policy: {reason}"
-                    ));
+                    return DesktopOutput::failed(match mutation {
+                        AxMutation::SetValue { .. } => {
+                            "The desktop policy denied the value write.".into()
+                        }
+                        AxMutation::Perform { .. } => {
+                            format!("Action denied by approval policy: {reason}")
+                        }
+                    });
                 }
-                ApprovalDecision::Ask { prompt } => {
+                ApprovalDecision::Ask { .. } => {
                     let Some(invocation) =
                         invocation.as_mut().filter(|_| escape_generation.is_some())
                     else {
-                        return Self::approval_required(prompt);
+                        return Self::approval_required(request.display_target);
                     };
                     if let Err(error) = invocation.validate_before_dispatch() {
                         return DesktopOutput::failed(error.to_string());
@@ -105,36 +116,39 @@ impl DesktopTool {
                     if let Some(window_id) = record.window_id {
                         scope.push_str(&format!(", window {window_id}"));
                     }
-                    card.summary = format!("{} → {scope}", args.action);
+                    card.summary = match &mutation {
+                        AxMutation::SetValue { .. } => format!("set_value → {scope}"),
+                        AxMutation::Perform { action } => format!("ax_action ({action}) → {scope}"),
+                    };
                     if invocation.request(&card).await.outcome != ApprovalOutcome::Approved {
                         return DesktopOutput::failed(
                             "Operator approval was not granted for this desktop call.",
                         );
                     }
-                    if matches!(policy.check(&request).await, ApprovalDecision::Deny { .. }) {
-                        return DesktopOutput::failed(
-                            "Current desktop policy denies the approved action.",
-                        );
-                    }
-                    let current = match app_for_reference(platform.as_ref(), record.pid).await {
-                        Ok(app) => app,
-                        Err(output) => return output,
-                    };
-                    if current != target {
-                        return element_ref::token_error_output(&TokenError::Stale);
-                    }
-                    operator_approved = true;
+                    approved_policy_request = Some((policy.clone(), request));
                 }
             }
         }
         let session_guard = match self.acquire_lock() {
             Ok(Some(guard)) => Some(guard),
-            Ok(None) if operator_approved => {
+            Ok(None) if approved_policy_request.is_some() => {
                 return DesktopOutput::failed("Approved desktop call has no owning session.");
             }
             Ok(None) => None,
             Err(output) => return output,
         };
+        if let Some((policy, request)) = approved_policy_request {
+            let current = match app_for_reference(platform.as_ref(), record.pid).await {
+                Ok(app) => app,
+                Err(output) => return output,
+            };
+            if current != target {
+                return element_ref::token_error_output(&TokenError::Stale);
+            }
+            if matches!(policy.check(&request).await, ApprovalDecision::Deny { .. }) {
+                return DesktopOutput::failed("Current desktop policy denies the approved action.");
+            }
+        }
         // The worker owns both guards through actual driver settlement, even
         // when the tool caller stops awaiting the result.
         let pending = match PendingAction::admit(&session, token, &record) {
@@ -148,7 +162,7 @@ impl DesktopTool {
         let worker_platform = platform.clone();
         let (caller, caller_lifetime) = tokio::sync::oneshot::channel::<()>();
         let result = tokio::spawn(async move {
-            let (_pending, _session_guard) = (pending, session_guard);
+            let _session_guard = session_guard;
             if let Some(invocation) = invocation {
                 if let Err(error) = invocation.validate_before_dispatch() {
                     return DesktopOutput::failed(error.to_string());
@@ -165,11 +179,24 @@ impl DesktopTool {
                     "The accessibility capability is unavailable.",
                 );
             };
-            if caller.is_closed() {
+            if caller.is_closed() || dispatch_deadline.is_some_and(|(cancel, deadline)| {
+                cancel.is_cancelled() || tokio::time::Instant::now() >= deadline
+            }) {
                 return DesktopOutput::failed("Desktop call ended before native dispatch.");
             }
             match ax.act_on_reference(request).await {
                 Ok(result) => native::ax_action_output(result),
+                Err(aleph_desktop::DesktopError::AxReference {
+                    code: AxReferenceError::NativeActionUnsettled, ..
+                }) => {
+                    // The caller can receive an error without releasing the PID
+                    // fence. The target may still be executing the AX message.
+                    tokio::spawn(hold_until_process_exits(worker_platform, target, pending));
+                    refusal(
+                        AxReferenceError::ActionOutcomeUnknown,
+                        "The AX mutation may still be running. A fresh snapshot of this PID is blocked until the originating process exits.",
+                    )
+                }
                 Err(error) => element_ref::driver_error_output(error),
             }
         })
@@ -197,6 +224,24 @@ impl DesktopTool {
             output.grade_effect(&args.action);
         }
         output
+    }
+}
+
+async fn hold_until_process_exits(
+    platform: std::sync::Arc<dyn DesktopPlatform>,
+    target: DesktopProcessIdentity,
+    _pending: PendingAction,
+) {
+    let system = platform
+        .system()
+        .expect("native reference dispatch requires a system capability");
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if let Ok(current) = system.desktop_process_identity(target.pid).await {
+            if current.as_ref() != Some(&target) {
+                return;
+            }
+        }
     }
 }
 

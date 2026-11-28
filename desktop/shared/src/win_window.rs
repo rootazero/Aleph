@@ -318,6 +318,10 @@ pub fn top_window_for_pid(pid: u32) -> Option<u64> {
 /// of silently dropping out of the app list.
 #[must_use]
 pub fn process_image_path(pid: u32) -> Option<PathBuf> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    // SAFETY: the returned handle is closed below.
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
     let path = process_image_path_for_handle(handle);
     // SAFETY: this call owns the handle returned above.

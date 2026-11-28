@@ -6,7 +6,6 @@
 //! already superseded by a new observation.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -223,24 +222,22 @@ fn resolve_locked<'a>(
         })
 }
 
-/// Observe without holding the store lock during provider I/O. An unresolved
-/// window owner overlaps every PID until the driver proves the target scope.
+/// Observe without holding the store lock during provider I/O. For an
+/// unresolved window or frontmost app, check the resolved PID at publication.
 pub(super) struct SnapshotRead {
     pid: Option<i32>,
-    overlapped: AtomicBool,
+    overlapped: Mutex<HashSet<i32>>,
 }
 
 impl SnapshotRead {
     pub(super) fn begin(pid: Option<i32>) -> Result<Arc<Self>, TokenError> {
         let mut store = STORE.lock().unwrap_or_else(|e| e.into_inner());
-        if pid.map_or(!store.pending.is_empty(), |pid| {
-            store.pending.contains(&pid)
-        }) {
+        if pid.is_some_and(|pid| store.pending.contains(&pid)) {
             return Err(TokenError::ActionPending);
         }
         let read = Arc::new(Self {
             pid,
-            overlapped: AtomicBool::new(false),
+            overlapped: Mutex::new(store.pending.clone()),
         });
         store.observations.retain(|read| read.strong_count() > 0);
         store.observations.push(Arc::downgrade(&read));
@@ -254,7 +251,13 @@ impl SnapshotRead {
         records: Vec<ElementRecord>,
     ) -> Result<u32, TokenError> {
         let mut store = STORE.lock().unwrap_or_else(|e| e.into_inner());
-        if self.overlapped.load(Ordering::Relaxed) || store.pending.contains(&pid) {
+        if store.pending.contains(&pid)
+            || self
+                .overlapped
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&pid)
+        {
             return Err(TokenError::ActionPending);
         }
         Ok(issue_locked(&mut store, session, pid, records))
@@ -284,7 +287,10 @@ impl PendingAction {
                 return false;
             };
             if read.pid.is_none_or(|observed| observed == pid) {
-                read.overlapped.store(true, Ordering::Relaxed);
+                read.overlapped
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(pid);
             }
             true
         });
@@ -443,7 +449,13 @@ mod tests {
             Err(TokenError::ActionPending)
         ));
         assert!(unrelated.publish("s1", 99, vec![]).is_ok());
+        let unknown_during_action = SnapshotRead::begin(None).unwrap();
+        assert!(unknown_during_action.publish("s1", 99, vec![]).is_ok());
         drop(pending);
+        assert_eq!(
+            unknown_during_action.publish("s1", 42, vec![]),
+            Err(TokenError::ActionPending)
+        );
         assert_eq!(
             overlapping.publish("s1", 42, vec![]),
             Err(TokenError::ActionPending)

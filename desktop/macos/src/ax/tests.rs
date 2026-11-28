@@ -271,7 +271,7 @@ async fn ax_ref_timeout_reaps_before_readback() {
             .unwrap()
             .unwrap()
             .unwrap_err(),
-        AxReferenceError::ActionOutcomeUnknown,
+        AxReferenceError::NativeActionUnsettled,
     );
     fixture.assert_reaped(&old_pid);
     assert_ne!(snapshot(&backend).await, reference);
@@ -318,7 +318,7 @@ async fn ax_ref_unproven_receipt_reaps_without_retrying_the_mutation() {
             .await
             .unwrap()
             .unwrap_err(),
-        AxReferenceError::ActionOutcomeUnknown,
+        AxReferenceError::NativeActionUnsettled,
     );
     fixture.assert_reaped(&reference.lease);
     assert_ne!(snapshot(&backend).await.lease, reference.lease);
