@@ -50,133 +50,101 @@ where
     S: Stream<Item = reqwest::Result<C>> + Send + 'static,
     C: AsRef<[u8]> + Send + 'static,
 {
-    let stream = async_stream::stream! {
+    parse_sse_frames(byte_stream, idle, |event_type, data| {
+        let data = std::str::from_utf8(data)
+            .map_err(|_| A2AError::ParseError("Invalid UTF-8 in A2A SSE data".into()))?;
+        if let Some(error) = parse_error_frame(data) {
+            return Err(error);
+        }
+        Ok(parse_event(event_type, data)?.into_iter().collect())
+    })
+}
+
+/// Shared SSE framing for legacy events and standard JSON-RPC response envelopes.
+pub(crate) fn parse_sse_frames<S, C, F>(
+    byte_stream: S,
+    idle: Duration,
+    decode: F,
+) -> Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>
+where
+    S: Stream<Item = reqwest::Result<C>> + Send + 'static,
+    C: AsRef<[u8]> + Send + 'static,
+    F: Fn(&str, &[u8]) -> A2AResult<Vec<UpdateEvent>> + Send + 'static,
+{
+    Box::pin(async_stream::stream! {
         use futures::StreamExt;
         let mut event_type = String::new();
-        let mut data_buf = String::new();
-        let mut line_buf = String::new();
-        // Carry buffer for incomplete UTF-8 trailing bytes across chunks
-        let mut carry: Vec<u8> = Vec::new();
-
+        let mut data = Vec::new();
+        let mut line = Vec::new();
+        let mut after_cr = false;
         tokio::pin!(byte_stream);
 
         loop {
-            let next = tokio::time::timeout(idle, byte_stream.next()).await;
-            let chunk = match next {
-                Ok(Some(Ok(c))) => c,
+            let chunk = match tokio::time::timeout(idle, byte_stream.next()).await {
+                Ok(Some(Ok(chunk))) => chunk,
                 Ok(Some(Err(e))) => {
-                    yield Err(A2AError::InternalError(e.to_string()));
-                    break;
+                    yield Err(A2AError::AgentUnreachable(e.without_url().to_string()));
+                    return;
                 }
-                Ok(None) => break,
-                Err(_elapsed) => {
+                Ok(None) => return,
+                Err(_) => {
                     yield Err(A2AError::Timeout(idle));
-                    break;
+                    return;
                 }
             };
 
-            // `line_buf` already holds the valid UTF-8 decoded so far, which is
-            // the earliest content in wire order. The carried incomplete bytes
-            // from the previous chunk come AFTER `line_buf` and BEFORE the new
-            // chunk. Decode only `carry + chunk` and append the result to
-            // `line_buf` to preserve wire order. (Prepending `carry` ahead of
-            // `line_buf` would splice a partial line in front of the bytes that
-            // complete a chunk-split multi-byte character — e.g. CJK text —
-            // permanently corrupting the decode and dropping all later events.)
-            let mut raw_bytes: Vec<u8> = std::mem::take(&mut carry);
-            raw_bytes.extend_from_slice(chunk.as_ref());
-            // Decode as much valid UTF-8 as possible, keeping incomplete trailing bytes
-            match String::from_utf8(raw_bytes) {
-                Ok(s) => line_buf.push_str(&s),
-                Err(e) => {
-                    let valid_up_to = e.utf8_error().valid_up_to();
-                    let bytes = e.into_bytes();
-                    // Safe: valid_up_to is guaranteed to be a valid UTF-8 boundary
-                    let valid_bytes = bytes
-                        .get(..valid_up_to)
-                        .expect("invariant: valid_up_to is a valid UTF-8 boundary");
-                    line_buf.push_str(std::str::from_utf8(valid_bytes).unwrap_or_default());
-                    // Store incomplete trailing bytes for the next chunk
-                    carry = bytes
-                        .get(valid_up_to..)
-                        .expect("invariant: valid_up_to is a valid UTF-8 boundary")
-                        .to_vec();
+            for &byte in chunk.as_ref() {
+                // CR, LF and CRLF all end a line, including CRLF split across chunks.
+                if std::mem::take(&mut after_cr) && byte == b'\n' {
+                    continue;
                 }
-            }
-
-            while let Some(newline_pos) = line_buf.find('\n') {
-                let line = line_buf[..newline_pos].trim_end_matches('\r').to_string();
-                line_buf.drain(..=newline_pos);
-
-                if line.len() > MAX_LINE_BYTES {
-                    yield Err(A2AError::ParseError(format!(
-                        "SSE line exceeded {MAX_LINE_BYTES} bytes — refusing to buffer further"
-                    )));
-                    return;
+                if !matches!(byte, b'\n' | b'\r') {
+                    if line.len() == MAX_LINE_BYTES {
+                        yield Err(A2AError::ParseError(format!("A2A SSE line exceeded {MAX_LINE_BYTES} bytes")));
+                        return;
+                    }
+                    line.push(byte);
+                    continue;
                 }
-
+                after_cr = byte == b'\r';
                 if line.is_empty() {
-                    // Empty line = end of event
-                    if !data_buf.is_empty() {
-                        if let Some(err) = parse_error_frame(&data_buf) {
-                            yield Err(err);
-                            return;
-                        }
-                        match parse_event(&event_type, &data_buf) {
-                            Ok(Some(event)) => yield Ok(event),
-                            // Unknown event type: tolerated on purpose for
-                            // forward compatibility, already logged.
-                            Ok(None) => {}
+                    if !data.is_empty() {
+                        data.pop(); // Last data field's joining newline.
+                        match decode(&event_type, &data) {
+                            Ok(events) => {
+                                for event in events {
+                                    yield Ok(event);
+                                }
+                            }
                             Err(e) => {
                                 yield Err(e);
                                 return;
                             }
                         }
-                        event_type.clear();
-                        data_buf.clear();
                     }
-                } else if let Some(value) = line.strip_prefix("event:") {
-                    event_type = value.trim().to_string();
-                } else if let Some(value) = line.strip_prefix("data:") {
-                    if data_buf.len() + value.trim().len() + 1 > MAX_DATA_BYTES {
-                        yield Err(A2AError::ParseError(format!(
-                            "SSE data buffer exceeded {MAX_DATA_BYTES} bytes — refusing to buffer further"
-                        )));
+                    event_type.clear();
+                    data.clear();
+                } else if let Some(value) = line.strip_prefix(b"event:") {
+                    match std::str::from_utf8(value) {
+                        Ok(value) => event_type = value.trim().to_owned(),
+                        Err(_) => {
+                            yield Err(A2AError::ParseError("Invalid UTF-8 in A2A SSE event type".into()));
+                            return;
+                        }
+                    }
+                } else if let Some(value) = line.strip_prefix(b"data:") {
+                    let value = value.strip_prefix(b" ").unwrap_or(value);
+                    if data.len() + value.len() + 1 > MAX_DATA_BYTES {
+                        yield Err(A2AError::ParseError(format!("A2A SSE data exceeded {MAX_DATA_BYTES} bytes")));
                         return;
                     }
-                    if !data_buf.is_empty() {
-                        data_buf.push('\n');
-                    }
-                    data_buf.push_str(value.trim());
+                    data.extend_from_slice(value);
+                    data.push(b'\n');
                 }
-                // Ignore other fields (id:, retry:, comments)
-            }
-            // If a single chunk contained no newline but is itself too big,
-            // reject before the next iteration can grow `line_buf` further.
-            if line_buf.len() > MAX_LINE_BYTES {
-                yield Err(A2AError::ParseError(format!(
-                    "SSE line buffer exceeded {MAX_LINE_BYTES} bytes — refusing to buffer further"
-                )));
-                return;
+                line.clear();
             }
         }
-
-        // Handle any remaining buffered event (no trailing newline)
-        if !data_buf.is_empty() {
-            if let Some(err) = parse_error_frame(&data_buf) {
-                yield Err(err);
-            } else {
-                match parse_event(&event_type, &data_buf) {
-                    Ok(Some(event)) => yield Ok(event),
-                    // Unknown event type: tolerated for forward compatibility.
-                    Ok(None) => {}
-                    Err(e) => yield Err(e),
-                }
-            }
-        }
-    };
-
-    Box::pin(stream)
+    })
 }
 
 /// Detect a JSON-RPC error envelope in an SSE `data` payload.
@@ -285,10 +253,12 @@ pub struct FoldedOutcome {
     /// false: a stream that ends without a terminal state is reported as a
     /// truncated stream, not as a silent success.
     pub error: Option<String>,
+    /// The last settled state reported by the peer.
+    pub final_state: Option<TaskState>,
 }
 
 /// Concatenate the text parts of an artifact, newline-separated.
-fn artifact_text(artifact: &Artifact) -> String {
+pub(crate) fn artifact_text(artifact: &Artifact) -> String {
     artifact
         .parts
         .iter()
@@ -317,7 +287,7 @@ where
     use futures::StreamExt;
 
     tokio::pin!(stream);
-    let mut artifacts: Vec<String> = Vec::new();
+    let mut artifacts: Vec<(String, String)> = Vec::new();
     let mut last_status_text: Option<String> = None;
     let mut final_state: Option<TaskState> = None;
     let mut stream_error: Option<String> = None;
@@ -332,15 +302,33 @@ where
                         last_status_text = Some(text);
                     }
                 }
-                if ev.is_final || ev.status.state.is_terminal() {
+                if ev.is_final
+                    || ev.status.state.is_terminal()
+                    || matches!(
+                        ev.status.state,
+                        TaskState::InputRequired | TaskState::AuthRequired
+                    )
+                {
                     final_state = Some(ev.status.state);
+                    break;
                 }
             }
             Ok(UpdateEvent::ArtifactUpdate(ev)) => {
                 let text = artifact_text(&ev.artifact);
                 if !text.is_empty() {
                     on_chunk(&text);
-                    artifacts.push(text);
+                    if let Some((_, existing)) = artifacts
+                        .iter_mut()
+                        .find(|(id, _)| id == &ev.artifact.artifact_id)
+                    {
+                        if ev.append {
+                            existing.push_str(&text);
+                        } else {
+                            *existing = text;
+                        }
+                    } else {
+                        artifacts.push((ev.artifact.artifact_id, text));
+                    }
                 }
             }
             Err(e) => {
@@ -351,14 +339,14 @@ where
     }
 
     let got_terminal = final_state.is_some();
-    let failed = matches!(
-        final_state,
-        Some(TaskState::Failed | TaskState::Rejected | TaskState::Canceled)
-    );
-    let success = stream_error.is_none() && !failed && got_terminal;
+    let success = final_state == Some(TaskState::Completed);
 
     let body = if !artifacts.is_empty() {
-        artifacts.join("\n")
+        artifacts
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect::<Vec<_>>()
+            .join("\n")
     } else {
         last_status_text.unwrap_or_default()
     };
@@ -366,9 +354,9 @@ where
     let (summary, error) = if let Some(e) = stream_error {
         let summary = if body.is_empty() { e.clone() } else { body };
         (summary, Some(e))
-    } else if failed {
+    } else if let Some(state) = final_state.filter(|_| !success) {
         let msg = if body.is_empty() {
-            format!("Remote A2A task ended in state {final_state:?}")
+            format!("Remote A2A task ended in state {state:?}")
         } else {
             body
         };
@@ -400,6 +388,7 @@ where
         summary,
         success,
         error,
+        final_state,
     }
 }
 
@@ -596,12 +585,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parse_sse_byte_stream_multibyte_char_split_across_chunks() {
+    async fn sse_preserves_utf8_across_byte_chunks() {
         // Regression: a chunk boundary that lands BOTH mid-multi-byte-char AND
         // with a pending partial line in `line_buf` must not corrupt the decode.
         // CJK message text exercises the multi-byte path (Aleph is CJK-first).
-        use futures::StreamExt;
-
         let event = TaskStatusUpdateEvent {
             task_id: "任务-1".to_string(),
             context_id: "上下文-1".to_string(),
@@ -619,7 +606,7 @@ mod tests {
             "result": UpdateEvent::StatusUpdate(event),
         })
         .to_string();
-        let frame = format!("event: status-update\ndata: {}\n\n", json);
+        let frame = format!("event: status-update\r\ndata: {}\r\n\r\n", json);
         let bytes = frame.as_bytes();
 
         // Split at the first byte index that is NOT a char boundary AND falls
@@ -631,25 +618,19 @@ mod tests {
         let chunk1 = bytes[..split].to_vec();
         let chunk2 = bytes[split..].to_vec();
 
-        let byte_stream = futures::stream::iter(vec![
-            Ok::<Vec<u8>, reqwest::Error>(chunk1),
-            Ok::<Vec<u8>, reqwest::Error>(chunk2),
+        let byte_stream = futures::stream::iter([
+            Ok(b": keep-alive\r".to_vec()),
+            Ok(b"\n\r\n".to_vec()),
+            Ok(chunk1),
+            Ok(chunk2),
         ]);
         let parsed = parse_sse_byte_stream(byte_stream, std::time::Duration::from_secs(5));
-        let events: Vec<_> = parsed.collect().await;
-
-        assert_eq!(events.len(), 1, "exactly one event must survive the split");
-        match &events[0] {
-            Ok(UpdateEvent::StatusUpdate(e)) => {
-                assert_eq!(e.task_id, "任务-1");
-                assert_eq!(
-                    e.status.message.as_ref().unwrap().text_content(),
-                    "分析完成：黄金走势看涨",
-                    "multi-byte message text must be reconstructed intact"
-                );
-            }
-            other => panic!("expected one StatusUpdate, got {:?}", other),
-        }
+        let mut output = Vec::new();
+        let result = fold_stream(parsed, |chunk| output.push(chunk.to_owned())).await;
+        assert_eq!(result.final_state, Some(TaskState::Completed));
+        assert!(result.success);
+        assert_eq!(result.summary, "分析完成：黄金走势看涨");
+        assert_eq!(output, ["分析完成：黄金走势看涨"]);
     }
 
     fn status_event(state: TaskState, msg: Option<&str>, is_final: bool) -> UpdateEvent {

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use super::http_client::A2AClient;
 use crate::a2a::port::{A2AResult, AgentHealth, RegisteredAgent};
+use crate::security::ssrf::SsrfPolicy;
 use crate::sync_primitives::AsyncRwLock;
 
 /// Connection pool managing `A2AClient` instances per agent.
@@ -11,14 +12,24 @@ use crate::sync_primitives::AsyncRwLock;
 /// Thread-safe via `AsyncRwLock` (read-heavy, write-rare pattern).
 pub struct A2AClientPool {
     clients: AsyncRwLock<HashMap<String, Arc<A2AClient>>>,
+    policy: SsrfPolicy,
 }
 
 impl A2AClientPool {
     #[must_use]
     pub fn new() -> Self {
+        Self::with_ssrf_policy(SsrfPolicy::default())
+    }
+
+    pub fn with_ssrf_policy(policy: SsrfPolicy) -> Self {
         Self {
             clients: AsyncRwLock::new(HashMap::new()),
+            policy,
         }
+    }
+
+    pub(crate) fn client_for(agent: &RegisteredAgent, policy: SsrfPolicy) -> A2AClient {
+        A2AClient::for_agent(agent, policy)
     }
 
     /// Get or create a client for a registered agent.
@@ -33,22 +44,19 @@ impl A2AClientPool {
         {
             let clients = self.clients.read().await;
             if let Some(client) = clients.get(&agent.card.id) {
-                if client_matches(client, agent) {
+                if client.matches(agent) {
                     return Ok(Arc::clone(client));
                 }
             }
         }
 
         // Slow path: create new client under write lock
-        let client = Arc::new(match agent.auth_token() {
-            Some(token) => A2AClient::with_auth(&agent.base_url, token),
-            None => A2AClient::new(&agent.base_url),
-        });
+        let client = Arc::new(Self::client_for(agent, self.policy.clone()));
         let mut clients = self.clients.write().await;
         // Double-check: another task may have inserted while we waited (but
         // only reuse it if it, too, matches the requested endpoint/auth).
         if let Some(existing) = clients.get(&agent.card.id) {
-            if client_matches(existing, agent) {
+            if existing.matches(agent) {
                 return Ok(Arc::clone(existing));
             }
         }
@@ -62,19 +70,11 @@ impl A2AClientPool {
         clients.remove(agent_id);
     }
 
-    /// Health check by fetching the agent card endpoint
-    pub async fn health_check(&self, agent_id: &str) -> AgentHealth {
-        let client = {
-            let clients = self.clients.read().await;
-            clients.get(agent_id).map(Arc::clone)
-        };
-
-        match client {
-            Some(c) => match c.fetch_agent_card().await {
-                Ok(_) => AgentHealth::Healthy,
-                Err(_) => AgentHealth::Unreachable,
-            },
-            None => AgentHealth::Unreachable,
+    /// Probe the immutable record that was selected for this health pass.
+    pub async fn health_check(&self, agent: &RegisteredAgent) -> AgentHealth {
+        match self.get_or_create(agent).await {
+            Ok(client) if client.probe(agent).await.is_ok() => AgentHealth::Healthy,
+            _ => AgentHealth::Unreachable,
         }
     }
 }
@@ -83,16 +83,6 @@ impl Default for A2AClientPool {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Whether a cached client still reflects the requested agent's endpoint and
-/// auth state. `A2AClient` trims trailing slashes off `base_url` at
-/// construction, so compare against the trimmed form.
-fn client_matches(client: &A2AClient, agent: &RegisteredAgent) -> bool {
-    // Compare token *values*, not just presence — a rotated token with the
-    // same presence would otherwise keep serving stale credentials.
-    client.base_url() == agent.base_url.trim_end_matches('/')
-        && client.auth_token_matches(agent.auth_token())
 }
 
 #[cfg(test)]
@@ -194,9 +184,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn health_check_unknown_agent() {
+    async fn health_check_rejects_blocked_destination() {
         let pool = A2AClientPool::new();
-        let result = pool.health_check("unknown").await;
+        let result = pool
+            .health_check(&make_agent("blocked", "http://127.0.0.1:1"))
+            .await;
         assert_eq!(result, AgentHealth::Unreachable);
     }
 }
