@@ -291,6 +291,8 @@ macOS 单次定向动作能等待 operator 的单次批准；卡片不含输入�
 | `ax.query_by_role` | Accessibility (TCC) | Collect all elements matching an AX role string |
 | `ax.set_value` | Accessibility (TCC) | Locate an element by stateless locator (role/title/center scoring) and write its `AXValue`, reading it back for verification |
 | `ax.perform_action` | Accessibility (TCC) | Locate an element the same way and perform a native AX action (`AXPress`, `AXShowMenu`, …) |
+| `ax.snapshot_references` | Accessibility (TCC) | Read scoped AX rows and retain actionable native objects for this helper instance |
+| `ax.act_on_reference` | Accessibility (TCC) | Validate and act on a retained native object, using the advertised action or verified value setter |
 
 Elements report their own `actions` list and an `enabled` flag, so a caller
 never has to guess an action name. Values of secure (password) fields are
@@ -320,6 +322,10 @@ of model context on the way in.
 > clipped subtree with no marker concludes the control it is hunting for does not
 > exist and goes off to do something else. How much of an app one query may return
 > is a property of the protocol, not of whichever limb answers.
+
+**Native reference lifetime / 原生引用生命周期.** Core publishes session- and PID-bound `desktop_ax_snapshot` tokens. The helper retains up to 32 snapshots, with up to 500 rows per snapshot and a 90-second lifetime. `ax.act_on_reference` checks the retained object and live affordances before dispatch. A structured reference error uses RPC code `-32008` and a stable `data.code`. An older helper without the methods reports `reference_unsupported`. The macOS helper accepts PID scope and returns `window_scope_unsupported` for an explicit window ID. / Core 发布与会话及 PID 绑定的令牌。Swift helper 保留最多 32 份快照，每份最多 500 行，保留 90 秒。派发前复核原生对象和当前可用动作。旧 helper 和不支持的窗口作用域分别返回结构化错误。
+
+Native mutations use a bound helper call. Rust waits for a definitive reply or retires the issuing helper. When an AX message times out in the target application or transport cannot establish settlement, Core returns `action_outcome_unknown` and keeps that PID pending until it can confirm the original process has exited. Other PID scopes can proceed. / 原生动作绑定到发出请求的 helper 实例。Rust 等待有效回执，或回收该 helper。目标应用的 AX 消息超时或传输无法确认动作结算时，Core 返回 `action_outcome_unknown`，原 PID 在确认该进程退出前继续处于待定状态。其他 PID 仍可操作。
 
 ### perm.* — Permission introspection
 

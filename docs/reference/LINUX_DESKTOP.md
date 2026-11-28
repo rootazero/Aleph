@@ -166,6 +166,10 @@ AT-SPI 每次调用的成本由**往返次数**决定，不由 CPU 决定。本�
 
 不提供缓存的应用（老 Qt、桥只加载了一半）自动回落逐属性读：**慢，但不会空**。
 
+### 原生 AT-SPI 引用 / Native AT-SPI references
+
+`desktop_ax_snapshot` 按 PID 读取可操作的 AT-SPI 元素。即使控件没有屏幕坐标，也可用行上的 `token` 调用 `ax_action` 或 `set_value`。动作名逐字取自快照的 `actions`。Driver 通过签发时的总线连接定位原对象，复核进程、对象和当前支持的动作。Linux 当前对显式 `window_id` 返回 `window_scope_unsupported`。动作后 Agent 用原 PID 重新快照。 / Observe by PID and pass a row's `token` to the native action. The driver revalidates the original AT-SPI object on its owning bus connection. Geometry is optional, and an explicit `window_id` returns `window_scope_unsupported`.
+
 ### 打开无障碍层（AT-SPI2）
 
 无障碍树是 SOM 语义定位、`ax_*` 四工具、`set_value`/`ax_action`，以及 **`type_text` 密码框硬拒** 的共同基础。应用只有加载了工具包的 a11y 桥才会出现在 AT-SPI 总线上：

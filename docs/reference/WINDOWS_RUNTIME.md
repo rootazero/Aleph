@@ -162,6 +162,10 @@ cargo test -p aleph-desktop-windows --test uia_live -- --ignored --nocapture
 > **未端到端验证的部分（诚实标注）**：多显示器分支只有单测覆盖（归一化算术 + 原点平移），
 > 本机是单屏，无法端到端验证。单屏路径与 enigo 旧公式**逐字节等价**，有回归测试钉住。
 
+### 原生 UI Automation 引用 / Native UI Automation references
+
+传入 `window_list` 提供的 HWND 调用 `desktop_ax_snapshot {window_id}`，可选 `pid` 必须与窗口归属一致。仅提供 PID 时，快照返回实际选定窗口的 `window_id`，回读可沿用它。UIA 的 MTA 线程持有原生控件，动作前复核进程、窗口和控件身份。使用元素 `token` 执行 `ax_action` 或 `set_value` 后，重新快照以确认界面变化。 / Pass an exact HWND to `desktop_ax_snapshot`, optionally with its owning PID. A PID-only request returns the selected window ID for readback. The UIA worker retains the native element and validates the process, window, and element before dispatch.
+
 ### 2. 子进程一律无控制台窗口
 
 daemon 模式（`--daemon` / 由桌面壳拉起）下 `aleph-server.exe` 自己没有控制台，因此任何
