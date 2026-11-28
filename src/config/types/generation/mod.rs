@@ -45,26 +45,6 @@ mod tests {
     }
 
     #[test]
-    fn test_generation_config_get_default_provider() {
-        let config = GenerationConfig {
-            default_image_provider: Some("dalle".to_string()),
-            default_speech_provider: Some("elevenlabs".to_string()),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            config.get_default_provider(GenerationType::Image),
-            Some("dalle")
-        );
-        assert_eq!(
-            config.get_default_provider(GenerationType::Speech),
-            Some("elevenlabs")
-        );
-        assert_eq!(config.get_default_provider(GenerationType::Video), None);
-        assert_eq!(config.get_default_provider(GenerationType::Audio), None);
-    }
-
-    #[test]
     fn test_generation_config_get_providers_for_type() {
         let mut config = GenerationConfig::default();
 

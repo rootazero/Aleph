@@ -452,17 +452,6 @@ impl MockGenerationProvider {
             error_message: None,
         }
     }
-
-    /// Create a mock provider for video generation only
-    pub fn video_only<S: Into<String>>(name: S) -> Self {
-        Self {
-            name: name.into(),
-            color: "#808080".to_string(),
-            supported_types: vec![GenerationType::Video],
-            should_fail: false,
-            error_message: None,
-        }
-    }
 }
 
 #[doc(hidden)]

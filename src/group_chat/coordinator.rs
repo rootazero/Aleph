@@ -86,11 +86,10 @@ pub fn build_coordinator_prompt(
         "Based on the user's message, select which personas should respond and in what order. \
          Provide guidance for each persona on what to focus on.\n\n\
          Output ONLY valid JSON in this exact format (no extra text):\n\
-         {\"respondents\":[{\"persona_id\":\"...\",\"order\":N,\"guidance\":\"...\"}],\"need_summary\":bool}\n\n\
+         {\"respondents\":[{\"persona_id\":\"...\",\"order\":N,\"guidance\":\"...\"}]}\n\n\
          Rules:\n\
          - Only include personas whose expertise is relevant to the user's message.\n\
-         - Order them so that foundational perspectives come first.\n\
-         - Set need_summary to true if the topic is complex and benefits from synthesis.\n",
+         - Order them so that foundational perspectives come first.\n",
     );
 
     prompt
@@ -126,10 +125,7 @@ pub fn build_fallback_plan(personas: &[Persona]) -> CoordinatorPlan {
         })
         .collect();
 
-    CoordinatorPlan {
-        respondents,
-        need_summary: false,
-    }
+    CoordinatorPlan { respondents }
 }
 
 /// Build the prompt for a persona's LLM call with cumulative context.
@@ -302,7 +298,6 @@ mod tests {
         // Contains JSON output instruction
         assert!(prompt.contains("respondents"));
         assert!(prompt.contains("persona_id"));
-        assert!(prompt.contains("need_summary"));
     }
 
     #[test]
@@ -322,30 +317,28 @@ mod tests {
 
     #[test]
     fn test_parse_coordinator_plan_valid() {
-        let json = r#"{"respondents":[{"persona_id":"arch","order":1,"guidance":"Focus on tech"}],"need_summary":true}"#;
+        let json = r#"{"respondents":[{"persona_id":"arch","order":1,"guidance":"Focus on tech"}]}"#;
         let plan = parse_coordinator_plan(json).unwrap();
         assert_eq!(plan.respondents.len(), 1);
         assert_eq!(plan.respondents[0].persona_id, "arch");
         assert_eq!(plan.respondents[0].order, 1);
         assert_eq!(plan.respondents[0].guidance, "Focus on tech");
-        assert!(plan.need_summary);
     }
 
     #[test]
     fn test_parse_coordinator_plan_with_markdown_wrapper() {
-        let json = "```json\n{\"respondents\":[{\"persona_id\":\"arch\",\"order\":1,\"guidance\":\"tech\"}],\"need_summary\":false}\n```";
+        let json = "```json\n{\"respondents\":[{\"persona_id\":\"arch\",\"order\":1,\"guidance\":\"tech\"}]}\n```";
         let plan = parse_coordinator_plan(json).unwrap();
         assert_eq!(plan.respondents.len(), 1);
         assert_eq!(plan.respondents[0].persona_id, "arch");
-        assert!(!plan.need_summary);
     }
 
     #[test]
     fn test_parse_coordinator_plan_tolerates_omitted_optional_fields() {
-        // The coordinator LLM frequently drops the optional `need_summary` and
-        // `guidance` fields. Such a plan must still parse (honoring the model's
-        // respondent selection) rather than failing and falling back to all
-        // personas. `order` defaults to 0, preserving declaration order.
+        // The coordinator LLM frequently drops the optional `guidance` field.
+        // Such a plan must still parse (honoring the model's respondent
+        // selection) rather than failing and falling back to all personas.
+        // `order` defaults to 0, preserving declaration order.
         let json = r#"{"respondents":[{"persona_id":"arch"},{"persona_id":"pm"}]}"#;
         let plan = parse_coordinator_plan(json).expect("plan with omitted optionals should parse");
 
@@ -354,7 +347,6 @@ mod tests {
         assert_eq!(plan.respondents[0].order, 0);
         assert!(plan.respondents[0].guidance.is_empty());
         assert_eq!(plan.respondents[1].persona_id, "pm");
-        assert!(!plan.need_summary);
     }
 
     #[test]
@@ -382,7 +374,6 @@ mod tests {
         assert_eq!(plan.respondents[0].order, 0);
         assert_eq!(plan.respondents[1].persona_id, "pm");
         assert_eq!(plan.respondents[1].order, 1);
-        assert!(!plan.need_summary);
 
         // Guidance should be empty for fallback
         assert!(plan.respondents[0].guidance.is_empty());

@@ -200,7 +200,12 @@ impl GenerationProvider for OpenAiCompatProvider {
     }
 
     fn supports_image_editing(&self) -> bool {
-        true
+        // Only claim editing when an edit endpoint was configured. The
+        // derived fallback (`/generations` → `/edits`) silently yields the
+        // GENERATE url for an endpoint that does not expose `/edits`, so an
+        // unconditional `true` promised a capability the provider may not
+        // have.
+        self.edit_endpoint.is_some()
     }
 
     fn edit_image(
@@ -307,10 +312,21 @@ impl OpenAiCompatProvider {
                 })?;
 
                 return Ok(GenerationData::url(output_url));
+            } else if status_str.eq_ignore_ascii_case("cancelled")
+                || status_str.eq_ignore_ascii_case("canceled")
+            {
+                // A cancelled job is its own outcome, not a failure: the
+                // taxonomy has a `Cancelled` variant and the caller may be
+                // told the run was cancelled rather than that it broke.
+                let reason = task
+                    .fail_reason
+                    .or_else(|| task.error.map(|e| e.message))
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or_else(|| "cancelled by the provider".to_string());
+                error!(provider = %self.name, reason = %reason, "Async task cancelled");
+                return Err(GenerationError::Cancelled);
             } else if status_str.eq_ignore_ascii_case("failure")
                 || status_str.eq_ignore_ascii_case("failed")
-                || status_str.eq_ignore_ascii_case("cancelled")
-                || status_str.eq_ignore_ascii_case("canceled")
             {
                 let reason = task
                     .fail_reason

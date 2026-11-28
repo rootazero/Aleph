@@ -191,9 +191,13 @@ pub async fn fetch_output(
         .map_err(|e| GenerationError::download(e.to_string(), Some(url.to_string())))?;
 
     if !response.status().is_success() {
-        return Err(GenerationError::download(
+        // The status travels with the error: `is_retryable()` treats a 5xx
+        // or a 408 as worth another attempt and everything else as final,
+        // and it cannot tell them apart when the code is dropped here.
+        return Err(GenerationError::download_with_status(
             format!("HTTP {}", response.status()),
             Some(url.to_string()),
+            Some(response.status().as_u16()),
         ));
     }
 

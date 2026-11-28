@@ -50,6 +50,15 @@ pub struct GenerationProviderRegistry {
     /// registry-side logs carry the config name — this index is what lets
     /// the two be correlated during incident triage.
     canonical_index: HashMap<String, String>,
+    /// The operator's "set as default" choice per generation type.
+    ///
+    /// The Panel writes `default_image_provider` / `default_video_provider` /
+    /// … and renders the badge, but the generation tools used to pick the
+    /// alphabetically first provider of the right type instead, so the choice
+    /// never reached the call. The registry is the one place that knows both
+    /// the registered providers and the configured defaults, so the default
+    /// lives here.
+    defaults: HashMap<GenerationType, String>,
 }
 
 impl GenerationProviderRegistry {
@@ -68,6 +77,7 @@ impl GenerationProviderRegistry {
         Self {
             providers: HashMap::new(),
             canonical_index: HashMap::new(),
+            defaults: HashMap::new(),
         }
     }
 
@@ -309,20 +319,6 @@ impl GenerationProviderRegistry {
             .collect()
     }
 
-    /// Check if any provider supports a specific generation type
-    ///
-    /// # Arguments
-    ///
-    /// * `gen_type` - The generation type to check
-    ///
-    /// # Returns
-    ///
-    /// `true` if at least one provider supports this type, `false` otherwise
-    #[must_use]
-    pub fn has_provider_for_type(&self, gen_type: GenerationType) -> bool {
-        self.providers.values().any(|p| p.supports(gen_type))
-    }
-
     /// Get names of all providers that support a specific generation type
     ///
     /// # Arguments
@@ -485,6 +481,30 @@ impl GenerationProviderRegistry {
             .min_by(|(a, _), (b, _)| a.cmp(b))
             .map(|(name, p)| (name.clone(), p.clone()))
     }
+
+    /// Record the provider the operator marked as the default for a type.
+    ///
+    /// The name is the provider's config section name (`dalle-prod`) or its
+    /// canonical name (`dalle`) — [`Self::get`] resolves both.
+    pub fn set_default_provider(&mut self, gen_type: GenerationType, provider_name: &str) {
+        self.defaults.insert(gen_type, provider_name.to_string());
+    }
+
+    /// The default provider for a type, if the operator picked one that is
+    /// actually registered.
+    ///
+    /// A default that names an unregistered provider falls back to the caller
+    /// (the tools fall back to [`Self::first_for_type`]) rather than failing
+    /// the call: the provider may simply be disabled right now.
+    #[must_use]
+    pub fn default_for_type(
+        &self,
+        gen_type: GenerationType,
+    ) -> Option<(String, Arc<dyn GenerationProvider>)> {
+        let name = self.defaults.get(&gen_type)?;
+        self.get(name)
+            .map(|provider| (name.clone(), provider))
+    }
 }
 
 impl Default for GenerationProviderRegistry {
@@ -509,6 +529,52 @@ mod tests {
         let registry = GenerationProviderRegistry::new();
         assert_eq!(registry.len(), 0);
         assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn the_configured_default_provider_wins_over_the_first_of_its_type() {
+        let mut registry = GenerationProviderRegistry::new();
+        registry
+            .register("aaa-image".to_string(), create_test_provider("aaa-image"))
+            .unwrap();
+        registry
+            .register("zzz-image".to_string(), create_test_provider("zzz-image"))
+            .unwrap();
+
+        // Without a default the tools fall back to the alphabetically first
+        // provider of the type.
+        assert_eq!(
+            registry
+                .first_for_type(GenerationType::Image)
+                .map(|(name, _)| name),
+            Some("aaa-image".to_string())
+        );
+
+        registry.set_default_provider(GenerationType::Image, "zzz-image");
+        assert_eq!(
+            registry
+                .default_for_type(GenerationType::Image)
+                .map(|(name, _)| name),
+            Some("zzz-image".to_string())
+        );
+    }
+
+    #[test]
+    fn a_default_that_names_an_unregistered_provider_resolves_to_nothing() {
+        let mut registry = GenerationProviderRegistry::new();
+        registry
+            .register("dalle".to_string(), create_test_provider("dalle"))
+            .unwrap();
+        registry.set_default_provider(GenerationType::Image, "dalle-disabled");
+
+        assert!(registry.default_for_type(GenerationType::Image).is_none());
+        // The fallback the tools use still finds a working provider.
+        assert_eq!(
+            registry
+                .first_for_type(GenerationType::Image)
+                .map(|(name, _)| name),
+            Some("dalle".to_string())
+        );
     }
 
     #[test]

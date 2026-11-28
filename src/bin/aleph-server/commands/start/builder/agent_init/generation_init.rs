@@ -1,7 +1,7 @@
 //! Generation-provider registry: initial build + hot-reload subscriber.
 
 use alephcore::gateway::handlers::generation_providers::GENERATION_PROVIDERS_CHANGED_TOPIC;
-use alephcore::generation::{providers as gen_providers, GenerationProviderRegistry};
+use alephcore::generation::{providers as gen_providers, GenerationProviderRegistry, GenerationType};
 use alephcore::sync_primitives::{Arc, RwLock};
 
 /// Vault-hydrate a provider's api_key and decide whether it may register.
@@ -74,8 +74,24 @@ pub(super) fn init_generation_registry(
             }
             match gen_providers::create_provider(&name, &provider_cfg, gen_type) {
                 Ok(provider) => {
-                    if registry.register(name.clone(), provider).is_ok() {
-                        tracing::info!(provider = %name, gen_type = ?gen_type, "Registered generation provider");
+                    match registry.register(name.clone(), provider) {
+                        Ok(()) => {
+                            tracing::info!(provider = %name, gen_type = ?gen_type, "Registered generation provider");
+                        }
+                        Err(e) => {
+                            // A refused registration (a duplicate name, or a
+                            // second provider claiming the same canonical
+                            // type) used to be swallowed by `.is_ok()`, so a
+                            // provider that never made it into the registry
+                            // looked exactly like one that did. The
+                            // user-facing message carries the actionable
+                            // text (which config section to remove).
+                            tracing::warn!(
+                                provider = %name, gen_type = ?gen_type, error = %e,
+                                detail = %e.user_friendly_message(),
+                                "Skip generation provider: registration refused"
+                            );
+                        }
                     }
                 }
                 Err(e) => {
@@ -83,6 +99,7 @@ pub(super) fn init_generation_registry(
                 }
             }
         }
+        apply_default_providers(&mut registry, app_config);
         if !registry.is_empty() && !daemon {
             println!("  Generation providers: {} registered", registry.len());
         }
@@ -111,9 +128,9 @@ pub(super) fn init_generation_registry(
                 }
 
                 // Snapshot merged providers (drop read guard before creating providers)
-                let merged_snapshot = {
+                let (merged_snapshot, config_snapshot) = {
                     let cfg = config_handle.read().await;
-                    cfg.generation.merged_providers()
+                    (cfg.generation.merged_providers(), cfg.clone())
                 };
 
                 let mut new_registry = GenerationProviderRegistry::new();
@@ -130,7 +147,26 @@ pub(super) fn init_generation_registry(
                     }
                     match gen_providers::create_provider(&name, &provider_cfg, gen_type) {
                         Ok(provider) => {
-                            new_registry.register(name.clone(), provider).ok();
+                            match new_registry.register(name.clone(), provider) {
+                                Ok(()) => {
+                                    tracing::info!(
+                                        provider = %name, gen_type = ?gen_type,
+                                        "Registered generation provider on reload"
+                                    );
+                                }
+                                Err(e) => {
+                                    // The reload used to drop the error with
+                                    // `.ok()`, so a provider that was refused
+                                    // looked registered. The user-facing
+                                    // message carries the actionable text
+                                    // (which config section to remove).
+                                    tracing::warn!(
+                                        provider = %name, gen_type = ?gen_type, error = %e,
+                                        detail = %e.user_friendly_message(),
+                                        "Skip generation provider on reload: registration refused"
+                                    );
+                                }
+                            }
                         }
                         Err(e) => {
                             tracing::warn!(
@@ -141,6 +177,7 @@ pub(super) fn init_generation_registry(
                     }
                 }
 
+                apply_default_providers(&mut new_registry, &config_snapshot);
                 let mut guard = gen_reg
                     .write()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -154,6 +191,53 @@ pub(super) fn init_generation_registry(
     }
 
     registry
+}
+
+/// Record the operator's "set as default" choice in the registry.
+///
+/// The Panel writes `default_image_provider` / `default_video_provider` /
+/// `default_audio_provider` / `default_speech_provider` /
+/// `default_transcription_provider` and renders the badge, and the generation
+/// tools used to resolve their provider with `first_for_type()` — the
+/// alphabetically first provider of the right type. The choice therefore
+/// never reached the call: setting a different default changed the badge and
+/// nothing else. The registry knows both the registered providers and the
+/// configured defaults, so the default is recorded here and read back by
+/// `GenerationProviderRegistry::default_for_type`.
+fn apply_default_providers(
+    registry: &mut GenerationProviderRegistry,
+    app_config: &alephcore::Config,
+) {
+    let generation = &app_config.generation;
+    let defaults = [
+        (
+            GenerationType::Image,
+            generation.default_image_provider.as_deref(),
+        ),
+        (
+            GenerationType::Video,
+            generation.default_video_provider.as_deref(),
+        ),
+        (
+            GenerationType::Audio,
+            generation.default_audio_provider.as_deref(),
+        ),
+        (
+            GenerationType::Speech,
+            generation.default_speech_provider.as_deref(),
+        ),
+        (
+            GenerationType::Transcription,
+            generation.default_transcription_provider.as_deref(),
+        ),
+    ];
+    for (gen_type, provider_name) in defaults {
+        if let Some(provider_name) = provider_name {
+            if !provider_name.is_empty() {
+                registry.set_default_provider(gen_type, provider_name);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

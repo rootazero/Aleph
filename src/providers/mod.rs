@@ -86,7 +86,6 @@ pub mod protocols;
 pub mod reasoning_replay;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod recording_mock;
-pub mod registry;
 pub mod responses;
 pub mod retry;
 pub mod route_witness;
@@ -116,7 +115,6 @@ pub use model_override_provider::ModelOverrideProvider;
 pub use ollama::OllamaProvider;
 pub use presets::{get_preset, resolve_provider_from_model, ProviderPreset, PRESETS};
 pub use protocols::OpenAiProtocol;
-pub use registry::ProviderRegistry;
 pub use session_model_provider::{ResolvedModelTarget, SessionModelProvider};
 pub use think_level_provider::ThinkLevelProvider;
 

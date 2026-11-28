@@ -7,8 +7,13 @@ use super::types::GoogleErrorResponse;
 use crate::generation::GenerationError;
 
 /// Check if an aspect ratio is valid for Veo
+///
+/// Named after the product on purpose: `google_imagen` has its own
+/// `is_valid_aspect_ratio` with a DIFFERENT allow-list (Imagen accepts
+/// "1:1" and "4:3", Veo does not), and two same-named helpers with two
+/// different answers are a trap for the next reader.
 #[must_use]
-pub fn is_valid_aspect_ratio(ratio: &str) -> bool {
+pub fn is_valid_veo_aspect_ratio(ratio: &str) -> bool {
     ASPECT_RATIOS.contains(&ratio)
 }
 

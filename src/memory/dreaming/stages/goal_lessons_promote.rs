@@ -223,7 +223,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
         for g in goals {
-            store.put(g).unwrap();
+            store.put_without_origin(g).unwrap();
         }
         (store, dir)
     }

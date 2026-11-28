@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tracing::{debug, info};
 
-use crate::builtin_tools::error::ToolError;
-use crate::error::Result;
+use crate::error::{AlephError, Result};
 use crate::gateway::media::{detect_mime, MediaItem};
 use crate::generation::{
     GenerationData, GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
@@ -134,16 +133,16 @@ impl SpeechGenerateTool {
     }
 
     /// Validate the arguments
-    fn validate_args(args: &SpeechGenerateArgs) -> std::result::Result<(), ToolError> {
+    fn validate_args(args: &SpeechGenerateArgs) -> std::result::Result<(), AlephError> {
         // Validate text is not empty
         if args.text.trim().is_empty() {
-            return Err(ToolError::InvalidArgs("Text cannot be empty".to_string()));
+            return Err(AlephError::tool("Text cannot be empty".to_string()));
         }
 
         // Validate speed range (0.25 to 4.0)
         if let Some(speed) = args.speed {
             if !(0.25..=4.0).contains(&speed) {
-                return Err(ToolError::InvalidArgs(format!(
+                return Err(AlephError::tool(format!(
                     "Speed must be between 0.25 and 4.0, got {speed}"
                 )));
             }
@@ -156,7 +155,7 @@ impl SpeechGenerateTool {
     async fn call_impl(
         &self,
         args: SpeechGenerateArgs,
-    ) -> std::result::Result<SpeechGenerateOutput, ToolError> {
+    ) -> std::result::Result<SpeechGenerateOutput, AlephError> {
         // Validate arguments first
         Self::validate_args(&args)?;
 
@@ -177,22 +176,25 @@ impl SpeechGenerateTool {
 
             let (name, provider) = if let Some(name) = &args.provider {
                 let provider = reg.get(name).ok_or_else(|| {
-                    ToolError::InvalidArgs(format!("Provider '{name}' not found"))
+                    AlephError::tool(format!("Provider '{name}' not found"))
                 })?;
 
                 // Check if provider supports speech generation
                 if !provider.supports(GenerationType::Speech) {
-                    return Err(ToolError::InvalidArgs(format!(
+                    return Err(AlephError::tool(format!(
                         "Provider '{name}' does not support speech generation"
                     )));
                 }
 
                 (name.clone(), provider)
             } else {
-                // Find first provider that supports speech generation
-                reg.first_for_type(GenerationType::Speech).ok_or_else(|| {
-                    ToolError::InvalidArgs("No speech generation provider available".to_string())
-                })?
+                // The operator's default speech provider first; otherwise the
+                // first provider that supports speech generation.
+                reg.default_for_type(GenerationType::Speech)
+                    .or_else(|| reg.first_for_type(GenerationType::Speech))
+                    .ok_or_else(|| {
+                        AlephError::tool("No speech generation provider available".to_string())
+                    })?
             };
             let catalog = reg.get_voices_for_provider(&name);
             (name, provider, catalog)
@@ -214,12 +216,15 @@ impl SpeechGenerateTool {
 
         // Execute generation. A failure carrying a voice the provider does not
         // publish gets the catalog attached so the model can self-correct.
+        // Every other failure keeps the provider's own error taxonomy: a
+        // rate limit stays a rate limit (and stays retryable), an
+        // authentication failure stays an authentication failure.
         let output =
             provider.generate(request).await.map_err(|e| {
                 match unpublished_voice_hint(&provider_name, args.voice.as_deref(), &voice_catalog)
                 {
-                    Some(hint) => ToolError::Execution(format!("{e}.{hint}")),
-                    None => ToolError::from(e),
+                    Some(hint) => AlephError::tool(format!("{e}.{hint}")),
+                    None => AlephError::from(e),
                 }
             })?;
 
@@ -330,7 +335,7 @@ impl AlephTool for SpeechGenerateTool {
     type Output = SpeechGenerateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        self.call_impl(args).await.map_err(Into::into)
+        self.call_impl(args).await
     }
 }
 
@@ -391,10 +396,10 @@ mod tests {
         let result = SpeechGenerateTool::validate_args(&args);
         assert!(result.is_err());
 
-        if let Err(ToolError::InvalidArgs(msg)) = result {
-            assert!(msg.contains("empty"));
+        if let Err(AlephError::Other { message, .. }) = result {
+            assert!(message.contains("empty"));
         } else {
-            panic!("Expected InvalidArgs error");
+            panic!("Expected an invalid-arguments error");
         }
     }
 
@@ -411,10 +416,10 @@ mod tests {
         let result = SpeechGenerateTool::validate_args(&args);
         assert!(result.is_err());
 
-        if let Err(ToolError::InvalidArgs(msg)) = result {
-            assert!(msg.contains("0.25"));
+        if let Err(AlephError::Other { message, .. }) = result {
+            assert!(message.contains("0.25"));
         } else {
-            panic!("Expected InvalidArgs error");
+            panic!("Expected an invalid-arguments error");
         }
     }
 
@@ -431,10 +436,10 @@ mod tests {
         let result = SpeechGenerateTool::validate_args(&args);
         assert!(result.is_err());
 
-        if let Err(ToolError::InvalidArgs(msg)) = result {
-            assert!(msg.contains("4.0"));
+        if let Err(AlephError::Other { message, .. }) = result {
+            assert!(message.contains("4.0"));
         } else {
-            panic!("Expected InvalidArgs error");
+            panic!("Expected an invalid-arguments error");
         }
     }
 

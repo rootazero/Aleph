@@ -3468,6 +3468,14 @@ async fn start_server_body(
         let coordinator_visible = gc_config.coordinator_visible;
         let history_window_rounds = gc_config.history_window_rounds;
         let orchestrator = GroupChatOrchestrator::new(gc_config, &persona_configs);
+        // Persistence: the session/turn tables in the state database were
+        // never written because nothing ever handed the orchestrator or the
+        // executor a database handle. `group_chat.history` still served the
+        // in-memory session, so the feature looked alive.
+        let orchestrator = match agent_result.state_db.clone() {
+            Some(db) => orchestrator.with_database(db),
+            None => orchestrator,
+        };
         let shared_orch: alephcore::gateway::handlers::group_chat::SharedOrchestrator =
             Arc::new(tokio::sync::Mutex::new(orchestrator));
 
@@ -3481,11 +3489,21 @@ async fn start_server_body(
                 let snapshot = reg.default_provider();
                 let handle: Arc<dyn alephcore::providers::DefaultProviderHandle> =
                     Arc::new(alephcore::providers::StaticDefault::new(snapshot));
-                Arc::new(
-                    GroupChatExecutor::new(handle)
-                        .with_coordinator_visible(coordinator_visible)
-                        .with_history_window(history_window_rounds),
-                )
+                let mut executor = GroupChatExecutor::new(handle)
+                    .with_coordinator_visible(coordinator_visible)
+                    .with_history_window(history_window_rounds);
+                // Persona provider overrides (`[group_chat.personas].provider`)
+                // resolve against the shared multi-provider registry by name.
+                // Without this handle the field was inert: the executor had no
+                // registry to look in and every persona silently ran on the
+                // default provider.
+                if let Some(multi_registry) = agent_result.multi_registry.clone() {
+                    executor = executor.with_provider_registry(multi_registry);
+                }
+                if let Some(db) = agent_result.state_db.clone() {
+                    executor = executor.with_database(db);
+                }
+                Arc::new(executor)
             })
         } else {
             None

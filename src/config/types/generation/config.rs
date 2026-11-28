@@ -57,19 +57,33 @@ pub struct GenerationConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_transcription_provider: Option<String>,
 
-    /// Output directory for generated files
+    /// Where generated media is meant to land.
+    ///
     /// Supports ~ for home directory expansion.
-    /// When None, the workspace `ToolContext` fallback is used.
+    ///
+    /// RESERVED: no server-side path reads this yet. The generation tools
+    /// hand back whatever the provider returned -- a URL, or the bytes
+    /// inlined as a data URL -- and never write a file of their own, so
+    /// there is currently nothing for a directory to hold. The Panel
+    /// round-trips the value, which is why it stays in the wire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_dir: Option<PathBuf>,
 
     /// File size threshold (MB) for auto-pasting to clipboard
-    /// Files larger than this will be saved to disk instead
+    ///
+    /// RESERVED: the Panel reads and writes this value, but no code path
+    /// compares a media size against it -- neither the server nor the
+    /// Panel's media delivery implements auto-paste yet.
     #[serde(default = "default_auto_paste_threshold_mb")]
     pub auto_paste_threshold_mb: u32,
 
     /// Duration threshold (seconds) for running generation as background task
-    /// Long-running operations (video, audio) often exceed this
+    ///
+    /// RESERVED: the value round-trips to the Panel, but no code path
+    /// compares a generation duration against it. The harness decides on
+    /// its own whether a call is worth backgrounding, and the generation
+    /// tool only learns the duration after the call it would have to
+    /// background.
     #[serde(default = "default_background_task_threshold_seconds")]
     pub background_task_threshold_seconds: u32,
 
@@ -132,18 +146,6 @@ impl GenerationConfig {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Get the default provider for a specific generation type
-    #[must_use]
-    pub fn get_default_provider(&self, gen_type: GenerationType) -> Option<&str> {
-        match gen_type {
-            GenerationType::Image => self.default_image_provider.as_deref(),
-            GenerationType::Video => self.default_video_provider.as_deref(),
-            GenerationType::Audio => self.default_audio_provider.as_deref(),
-            GenerationType::Speech => self.default_speech_provider.as_deref(),
-            GenerationType::Transcription => self.default_transcription_provider.as_deref(),
-        }
     }
 
     /// Get providers that support a specific generation type.

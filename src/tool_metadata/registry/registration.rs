@@ -102,15 +102,20 @@ impl ToolRegistrar {
         // agent_switch is in defs); the former curated `switch` entry had no
         // `switch` arm and duplicated that working path, so it was removed too.
 
-        // Group chat command
+        // Group chat command. The usage hint has to match the grammar the
+        // default parser actually accepts: personas arrive as `--preset` /
+        // `--role` flags and the topic as `--topic`. The old hint
+        // (`/groupchat start <personas> [topic]`) described a spelling the
+        // parser rejects, so following the tool's own instructions produced
+        // no personas and no reply.
         let groupchat_cmd = UnifiedTool::new(
             "builtin:groupchat",
             "groupchat",
             "Start, end, or manage a multi-persona group chat",
             ToolSource::Builtin,
         )
-        .with_usage("/groupchat start <personas> [topic]")
-        .with_param_hint("[personas]")
+        .with_usage("/groupchat start --preset id1,id2 [--role \"Name: prompt\"] [--topic \"...\"] <message>")
+        .with_param_hint("[--preset id1,id2] [--role \"Name: prompt\"] [--topic \"...\"]")
         .with_sort_order(81);
 
         conflict_resolver

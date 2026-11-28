@@ -5,15 +5,30 @@
 //!
 //! # Available Providers
 //!
+//! The factory (`create_provider`) builds one provider per canonical type:
+//!
 //! - `OpenAiImageProvider` - DALL-E 3 image generation
 //! - `OpenAiTtsProvider` - `OpenAI` Text-to-Speech
+//! - `OpenAiWhisperProvider` - `OpenAI` speech-to-text
+//! - `DeepgramSttProvider` - Deepgram speech-to-text
+//! - `DeepgramTtsProvider` - Deepgram Text-to-Speech
+//! - `AzureSpeechProvider` - `Azure` Speech
+//! - `SunoProvider` - Suno music generation
+//! - `BflProvider` - Black Forest Labs image generation
+//! - `CartesiaProvider` - Cartesia Text-to-Speech
+//! - `MinimaxTtsProvider` - MiniMax Text-to-Speech
+//! - `VolcengineTtsProvider` - Volcengine Text-to-Speech
 //! - `OpenAiCompatProvider` - Generic OpenAI-compatible API for third-party proxies
 //! - `StabilityImageProvider` - Stability AI (Stable Diffusion XL) image generation
 //! - `GoogleImagenProvider` - Google Imagen 3 image generation
 //! - `GoogleVeoProvider` - Google Veo 2/3 video generation
 //! - `ReplicateProvider` - Replicate API for Flux, SDXL, `MusicGen`, and more
 //! - `ElevenLabsProvider` - `ElevenLabs` high-quality Text-to-Speech
+//! - `FalProvider` - fal.ai queue API (image / video / music)
 //! - `MidjourneyProvider` - `T8Star` Midjourney API proxy for high-quality image generation
+//!
+//! The spelling a config uses to select one of them — and the aliases each
+//! one answers to — lives in `PROVIDER_TYPE_ALIASES` inside `factory.rs`.
 //!
 //! # Factory Function
 //!
@@ -66,6 +81,7 @@ pub use deepgram_stt::DeepgramSttProvider;
 pub use deepgram_tts::DeepgramTtsProvider;
 pub use elevenlabs::ElevenLabsProvider;
 pub use factory::create_provider;
+pub(crate) use factory::canonical_provider_type;
 pub use fal::FalProvider;
 pub use google_imagen::GoogleImagenProvider;
 pub use google_veo::GoogleVeoProvider;

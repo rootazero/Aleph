@@ -78,6 +78,12 @@ fn message_to_json(msg: &GroupChatMessage) -> Value {
         "round": msg.round,
         "sequence": msg.sequence,
         "is_final": msg.is_final,
+        // The personas that were mentioned but left out of the coordinator's
+        // plan. The executor has always carried this list on the final
+        // message of a round, but this hand-written projection dropped it, so
+        // the only trace of a dropped mention was a log line and the caller
+        // never learned that its `@mention` reached nobody.
+        "dropped_targets": msg.dropped_targets,
     })
 }
 
@@ -395,7 +401,13 @@ pub async fn handle_list(request: JsonRpcRequest, orch: SharedOrchestrator) -> J
             .collect();
 
         sessions_json.push(json!({
+            // `session_id` is the spelling every addressed method reads
+            // (`group_chat.continue` / `.mention` / `.end` / `.history` all
+            // look up `session_id`). The list used to hand out `id`, so a
+            // client that listed and then acted had to rename the key
+            // itself. `id` stays as an alias for clients that already read it.
             "id": s.id,
+            "session_id": s.id,
             "topic": s.topic,
             "participants": participants,
             "current_round": s.current_round,
@@ -474,7 +486,14 @@ pub async fn handle_history(request: JsonRpcRequest, orch: SharedOrchestrator) -
 // Placeholder handlers (stateless, for HandlerRegistry::new())
 // ============================================================================
 
-const RUNTIME_REQUIRED: &str = "requires GroupChatOrchestrator runtime - wire Gateway first";
+/// Message for the placeholder handlers.
+///
+/// These stay registered when the group-chat runtime could not be built —
+/// which happens when no AI provider API key is configured. The old wording
+/// ("wire Gateway first") pointed at the wrong cause: the Gateway wiring is
+/// done, there is simply no provider to talk to.
+const RUNTIME_REQUIRED: &str =
+    "is unavailable: no group-chat runtime is configured (an AI provider API key is required)";
 
 pub async fn handle_start_placeholder(req: JsonRpcRequest) -> JsonRpcResponse {
     JsonRpcResponse::error(

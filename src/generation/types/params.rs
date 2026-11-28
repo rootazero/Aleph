@@ -208,6 +208,38 @@ impl GenerationParams {
         result.merge(other);
         result
     }
+
+    /// Whether any parameter is set
+    ///
+    /// `GenerationParams` cannot derive `PartialEq` (it holds a
+    /// `HashMap<String, serde_json::Value>`), so "is this empty?" has to be
+    /// spelled out field by field. Every configurable field is listed here on
+    /// purpose: a field added to the struct and forgotten here would make
+    /// this return `false` for a params set that carries it, and the
+    /// defaults overlay would then be skipped.
+    #[must_use]
+    pub fn configure_any_field(&self) -> bool {
+        self.width.is_some()
+            || self.height.is_some()
+            || self.aspect_ratio.is_some()
+            || self.quality.is_some()
+            || self.style.is_some()
+            || self.n.is_some()
+            || self.seed.is_some()
+            || self.format.is_some()
+            || self.duration_seconds.is_some()
+            || self.fps.is_some()
+            || self.voice.is_some()
+            || self.speed.is_some()
+            || self.language.is_some()
+            || self.model.is_some()
+            || self.negative_prompt.is_some()
+            || self.guidance_scale.is_some()
+            || self.steps.is_some()
+            || self.reference_image.is_some()
+            || self.reference_audio.is_some()
+            || !self.extra.is_empty()
+    }
 }
 
 /// Builder for `GenerationParams`

@@ -243,7 +243,7 @@ fn seed(store: &crate::goal::GoalStore, goal: &Goal, seed: &Seed) {
     match seed {
         Seed::Public(ctx) => store.put_with_origin(goal, Some(ctx)).unwrap(),
         Seed::Ordinary => store.put_with_origin(goal, None).unwrap(),
-        Seed::Legacy => store.put(goal).unwrap(),
+        Seed::Legacy => store.put_without_origin(goal).unwrap(),
     }
 }
 
@@ -657,6 +657,50 @@ async fn wake_through_the_token_gate_keeps_each_origin_kind_unchanged() {
 }
 
 // ---- census ------------------------------------------------------------
+
+/// The originless goal writer (`GoalStore::put_without_origin`) has no
+/// production caller outside `goal/store.rs`: production writes a goal and
+/// its creator origin in one transaction, with `put_with_origin`. A goal
+/// written without its origin either inherits a stale origin (and can then
+/// never fire) or silently downgrades a public goal to an ordinary one, so a
+/// new caller of the originless writer reds here.
+#[test]
+fn no_production_code_outside_the_store_calls_the_originless_goal_writer() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let readers = crate::utils::source_scan::files_whose_production_code_reads(
+        &root,
+        "put_without_origin",
+    );
+    let outside: Vec<&String> = readers
+        .iter()
+        .filter(|f| !f.ends_with("goal/store.rs"))
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "originless goal writer called outside goal/store.rs: {outside:?}"
+    );
+}
+
+/// The origin reader (`GoalStore::origin_for`) has no production caller
+/// outside `goal/store.rs`: the origin must be read INSIDE the claim's
+/// critical section, together with the goal row it is about to claim (the
+/// bound claim does that). A caller that reads the goal, then awaits, then
+/// reads the origin outside a lock re-opens the snapshot-then-claim gap, so
+/// it reds here.
+#[test]
+fn no_production_code_outside_the_store_reads_the_origin_outside_a_claim() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let readers =
+        crate::utils::source_scan::files_whose_production_code_reads(&root, "origin_for");
+    let outside: Vec<&String> = readers
+        .iter()
+        .filter(|f| !f.ends_with("goal/store.rs"))
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "goal origin read outside goal/store.rs: {outside:?}"
+    );
+}
 
 /// The unbound `GoalStore::try_claim_continuation` (session-only) has no
 /// production caller outside `goal/store.rs`: an engine that wants a claim must

@@ -46,7 +46,7 @@ pub use constants::{
     VEO2_DURATION_RANGE, VEO3_DURATIONS,
 };
 pub use helpers::{
-    is_valid_aspect_ratio, is_valid_resolution, is_valid_veo2_duration, is_valid_veo3_duration,
+    is_valid_veo_aspect_ratio, is_valid_resolution, is_valid_veo2_duration, is_valid_veo3_duration,
 };
 pub use provider::GoogleVeoProvider;
 pub use types::{
@@ -265,11 +265,11 @@ mod tests {
 
     #[test]
     fn test_aspect_ratio_validation() {
-        assert!(is_valid_aspect_ratio("16:9"));
-        assert!(is_valid_aspect_ratio("9:16"));
+        assert!(is_valid_veo_aspect_ratio("16:9"));
+        assert!(is_valid_veo_aspect_ratio("9:16"));
 
-        assert!(!is_valid_aspect_ratio("4:3"));
-        assert!(!is_valid_aspect_ratio("1:1"));
+        assert!(!is_valid_veo_aspect_ratio("4:3"));
+        assert!(!is_valid_veo_aspect_ratio("1:1"));
     }
 
     #[test]

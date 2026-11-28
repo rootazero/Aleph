@@ -76,7 +76,13 @@ where
         match tokio::time::timeout(per_attempt, attempt()).await {
             Ok(Ok(output)) => return Some(output),
             Ok(Err(e)) => {
-                warn!(provider = %provider_id, attempt = n, error = %e, "TTS generation failed");
+                warn!(
+                    provider = %provider_id,
+                    attempt = n,
+                    error = %e,
+                    detail = %e.user_friendly_message(),
+                    "TTS generation failed"
+                );
                 // Auth / invalid-param / format errors are deterministic — a
                 // retry would only burn another round-trip on the same failure.
                 if !e.is_retryable() {

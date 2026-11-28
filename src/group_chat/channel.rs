@@ -50,13 +50,15 @@ impl DefaultGroupChatCommandParser {
             "continue" => parse_continue_command(args),
             "mention" => parse_mention_command(args),
             "end" => {
-                if args.is_empty() {
-                    None
-                } else {
-                    Some(GroupChatRequest::End {
-                        session_id: args.to_string(),
-                    })
-                }
+                // An empty argument list means "end the active session in
+                // this conversation" -- the handler resolves it against the
+                // conversation's active session. The parser used to reject
+                // the empty form, which left the handler's active-session
+                // branch unreachable and made the documented
+                // `/groupchat end [session_id]` spelling a silent no-op.
+                Some(GroupChatRequest::End {
+                    session_id: args.to_string(),
+                })
             }
             _ => None,
         }

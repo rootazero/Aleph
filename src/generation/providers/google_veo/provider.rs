@@ -5,7 +5,7 @@ use super::constants::{
     DEFAULT_RESOLUTION, DEFAULT_TIMEOUT_SECS, MAX_POLL_ATTEMPTS, POLL_INTERVAL_SECS,
     VEO2_DURATION_RANGE,
 };
-use super::helpers::{is_valid_aspect_ratio, is_valid_veo3_duration, parse_error_response};
+use super::helpers::{is_valid_veo_aspect_ratio, is_valid_veo3_duration, parse_error_response};
 use super::types::{
     VeoInstance, VeoOperationResponse, VeoParameters, VeoPredictResponse, VeoRequest,
 };
@@ -239,14 +239,14 @@ impl GoogleVeoProvider {
     pub(crate) fn determine_aspect_ratio(&self, request: &GenerationRequest) -> String {
         // If explicit aspect_ratio in params, prioritize it
         if let Some(ar) = &request.params.aspect_ratio {
-            if is_valid_aspect_ratio(ar) {
+            if is_valid_veo_aspect_ratio(ar) {
                 return ar.clone();
             }
         }
 
         // If explicit aspect ratio in style, use it
         if let Some(style) = &request.params.style {
-            if is_valid_aspect_ratio(style) {
+            if is_valid_veo_aspect_ratio(style) {
                 return style.clone();
             }
         }

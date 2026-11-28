@@ -197,9 +197,13 @@ impl MidjourneyProvider {
         })?;
 
         if !response.status().is_success() {
-            return Err(GenerationError::download(
+            // Carry the status code so `is_retryable()` can tell a
+            // transient 5xx from a final 404 (an expired signed URL) or a
+            // 403 (a region-locked asset).
+            return Err(GenerationError::download_with_status(
                 format!("Image download failed with status: {}", response.status()),
                 Some(image_url.to_string()),
+                Some(response.status().as_u16()),
             ));
         }
 

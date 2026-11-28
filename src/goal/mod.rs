@@ -19,7 +19,7 @@ use crate::sync_primitives::Arc;
 /// (`constructor.rs`); `None` until then so tests / early-boot read as
 /// "no goal subsystem" and the prompt layer stays dormant.
 ///
-/// `ConsumerDecides`, and it is the shape by weight of evidence: **21**
+/// `ConsumerDecides`, and it is the shape by weight of evidence: **23**
 /// production call sites, each writing its own meaning for `None`. The
 /// standing goal block silently vanishes from the prompt
 /// (`context_blocks.rs`), a loop tick's fire decision comes back absent

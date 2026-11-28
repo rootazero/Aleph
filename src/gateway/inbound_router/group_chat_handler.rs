@@ -15,25 +15,49 @@ use super::InboundMessageRouter;
 
 impl InboundMessageRouter {
     /// Handle /groupchat command: dispatch to group chat orchestrator
+    ///
+    /// The router intercepts every `/groupchat …` message, so this function
+    /// must answer in one of three ways: handle it, report an error, or
+    /// report the usage. It used to answer only the first two, and an
+    /// unrecognised spelling — including the one the tool's own usage hint
+    /// advertised — was swallowed with no reply at all.
     pub(super) async fn handle_groupchat_command(
         &self,
         msg: &InboundMessage,
     ) -> Result<(), RoutingError> {
-        if self.group_chat_orch.is_some() {
-            if let Some(handled) = self.try_handle_group_chat(msg).await {
-                match handled {
-                    Ok(()) => return Ok(()),
-                    Err(e) => {
-                        let error_msg = OutboundMessage::text(
-                            msg.conversation_id.as_str(),
-                            format!("Group chat error: {e}"),
-                        );
-                        let _ = self.channel_registry.send(&msg.channel_id, error_msg).await;
-                        return Ok(());
-                    }
+        if self.group_chat_orch.is_none() || self.group_chat_executor.is_none() {
+            let reply = OutboundMessage::text(
+                msg.conversation_id.as_str(),
+                "🎭 Group chat is not enabled in this deployment / 本部署未启用群聊。\n\
+                 Start an Aleph server with a chat provider configured to use it.",
+            );
+            let _ = self.channel_registry.send(&msg.channel_id, reply).await;
+            return Ok(());
+        }
+        if let Some(handled) = self.try_handle_group_chat(msg).await {
+            match handled {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    let error_msg = OutboundMessage::text(
+                        msg.conversation_id.as_str(),
+                        format!("Group chat error: {e}"),
+                    );
+                    let _ = self.channel_registry.send(&msg.channel_id, error_msg).await;
+                    return Ok(());
                 }
             }
         }
+        // Neither a group-chat command nor a message in an active session:
+        // say so instead of dropping the message on the floor.
+        let usage_msg = OutboundMessage::text(
+            msg.conversation_id.as_str(),
+            "🎭 Group chat commands / 群聊命令：\n\
+             /groupchat start --preset id1,id2 [--role \"Name: prompt\"] [--topic \"...\"] <message>\n\
+             /groupchat continue <session_id> <message>\n\
+             /groupchat mention <session_id> <message with @persona_id>\n\
+             /groupchat end [session_id]",
+        );
+        let _ = self.channel_registry.send(&msg.channel_id, usage_msg).await;
         Ok(())
     }
 
@@ -221,9 +245,10 @@ impl InboundMessageRouter {
             format!("\nTopic: {topic}")
         };
         let start_msg = format!(
-            "🎭 Group chat started!\nParticipants: {}{}\n\nSend messages to continue, /groupchat end to finish.",
+            "🎭 Group chat started!\nParticipants: {}{}\nSession: {}\n\nSend messages to continue, /groupchat end to finish.",
             participant_names.join(", "),
             topic_line,
+            session_id,
         );
         let outbound = OutboundMessage::text(&conversation_id, start_msg);
         let _ = self.channel_registry.send(&msg.channel_id, outbound).await;
@@ -415,6 +440,21 @@ impl InboundMessageRouter {
             let outbound = OutboundMessage::text(msg.conversation_id.as_str(), text);
             if let Err(e) = self.channel_registry.send(&msg.channel_id, outbound).await {
                 error!("Failed to send group chat message: {}", e);
+            }
+
+            // Dropped-mention feedback: the executor puts the personas that
+            // were mentioned but left out of the coordinator's plan on the
+            // final message of the round. Without this the mentioner's only
+            // trace was a log line — the mention silently reached nobody.
+            if !gc_msg.dropped_targets.is_empty() {
+                let note = format!(
+                    "⚠️ Mentioned but not included in this round: {}",
+                    gc_msg.dropped_targets.join(", ")
+                );
+                let outbound = OutboundMessage::text(msg.conversation_id.as_str(), note);
+                if let Err(e) = self.channel_registry.send(&msg.channel_id, outbound).await {
+                    error!("Failed to send group chat dropped-mention notice: {}", e);
+                }
             }
         }
     }

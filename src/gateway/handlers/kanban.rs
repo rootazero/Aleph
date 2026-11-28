@@ -263,7 +263,7 @@ mod tests {
     #[tokio::test]
     async fn no_scope_filter_defaults_to_owner_only_status_quo() {
         let store = install_goal_store();
-        store.put(&goal_with_scope("s-mine", None)).unwrap();
+        store.put_without_origin(&goal_with_scope("s-mine", None)).unwrap();
 
         // Unrestricted caller (no CALLER_USER task-local scoped) sees
         // everything — `stamped_owner_visible`'s `None` arm. Assert
@@ -294,13 +294,13 @@ mod tests {
         let alice = crate::scope::ScopeAttribution::personal("u-alice-kanban-nofilter");
         let bob = crate::scope::ScopeAttribution::personal("u-bob-kanban-nofilter");
         store
-            .put(
+            .put_without_origin(
                 &Goal::new("s-alice-kanban-nofilter", "objective", 0, 1_000)
                     .with_owner_scope(Some(&alice)),
             )
             .unwrap();
         store
-            .put(
+            .put_without_origin(
                 &Goal::new("s-bob-kanban-nofilter", "objective", 0, 1_000)
                     .with_owner_scope(Some(&bob)),
             )
@@ -333,7 +333,7 @@ mod tests {
     async fn a_project_scope_query_from_a_non_member_gets_an_empty_set_not_an_error() {
         let store = install_goal_store();
         store
-            .put(&goal_with_scope("s-room", Some(("u-alice", "p-x"))))
+            .put_without_origin(&goal_with_scope("s-room", Some(("u-alice", "p-x"))))
             .unwrap();
 
         let resp = crate::gateway::caller_identity::CALLER_USER
@@ -354,7 +354,7 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let store = install_goal_store();
         store
-            .put(&goal_with_scope("s-room2", Some(("u-alice", "p-y"))))
+            .put_without_origin(&goal_with_scope("s-room2", Some(("u-alice", "p-y"))))
             .unwrap();
 
         crate::projects::roster::publish(crate::projects::roster::RosterSnapshot::from_pairs([
@@ -482,7 +482,7 @@ mod tests {
     #[tokio::test]
     async fn an_unparseable_scope_id_fails_closed_to_empty_not_an_error() {
         let store = install_goal_store();
-        store.put(&goal_with_scope("s-garbage", None)).unwrap();
+        store.put_without_origin(&goal_with_scope("s-garbage", None)).unwrap();
 
         let resp = handle_list(req(
             "goal.list",

@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tracing::{debug, info};
 
-use crate::builtin_tools::error::ToolError;
-use crate::error::Result;
+use crate::error::{AlephError, Result};
 use crate::gateway::media::{detect_mime, MediaItem};
 use crate::generation::{
     GenerationData, GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
@@ -76,6 +75,22 @@ pub struct ImageGenerateOutput {
     pub duration_ms: u64,
 }
 
+/// The location of one generated payload, and what kind of location it is.
+///
+/// Bytes are inlined as a base64 data URL; a URL and a file path are used as
+/// they are.
+fn location_and_kind(data: &GenerationData, default_mime: &str) -> (String, &'static str) {
+    match data {
+        GenerationData::Url(url) => (url.clone(), "url"),
+        GenerationData::LocalPath(path) => (path.clone(), "file"),
+        GenerationData::Bytes(bytes) => {
+            use base64::Engine;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+            (format!("data:{default_mime};base64,{encoded}"), "data_url")
+        }
+    }
+}
+
 /// Image generation tool using `GenerationProviderRegistry`
 ///
 /// The registry is wrapped in `Arc<RwLock<>>` for thread-safe access
@@ -101,7 +116,7 @@ impl ImageGenerateTool {
     async fn call_impl(
         &self,
         args: ImageGenerateArgs,
-    ) -> std::result::Result<ImageGenerateOutput, ToolError> {
+    ) -> std::result::Result<ImageGenerateOutput, AlephError> {
         let start = Instant::now();
 
         info!(prompt = %args.prompt, provider = ?args.provider, "Starting image generation");
@@ -112,11 +127,11 @@ impl ImageGenerateTool {
 
             if let Some(name) = &args.provider {
                 let provider = registry.get(name).ok_or_else(|| {
-                    ToolError::InvalidArgs(format!("Provider '{name}' not found"))
+                    AlephError::tool(format!("Provider '{name}' not found"))
                 })?;
 
                 if !provider.supports(GenerationType::Image) {
-                    return Err(ToolError::InvalidArgs(format!(
+                    return Err(AlephError::tool(format!(
                         "Provider '{name}' does not support image generation"
                     )));
                 }
@@ -124,9 +139,10 @@ impl ImageGenerateTool {
                 (name.clone(), provider)
             } else {
                 registry
-                    .first_for_type(GenerationType::Image)
+                    .default_for_type(GenerationType::Image)
+                    .or_else(|| registry.first_for_type(GenerationType::Image))
                     .ok_or_else(|| {
-                        ToolError::InvalidArgs("No image generation provider available".to_string())
+                        AlephError::tool("No image generation provider available".to_string())
                     })?
             }
         };
@@ -145,29 +161,18 @@ impl ImageGenerateTool {
 
         let request = GenerationRequest::image(&args.prompt).with_params(params);
 
+        // The provider's own error taxonomy is kept intact by the rich
+        // `AlephError` conversion: a rate limit stays a rate limit (and
+        // stays retryable), an authentication failure stays an
+        // authentication failure. The old `ToolError` hop collapsed every
+        // one of them into "execution failed".
         let output: crate::generation::GenerationOutput =
-            provider.generate(request).await.map_err(ToolError::from)?;
+            provider.generate(request).await.map_err(AlephError::from)?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        let (image_location, location_type) = match &output.data {
-            GenerationData::Url(url) => (url.clone(), "url".to_string()),
-            GenerationData::LocalPath(path) => (path.clone(), "file".to_string()),
-            GenerationData::Bytes(bytes) => {
-                // Convert bytes to base64 data URL
-                use base64::Engine;
-                let base64_data = base64::engine::general_purpose::STANDARD.encode(bytes);
-                let content_type = output
-                    .metadata
-                    .content_type
-                    .as_deref()
-                    .unwrap_or("image/png");
-                (
-                    format!("data:{content_type};base64,{base64_data}"),
-                    "data_url".to_string(),
-                )
-            }
-        };
+        let content_type = output.metadata.content_type.as_deref().unwrap_or("image/png");
+        let (image_location, location_type) = location_and_kind(&output.data, content_type);
 
         info!(
             provider = %provider_name,
@@ -175,6 +180,27 @@ impl ImageGenerateTool {
             location_type = %location_type,
             "Image generation completed"
         );
+
+        // The extra images of an `n > 1` request are part of the result.
+        //
+        // The providers already put them in `additional_outputs` — they were
+        // generated and paid for — but nothing read that field, so every
+        // image after the first was generated and then thrown away.
+        let mut media_items = vec![MediaItem {
+            url: image_location.clone(),
+            media_type: "image".into(),
+            mime_type: Some(detect_mime(&image_location, "image")),
+            filename: None,
+        }];
+        for extra in &output.additional_outputs {
+            let (extra_location, _) = location_and_kind(extra, content_type);
+            media_items.push(MediaItem {
+                url: extra_location.clone(),
+                media_type: "image".into(),
+                mime_type: Some(detect_mime(&extra_location, "image")),
+                filename: None,
+            });
+        }
 
         let display = if location_type == "data_url" {
             format!("🎨 图像已生成 ({:.1}s)", duration_ms as f64 / 1000.0)
@@ -185,17 +211,17 @@ impl ImageGenerateTool {
                 image_location
             )
         };
+        let display = if media_items.len() > 1 {
+            format!("{display}\n（另有 {} 张图像）", media_items.len() - 1)
+        } else {
+            display
+        };
 
         Ok(ImageGenerateOutput {
             _display: display,
-            _media: vec![MediaItem {
-                url: image_location.clone(),
-                media_type: "image".into(),
-                mime_type: Some(detect_mime(&image_location, "image")),
-                filename: None,
-            }],
+            _media: media_items,
             image_location,
-            location_type,
+            location_type: location_type.to_string(),
             prompt: args.prompt,
             revised_prompt: output.metadata.revised_prompt,
             provider: provider_name,
@@ -223,7 +249,7 @@ impl AlephTool for ImageGenerateTool {
     type Output = ImageGenerateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        self.call_impl(args).await.map_err(Into::into)
+        self.call_impl(args).await
     }
 }
 

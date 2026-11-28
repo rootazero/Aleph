@@ -353,7 +353,13 @@ pub enum WaitPark {
     /// Deadline barrier still in the future — wake with an exact timer.
     Timer { wake_ms: u64 },
     /// Task barrier — wake is event-driven (`GoalWakeService`).
-    Task { task_id: String },
+    ///
+    /// The task id is NOT carried here: the authoritative id lives on
+    /// `Goal.waiting_on_task`, and the wake service reads it from there
+    /// (`src/gateway/execution_engine/goal_wait.rs`). A copy on this enum
+    /// would be a second source of truth that nothing reads — the barrier
+    /// only needs to know WHICH KIND of barrier it is.
+    Task,
 }
 
 /// Pure barrier check: `Some` when an Active autonomous goal is parked on an
@@ -366,10 +372,8 @@ pub fn wait_parked(goal: &Goal, now_ms: u64) -> Option<WaitPark> {
     if !matches!(goal.pursuit, PursuitMode::Active { .. }) || goal.status != GoalStatus::Active {
         return None;
     }
-    if let Some(task_id) = &goal.waiting_on_task {
-        return Some(WaitPark::Task {
-            task_id: task_id.clone(),
-        });
+    if goal.waiting_on_task.is_some() {
+        return Some(WaitPark::Task);
     }
     match goal.waiting_until_ms {
         Some(until) if now_ms != 0 && until > now_ms => Some(WaitPark::Timer { wake_ms: until }),
@@ -992,12 +996,7 @@ mod tests {
     #[test]
     fn wait_parked_task_barrier_has_no_clock() {
         let g = active_goal(5).with_wait_on_task("task-9".into(), None, 1);
-        assert_eq!(
-            wait_parked(&g, 999_999_999),
-            Some(WaitPark::Task {
-                task_id: "task-9".into()
-            })
-        );
+        assert_eq!(wait_parked(&g, 999_999_999), Some(WaitPark::Task));
     }
 
     #[test]

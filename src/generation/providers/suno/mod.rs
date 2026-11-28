@@ -358,6 +358,19 @@ impl GenerationProvider for SunoProvider {
             if let Some(d) = complete_duration {
                 metadata = metadata.with_duration_seconds(d);
             }
+            // The clips other than the one returned as the primary result.
+            //
+            // They are also written into `metadata.extra["clips"]` for
+            // callers that want the full vendor record — but that map had no
+            // reader, so the alternative tracks were generated, paid for and
+            // then dropped. `additional_outputs` is the generic channel for
+            // "the rest of the media", so the alternative clips go there too.
+            let alternative_audio_urls: Vec<String> = final_clips
+                .iter()
+                .filter(|clip| clip.id != complete_id)
+                .filter_map(|clip| clip.audio_url.clone())
+                .collect();
+
             // Surface alternative clips so callers can fetch them (moving without clone).
             let alt_clips: Vec<serde_json::Value> = final_clips
                 .into_iter()
@@ -387,6 +400,10 @@ impl GenerationProvider for SunoProvider {
             let mut output =
                 GenerationOutput::new(GenerationType::Audio, GenerationData::bytes(bytes))
                     .with_metadata(metadata);
+            output.additional_outputs = alternative_audio_urls
+                .into_iter()
+                .map(GenerationData::Url)
+                .collect();
             if let Some(id) = request.request_id {
                 output = output.with_request_id(id);
             }

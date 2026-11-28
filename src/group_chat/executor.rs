@@ -13,8 +13,8 @@ use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 use crate::providers::DefaultProviderHandle;
-use crate::providers::ProviderRegistry;
 use crate::resilience::database::StateDatabase;
+use crate::ProviderRegistry;
 use crate::sync_primitives::Arc;
 
 use super::coordinator::{
@@ -31,7 +31,7 @@ use super::session::GroupChatSession;
 /// provider overrides.
 pub struct GroupChatExecutor {
     default_provider: Arc<dyn DefaultProviderHandle>,
-    provider_registry: Option<Arc<ProviderRegistry>>,
+    provider_registry: Option<Arc<dyn ProviderRegistry>>,
     coordinator_visible: bool,
     db: Option<Arc<StateDatabase>>,
     /// Sliding-window size for the coordinator's history text. Older rounds
@@ -69,8 +69,12 @@ impl GroupChatExecutor {
     ///
     /// When a persona specifies a `provider` field, the executor looks it up
     /// in this registry. Falls back to the default provider if not found.
+    ///
+    /// The registry is the trait object [`crate::ProviderRegistry`], so the
+    /// production wiring can hand over the shared multi-provider registry
+    /// instead of building a second, parallel name→provider map.
     #[must_use]
-    pub fn with_provider_registry(mut self, registry: Arc<ProviderRegistry>) -> Self {
+    pub fn with_provider_registry(mut self, registry: Arc<dyn ProviderRegistry>) -> Self {
         self.provider_registry = Some(registry);
         self
     }
@@ -104,8 +108,19 @@ impl GroupChatExecutor {
     fn resolve_provider(&self, persona: &Persona) -> Arc<dyn AiProvider> {
         if let Some(ref provider_name) = persona.provider {
             if let Some(ref registry) = self.provider_registry {
-                if let Some(provider) = registry.get(provider_name) {
-                    return provider;
+                // Strict NAME lookup: the persona names a provider, not a model.
+                // `ProviderRegistry::get` also resolves model keys (e.g.
+                // "gpt-4" → the openai provider), which would silently route
+                // a mistyped provider name to an unrelated provider instead
+                // of falling back to the default one.
+                let is_registered_name = registry
+                    .list_providers()
+                    .iter()
+                    .any(|name| name == provider_name);
+                if is_registered_name {
+                    if let Some(provider) = registry.get(provider_name) {
+                        return provider;
+                    }
                 }
                 // Dedupe the warn across rounds — without this, a misconfigured
                 // persona produces N×M log lines (N rounds × M occurrences per
@@ -627,6 +642,49 @@ mod tests {
         }
     }
 
+    /// Strict name → provider registry for the tests.
+    ///
+    /// Mirrors the production wiring: the executor resolves a persona's
+    /// `provider` field against registered provider NAMES. The
+    /// single-provider registries (`SingleProviderRegistry`,
+    /// `SwappableProviderRegistry`) answer every `get` with the same
+    /// provider, so they cannot express "this name is not registered".
+    struct NamedProviderRegistry {
+        providers: std::collections::HashMap<String, Arc<dyn AiProvider>>,
+    }
+
+    impl NamedProviderRegistry {
+        fn new() -> Self {
+            Self {
+                providers: std::collections::HashMap::new(),
+            }
+        }
+
+        fn register(&mut self, name: &str, provider: Arc<dyn AiProvider>) {
+            self.providers.insert(name.to_string(), provider);
+        }
+    }
+
+    impl ProviderRegistry for NamedProviderRegistry {
+        fn get(&self, model: &str) -> Option<Arc<dyn AiProvider>> {
+            self.providers.get(model).cloned()
+        }
+
+        fn default_provider(&self) -> Arc<dyn AiProvider> {
+            self.providers
+                .values()
+                .next()
+                .cloned()
+                .expect("test registry has no provider")
+        }
+
+        fn list_providers(&self) -> Vec<String> {
+            let mut names: Vec<String> = self.providers.keys().cloned().collect();
+            names.sort();
+            names
+        }
+    }
+
     fn test_personas() -> Vec<Persona> {
         vec![
             Persona {
@@ -661,7 +719,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_round_basic() {
         // Coordinator returns a plan selecting both personas in order
-        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":"Focus on architecture"},{"persona_id":"pm","order":1,"guidance":"Focus on user impact"}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":"Focus on architecture"},{"persona_id":"pm","order":1,"guidance":"Focus on user impact"}]}"#;
 
         let provider = Arc::new(SequentialMockProvider::new(vec![
             coordinator_response.to_string(),
@@ -708,7 +766,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_round_single_persona() {
         // Coordinator selects only one persona
-        let coordinator_response = r#"{"respondents":[{"persona_id":"pm","order":0,"guidance":"Be concise"}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"pm","order":0,"guidance":"Be concise"}]}"#;
 
         let provider = Arc::new(SequentialMockProvider::new(vec![
             coordinator_response.to_string(),
@@ -803,7 +861,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_round_persona_invocation_failure() {
         // Coordinator succeeds, but persona call fails
-        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":"go"}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":"go"}]}"#;
 
         struct CoordinatorOnlyProvider {
             coordinator_response: String,
@@ -856,7 +914,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_round_persona_not_found() {
         // Coordinator references a persona not in the session
-        let coordinator_response = r#"{"respondents":[{"persona_id":"ghost","order":0,"guidance":"boo"}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"ghost","order":0,"guidance":"boo"}]}"#;
 
         let provider = Arc::new(SequentialMockProvider::new(vec![
             coordinator_response.to_string()
@@ -882,7 +940,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_round_increments_round_number() {
-        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""}]}"#;
 
         let provider = Arc::new(SequentialMockProvider::new(vec![
             coordinator_response.to_string(),
@@ -915,7 +973,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_prior_discussion_accumulates() {
-        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":"go first"},{"persona_id":"pm","order":1,"guidance":"go second"}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":"go first"},{"persona_id":"pm","order":1,"guidance":"go second"}]}"#;
 
         struct EchoAfterCoordinator {
             coordinator_response: String,
@@ -975,7 +1033,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_coordinator_visible() {
-        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":"go"}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":"go"}]}"#;
 
         let provider = Arc::new(SequentialMockProvider::new(vec![
             coordinator_response.to_string(),
@@ -1009,16 +1067,14 @@ mod tests {
     #[tokio::test]
     async fn test_per_persona_provider_resolution() {
         // Create a provider registry with a named provider
-        let registry = ProviderRegistry::new();
+        let mut registry = NamedProviderRegistry::new();
         let special_provider = Arc::new(SequentialMockProvider::new(vec![
             "Special provider response.".to_string(),
         ]));
-        registry
-            .register("special".to_string(), special_provider)
-            .unwrap();
+        registry.register("special", special_provider);
 
         // Coordinator returns plan selecting the persona with provider override
-        let coordinator_response = r#"{"respondents":[{"persona_id":"custom","order":0,"guidance":""}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"custom","order":0,"guidance":""}]}"#;
 
         let default_provider: Arc<dyn AiProvider> = Arc::new(SequentialMockProvider::new(vec![
             coordinator_response.to_string(),
@@ -1057,7 +1113,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_round_respects_order_field() {
-        let coordinator_response = r#"{"respondents":[{"persona_id":"pm","order":1,"guidance":"second"},{"persona_id":"arch","order":0,"guidance":"first"}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"pm","order":1,"guidance":"second"},{"persona_id":"arch","order":0,"guidance":"first"}]}"#;
 
         let provider = Arc::new(SequentialMockProvider::new(vec![
             coordinator_response.to_string(),
@@ -1098,7 +1154,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         // Coordinator succeeds; the first persona succeeds; the second fails.
-        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""},{"persona_id":"pm","order":1,"guidance":""}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""},{"persona_id":"pm","order":1,"guidance":""}]}"#;
 
         struct PartialFailProvider {
             coordinator_response: String,
@@ -1160,7 +1216,7 @@ mod tests {
         // Coordinator returns a single-persona plan; the persona references a
         // provider name that does not exist in the registry, so the executor
         // must fall back to the default AND emit the warn only on first miss.
-        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""}]}"#;
 
         struct TwoCallProvider {
             coordinator_response: String,
@@ -1193,11 +1249,11 @@ mod tests {
             call_count: AtomicUsize::new(0),
         });
 
-        let registry = crate::providers::ProviderRegistry::new();
+        let mut registry = NamedProviderRegistry::new();
         // Register a sentinel "arch" provider that has NO matching name;
         // we resolve via the registry path but on a name that won't be
         // found, triggering the warn path.
-        let _ = registry.register("other".to_string(), provider.clone());
+        registry.register("other", provider.clone());
 
         let executor =
             GroupChatExecutor::new(Arc::new(crate::providers::StaticDefault::new(provider)))
@@ -1238,7 +1294,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_plan_loop_is_bounded() {
         // Provider returns an empty-plan coordinator response on every call.
-        let empty_plan = r#"{"respondents":[],"need_summary":false}"#.to_string();
+        let empty_plan = r#"{"respondents":[]}"#.to_string();
         let mut session = make_session().with_max_rounds(Some(1));
         let cap = session.max_no_commit_attempts();
         // SequentialMockProvider drains its response Vec in call order and
@@ -1286,10 +1342,10 @@ mod tests {
     #[tokio::test]
     async fn test_successful_commit_resets_no_commit_counter() {
         // Three calls: empty plan → empty plan → real plan with a respondent.
-        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""}]}"#;
         let provider = Arc::new(SequentialMockProvider::new(vec![
-            r#"{"respondents":[],"need_summary":false}"#.to_string(),
-            r#"{"respondents":[],"need_summary":false}"#.to_string(),
+            r#"{"respondents":[]}"#.to_string(),
+            r#"{"respondents":[]}"#.to_string(),
             coordinator_response.to_string(),
             // Persona response for the third call.
             "ok".to_string(),

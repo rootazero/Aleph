@@ -2556,7 +2556,7 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
     // what stamps the pending wake the fire-time gate checks.
     let now = 1_000u64;
     store
-        .put(
+        .put_without_origin(
             &Goal::new(&session_str, "keep going", 0, now)
                 .with_pursuit(PursuitMode::Active { max_iterations: 5 }),
         )
@@ -2723,7 +2723,7 @@ async fn a_goal_hook_continuation_acts_for_the_stored_author_not_the_last_speake
     let session = SessionKey::main("r11-hook-author");
     let session_str = session.to_key_string();
     store
-        .put(
+        .put_without_origin(
             &Goal::new(&session_str, "keep going", 0, 0)
                 .with_pursuit(PursuitMode::Active { max_iterations: 5 })
                 .with_author(Some("u-bob".into())),
@@ -2883,7 +2883,7 @@ async fn a_refused_goal_continuation_blocks_the_goal_with_the_reason() {
     let store = goal_store_global();
     let session = "agent:main:fire-authority-refused-goal";
     store
-        .put(
+        .put_without_origin(
             &crate::goal::Goal::new(session, "obj", 0, 0)
                 .with_pursuit(crate::goal::PursuitMode::Active { max_iterations: 5 }),
         )
@@ -2954,7 +2954,7 @@ async fn a_transiently_parked_goal_is_actually_woken() {
     // `now_ms()`, so the row has to live in that coordinate system.
     let now = super::goal_continuation::now_ms();
     store
-        .put(
+        .put_without_origin(
             &Goal::new(&session_str, "keep going", 0, now)
                 .with_pursuit(PursuitMode::Active { max_iterations: 5 }),
         )
@@ -3060,7 +3060,7 @@ async fn a_spend_exhausted_failure_blocks_the_goal_instead_of_parking_it() {
     let session_str = session.to_key_string();
     let now = super::goal_continuation::now_ms();
     store
-        .put(
+        .put_without_origin(
             &Goal::new(&session_str, "keep going", 0, now)
                 .with_pursuit(PursuitMode::Active { max_iterations: 5 }),
         )
@@ -3128,7 +3128,7 @@ async fn a_fired_timer_wake_leaves_nothing_for_the_sweep_to_claim() {
     // the claim below arms it while it is still in the future (the claim's lazy
     // self-clear only drops an already-elapsed barrier).
     store
-        .put(
+        .put_without_origin(
             &Goal::new(&session_str, "keep going", 0, now)
                 .with_pursuit(PursuitMode::Active { max_iterations: 5 })
                 .with_wait_until(now + 1_000, Some("cooldown".into()), now),

@@ -510,6 +510,15 @@ impl<R: ToolRegistry + ?Sized + 'static> LoopTool for RegistryToolAdapter<R> {
                     crate::error::AlephError::NetworkError { .. }
                         | crate::error::AlephError::IoError(..)
                         | crate::error::AlephError::Timeout { .. }
+                        // A rate limit is not a verdict on the call: the same
+                        // request can succeed a moment later, and the error
+                        // taxonomy already calls `RateLimited` transient
+                        // (`ToolErrorKind::is_transient`). Leaving it out here
+                        // made a rate-limited call non-retryable, which put it
+                        // into the harness's cross-batch failure memo — the
+                        // very retry the error text invites was then refused
+                        // for the rest of the run.
+                        | crate::error::AlephError::RateLimitError { .. }
                 );
                 ToolResult::Error {
                     error: e.to_string(),

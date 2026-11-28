@@ -697,10 +697,22 @@ mod tests {
     // === Image editing tests ===
 
     #[test]
-    fn test_supports_image_editing() {
+    fn test_supports_image_editing_needs_an_edit_endpoint() {
+        // Without an explicit edit endpoint the derived URL is a guess: for
+        // an endpoint that does not expose `/edits` it silently resolves to
+        // the GENERATE url. Claiming editing support would promise a
+        // capability the provider may not have.
         let provider =
             OpenAiCompatProvider::new("proxy", "key", "https://api.example.com", None).unwrap();
+        assert!(!provider.supports_image_editing());
 
+        let provider = OpenAiCompatProvider::new(
+            "proxy",
+            "key",
+            "https://api.example.com",
+            Some("https://api.example.com/v1/images/edits".to_string()),
+        )
+        .unwrap();
         assert!(provider.supports_image_editing());
     }
 

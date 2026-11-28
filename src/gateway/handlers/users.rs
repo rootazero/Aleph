@@ -1963,14 +1963,14 @@ mod tests {
         let alice_attr = crate::scope::ScopeAttribution::personal("u-alice-p0t5");
         let bob_attr = crate::scope::ScopeAttribution::personal("u-bob-p0t5");
         goal_store
-            .put(
+            .put_without_origin(
                 &crate::goal::Goal::new("agent:g-alice-p0t5:main", "obj", 0, 0)
                     .with_pursuit(crate::goal::PursuitMode::Active { max_iterations: 5 })
                     .with_owner_scope(Some(&alice_attr)),
             )
             .unwrap();
         goal_store
-            .put(
+            .put_without_origin(
                 &crate::goal::Goal::new("agent:g-bob-p0t5:main", "obj", 0, 0)
                     .with_pursuit(crate::goal::PursuitMode::Active { max_iterations: 5 })
                     .with_owner_scope(Some(&bob_attr)),
@@ -2879,7 +2879,7 @@ mod tests {
             Some(u) => goal.with_owner_scope(Some(&crate::scope::ScopeAttribution::personal(u))),
             None => goal,
         };
-        handles.goals.as_ref().unwrap().put(&goal).unwrap();
+        handles.goals.as_ref().unwrap().put_without_origin(&goal).unwrap();
     }
 
     fn seed_loop(handles: &BackgroundWorkHandles, session: &str, owner: Option<&str>) {

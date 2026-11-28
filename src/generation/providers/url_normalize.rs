@@ -35,21 +35,6 @@ impl ResolvedUrl {
         }
     }
 
-    /// Get the secondary endpoint URL (edit for image, STT for speech).
-    /// Returns None for custom URLs or types without secondary endpoints.
-    #[must_use]
-    pub fn secondary_endpoint(&self, gen_type: GenerationType) -> Option<String> {
-        match self {
-            Self::Custom(_) => None,
-            Self::Standard(base) => {
-                let suffix = match gen_type {
-                    GenerationType::Image => Some("/v1/images/edits"),
-                    _ => None,
-                };
-                suffix.map(|s| format!("{base}{s}"))
-            }
-        }
-    }
 }
 
 /// Resolve a user-configured URL into a `ResolvedUrl`.
@@ -162,15 +147,6 @@ mod tests {
     }
 
     #[test]
-    fn test_secondary_endpoint_image_edit() {
-        let r = ResolvedUrl::Standard("https://api.example.com".into());
-        assert_eq!(
-            r.secondary_endpoint(GenerationType::Image),
-            Some("https://api.example.com/v1/images/edits".into())
-        );
-    }
-
-    #[test]
     fn test_primary_endpoint_transcription() {
         let r = resolve_base_url("https://api.openai.com");
         assert_eq!(
@@ -180,23 +156,11 @@ mod tests {
     }
 
     #[test]
-    fn test_secondary_endpoint_video_none() {
-        let r = ResolvedUrl::Standard("https://api.example.com".into());
-        assert_eq!(r.secondary_endpoint(GenerationType::Video), None);
-    }
-
-    #[test]
     fn test_custom_url_primary() {
         let r = ResolvedUrl::Custom("https://custom.api.com/my/endpoint".into());
         assert_eq!(
             r.primary_endpoint(GenerationType::Speech),
             "https://custom.api.com/my/endpoint"
         );
-    }
-
-    #[test]
-    fn test_custom_url_no_secondary() {
-        let r = ResolvedUrl::Custom("https://custom.api.com/my/endpoint".into());
-        assert_eq!(r.secondary_endpoint(GenerationType::Image), None);
     }
 }

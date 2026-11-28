@@ -47,7 +47,12 @@ use std::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
 /// Default API endpoint for Google AI (Gemini API)
-const DEFAULT_ENDPOINT: &str = "https://generativelanguage.googleapis.com";
+///
+/// `pub(crate)` so the connectivity probe can fall back to it: the Google
+/// presets carry no `base_url`, and without this the probe answered
+/// "未配置 base_url，无法测试连接" for a provider whose endpoint is right
+/// there in this module.
+pub(crate) const DEFAULT_ENDPOINT: &str = "https://generativelanguage.googleapis.com";
 
 /// Default model for image generation
 const DEFAULT_MODEL: &str = "imagen-3.0-generate-002";
@@ -63,9 +68,6 @@ const DEFAULT_ASPECT_RATIO: &str = "1:1";
 
 /// Available aspect ratios for Imagen
 pub const ASPECT_RATIOS: &[&str] = &["1:1", "3:4", "4:3", "9:16", "16:9"];
-
-/// Available image sizes
-pub const IMAGE_SIZES: &[&str] = &["1K", "2K"];
 
 /// Person generation settings
 pub const PERSON_GENERATION_OPTIONS: &[&str] = &["dont_allow", "allow_adult", "allow_all"];
@@ -229,14 +231,14 @@ impl GoogleImagenProvider {
     fn determine_aspect_ratio(&self, request: &GenerationRequest) -> String {
         // If explicit aspect_ratio in params, prioritize it
         if let Some(ar) = &request.params.aspect_ratio {
-            if ASPECT_RATIOS.contains(&ar.as_str()) {
+            if is_valid_aspect_ratio(ar) {
                 return ar.clone();
             }
         }
 
         // If explicit aspect ratio in style, use it
         if let Some(style) = &request.params.style {
-            if ASPECT_RATIOS.contains(&style.as_str()) {
+            if is_valid_aspect_ratio(style) {
                 return style.clone();
             }
         }
@@ -603,12 +605,6 @@ pub fn is_valid_aspect_ratio(ratio: &str) -> bool {
     ASPECT_RATIOS.contains(&ratio)
 }
 
-/// Check if an image size is valid
-#[must_use]
-pub fn is_valid_image_size(size: &str) -> bool {
-    IMAGE_SIZES.contains(&size)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -798,15 +794,6 @@ mod tests {
         assert!(!is_valid_aspect_ratio("2:1"));
         assert!(!is_valid_aspect_ratio(""));
         assert!(!is_valid_aspect_ratio("invalid"));
-    }
-
-    #[test]
-    fn test_image_size_validation() {
-        assert!(is_valid_image_size("1K"));
-        assert!(is_valid_image_size("2K"));
-
-        assert!(!is_valid_image_size("4K"));
-        assert!(!is_valid_image_size(""));
     }
 
     // === Error parsing tests ===

@@ -1336,10 +1336,14 @@ where
                     // chaining is transitive, since continuation N's own post_run
                     // reads them back out of N's metadata.
                     let policy_meta = carry_policy_metadata(&request.metadata);
-                    // …and this turn's project root. It is NOT recoverable later:
-                    // neither `goal` nor `looping` persists it, and
+                    // …and this turn's project root. It is NOT recoverable from
+                    // the ambient context at hook time:
                     // `projects::run_context` is already closed by the time this
-                    // hook runs. Without it an unattended continuation silently
+                    // hook runs. (`goal` DOES persist its own copy —
+                    // `Goal.workspace` — so a goal's own continuation can
+                    // rebuild it in the same project; `looping` has no such
+                    // field, so a hook-less loop wake falls back to the agent
+                    // workspace.) Without it an unattended continuation silently
                     // drops the project's CLAUDE.md / AGENTS.md and project
                     // skills, and its workspace_directive tells the model its cwd
                     // is the agent workspace.

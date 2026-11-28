@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tracing::info;
 
-use crate::builtin_tools::error::ToolError;
-use crate::error::Result;
+use crate::error::{AlephError, Result};
 use crate::gateway::media::{detect_mime, MediaItem};
 use crate::generation::{
     GenerationData, GenerationProviderRegistry, GenerationRequest, GenerationType,
@@ -53,7 +52,7 @@ impl AudioGenerateTool {
     async fn call_impl(
         &self,
         args: AudioGenerateArgs,
-    ) -> std::result::Result<AudioGenerateOutput, ToolError> {
+    ) -> std::result::Result<AudioGenerateOutput, AlephError> {
         let start = Instant::now();
 
         info!(prompt = %args.prompt, provider = ?args.provider, "Starting audio generation");
@@ -64,25 +63,27 @@ impl AudioGenerateTool {
 
             if let Some(ref name) = args.provider {
                 let p = reg.get(name).ok_or_else(|| {
-                    ToolError::InvalidArgs(format!("Audio provider '{name}' not found"))
+                    AlephError::tool(format!("Audio provider '{name}' not found"))
                 })?;
                 if !p.supports(GenerationType::Audio) {
-                    return Err(ToolError::InvalidArgs(format!(
+                    return Err(AlephError::tool(format!(
                         "Provider '{name}' does not support audio generation"
                     )));
                 }
                 (name.clone(), p)
             } else {
-                reg.first_for_type(GenerationType::Audio).ok_or_else(|| {
-                    ToolError::Execution("No audio generation provider available".to_string())
-                })?
+                reg.default_for_type(GenerationType::Audio)
+                    .or_else(|| reg.first_for_type(GenerationType::Audio))
+                    .ok_or_else(|| {
+                        AlephError::tool("No audio generation provider available".to_string())
+                    })?
             }
         };
 
         info!(provider = %provider_name, "Using audio provider");
 
         let request = GenerationRequest::audio(&args.prompt);
-        let output = provider.generate(request).await.map_err(ToolError::from)?;
+        let output = provider.generate(request).await.map_err(AlephError::from)?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -90,7 +91,7 @@ impl AudioGenerateTool {
             GenerationData::Url(url) => (url.clone(), "url"),
             GenerationData::LocalPath(path) => (path.clone(), "file"),
             GenerationData::Bytes(_) => {
-                return Err(ToolError::Execution(
+                return Err(AlephError::tool(
                     "Audio provider returned raw bytes — expected URL or file path".to_string(),
                 ));
             }
@@ -102,14 +103,38 @@ impl AudioGenerateTool {
             audio_location
         );
 
+        // A provider that returns more than one track (Suno usually answers
+        // with two clips) puts the rest in `additional_outputs`. Nothing read
+        // that field, so every clip after the first was generated and then
+        // thrown away.
+        let mut media_items = vec![MediaItem {
+            url: audio_location.clone(),
+            media_type: "audio".into(),
+            mime_type: Some(detect_mime(&audio_location, "audio")),
+            filename: None,
+        }];
+        for extra in &output.additional_outputs {
+            let extra_location = match extra {
+                GenerationData::Url(url) => url.clone(),
+                GenerationData::LocalPath(path) => path.clone(),
+                GenerationData::Bytes(_) => continue,
+            };
+            media_items.push(MediaItem {
+                url: extra_location.clone(),
+                media_type: "audio".into(),
+                mime_type: Some(detect_mime(&extra_location, "audio")),
+                filename: None,
+            });
+        }
+        let display = if media_items.len() > 1 {
+            format!("{display}\n（另有 {} 段音频）", media_items.len() - 1)
+        } else {
+            display
+        };
+
         Ok(AudioGenerateOutput {
             _display: display,
-            _media: vec![MediaItem {
-                url: audio_location.clone(),
-                media_type: "audio".into(),
-                mime_type: Some(detect_mime(&audio_location, "audio")),
-                filename: None,
-            }],
+            _media: media_items,
             audio_location,
             location_type: location_type.to_string(),
             prompt: args.prompt,
@@ -136,6 +161,6 @@ impl AlephTool for AudioGenerateTool {
     type Output = AudioGenerateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        self.call_impl(args).await.map_err(Into::into)
+        self.call_impl(args).await
     }
 }

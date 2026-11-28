@@ -355,6 +355,31 @@ impl Drop for ScratchClip {
     }
 }
 
+#[cfg(test)]
+mod audio_mime_tests {
+    use super::turn_audio_mime;
+
+    #[test]
+    fn the_turn_path_accepts_the_containers_the_local_endpoint_can_return() {
+        // The local BYO endpoint defaults to opus (`[voice.local]
+        // tts_format`), and its server answers `audio/ogg`. Refusing that
+        // made the default local-voice configuration fail every turn.
+        assert_eq!(turn_audio_mime("audio/mpeg"), Some("audio/mpeg"));
+        assert_eq!(turn_audio_mime("audio/mp3"), Some("audio/mpeg"));
+        assert_eq!(turn_audio_mime("audio/wav"), Some("audio/wav"));
+        assert_eq!(turn_audio_mime("audio/x-wav"), Some("audio/wav"));
+        assert_eq!(turn_audio_mime("audio/ogg"), Some("audio/ogg"));
+        assert_eq!(turn_audio_mime("audio/opus"), Some("audio/ogg"));
+    }
+
+    #[test]
+    fn the_turn_path_still_refuses_a_container_it_cannot_play() {
+        assert_eq!(turn_audio_mime("audio/flac"), None);
+        assert_eq!(turn_audio_mime("audio/pcm"), None);
+        assert_eq!(turn_audio_mime(""), None);
+    }
+}
+
 #[cfg(all(test, unix))]
 mod scratch_tests {
     use super::ScratchClip;
@@ -380,6 +405,23 @@ mod scratch_tests {
 }
 
 /// Accept only the whole-turn wire format, not arbitrary RIFF chunks or legacy media.
+/// The audio container the voice-turn reply may carry.
+///
+/// The turn path answers with the raw bytes plus a mime type, and the Panel
+/// hands that mime straight to the player. Opus has to be on this list: the
+/// local BYO endpoint defaults to `[voice.local] tts_format = "opus"`, its
+/// server returns `audio/ogg`, and the turn path used to refuse it — so the
+/// default local-voice configuration failed every turn with
+/// `unsupported_output`.
+fn turn_audio_mime(provider_mime: &str) -> Option<&'static str> {
+    match provider_mime {
+        "audio/mpeg" | "audio/mp3" => Some("audio/mpeg"),
+        "audio/wav" | "audio/x-wav" => Some("audio/wav"),
+        "audio/ogg" | "audio/opus" => Some("audio/ogg"),
+        _ => None,
+    }
+}
+
 fn decode_voice_wav(input: &str) -> Result<Vec<u8>, VoiceErrorKind> {
     if input.len() > MAX_WAV_BASE64_BYTES {
         return Err(VoiceErrorKind::TooLarge);
@@ -567,11 +609,8 @@ pub fn register_synthesis(
                 .data
                 .filter(|bytes| !bytes.is_empty())
                 .ok_or(VoiceErrorKind::UnsupportedOutput)?;
-            let mime = match attachment.mime_type.as_str() {
-                "audio/mpeg" | "audio/mp3" => "audio/mpeg",
-                "audio/wav" | "audio/x-wav" => "audio/wav",
-                _ => return Err(VoiceErrorKind::UnsupportedOutput),
-            };
+            let mime = turn_audio_mime(&attachment.mime_type)
+                .ok_or(VoiceErrorKind::UnsupportedOutput)?;
             let base64_size =
                 base64::encoded_len(bytes.len(), true).ok_or(VoiceErrorKind::TooLarge)?;
             let mut response = JsonRpcResponse::success(

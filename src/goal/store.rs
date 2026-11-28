@@ -3,6 +3,25 @@
 //! One row per session (PK = `session_id`), goal serialized as a JSON blob.
 //! Opens via the process-safe helper (`open_sqlite_safe`, Spec C) so it
 //! never races the daemon's other `SQLite` writers. Survives `/resume`.
+//!
+//! Two writers exist, and only one of them may be used outside this module:
+//!
+//! - [`GoalStore::put_with_origin`] — the production writer. Writes the goal
+//!   row and the session's telecom origin in one transaction.
+//! - [`GoalStore::put_without_origin`] — writes the goal row alone. It is
+//!   crate-private and quarantined by a census, because a goal written
+//!   without its origin either inherits a stale origin (and can then never
+//!   fire) or silently downgrades a public goal to an ordinary one.
+//!
+//! One reader of the origin exists, and it is the same story: the origin must
+//! be read inside the claim's critical section, so the public wrapper
+//! ([`GoalStore::origin_for`]) is crate-private and quarantined too.
+//!
+//! [`GoalStore::try_claim_continuation`] (the UNBOUND claim) is likewise
+//! deliberately unreachable from production code: it re-opens the
+//! snapshot-then-claim gap that [`GoalStore::try_claim_continuation_bound`]
+//! closes, and a census in the execution-engine tests reds the moment a
+//! caller appears. It is kept public only so the census can find it.
 
 use std::path::Path;
 
@@ -212,8 +231,23 @@ impl GoalStore {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Upsert the goal for its session (replaces any existing one).
-    pub fn put(&self, goal: &Goal) -> Result<()> {
+    /// Upsert the goal for its session (replaces any existing one) WITHOUT
+    /// touching the session's telecom-origin row.
+    ///
+    /// This is NOT the writer production uses. A goal row written here
+    /// inherits whatever origin row the session already had:
+    ///
+    /// - a session that already had an origin row keeps the STALE marker,
+    ///   which `origin_locked` refuses ("origin belongs to a different
+    ///   goal"), so the goal can never fire;
+    /// - a session that never had one reads as `LegacyUnproven`, which
+    ///   restores as `None` — a public goal silently downgraded to ordinary.
+    ///
+    /// Production writers must use [`Self::put_with_origin`], which writes
+    /// the goal and its origin in one transaction. A census in the
+    /// execution-engine tests pins that: no production code outside this
+    /// module may call this writer.
+    pub(crate) fn put_without_origin(&self, goal: &Goal) -> Result<()> {
         Self::put_locked(&self.lock(), goal)
     }
 
@@ -264,7 +298,14 @@ impl GoalStore {
     ///   origin) -> `Refuse`: the new goal must neither inherit the old origin
     ///   nor be assumed ordinary;
     /// - unreadable / unknown marker -> `Refuse`.
-    pub fn origin_for(&self, goal: &Goal) -> Result<crate::gateway::telecom::MarkerRestore> {
+    ///
+    /// Crate-private on purpose: the origin must be read INSIDE the claim's
+    /// critical section, together with the goal row it is about to claim (see
+    /// [`Self::origin_locked`]). A caller that read the goal, then awaited,
+    /// then read the origin here would re-open the snapshot-then-claim gap
+    /// the bound claim exists to close. A census in the execution-engine
+    /// tests pins that: no production code outside this module may call it.
+    pub(crate) fn origin_for(&self, goal: &Goal) -> Result<crate::gateway::telecom::MarkerRestore> {
         Self::origin_locked(&self.lock(), goal)
     }
 
@@ -1611,7 +1652,7 @@ mod tests {
         let g = Goal::new("sess-wait", "obj", 0, 1_000)
             .with_pursuit(PursuitMode::Active { max_iterations: 5 })
             .with_wait_until(61_000, Some("cooldown".into()), 1_000);
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
 
         let ContinuationDecision::Fire {
             delay_ms,
@@ -1667,7 +1708,7 @@ mod tests {
         let g = Goal::new("sess-unpark", "obj", 0, 1_000)
             .with_pursuit(PursuitMode::Active { max_iterations: 5 })
             .with_wait_until(61_000, None, 1_000);
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
         // Parking run's post_run claims the timer (pending marker = wake).
         let ContinuationDecision::Fire { wake_ms, .. } = store
             .try_claim_continuation("sess-unpark", None, 1_000, false, None)
@@ -1723,7 +1764,7 @@ mod tests {
             .with_pursuit(PursuitMode::Active { max_iterations: 2 })
             .with_wait_until(61_000, Some("cooldown".into()), 1_000);
         g.continuations_used = 2; // exhausted
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
         // A parked timer with no runway must Block now, not arm a timer that
         // would only wake into an immediate Block.
         let ContinuationDecision::Exhausted { note } = store
@@ -1749,7 +1790,7 @@ mod tests {
             .with_pursuit(PursuitMode::Active { max_iterations: 5 })
             .with_deadline_ms(Some(30_000))
             .with_wait_until(200_000, Some("long cooldown".into()), 1_000);
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
 
         let ContinuationDecision::Exhausted { note } = store
             .try_claim_continuation("sess-oob", None, 1_000, false, None)
@@ -1787,7 +1828,7 @@ mod tests {
             .with_baseline(1_000, 1_000)
             .with_deadline_ms(Some(30_000))
             .with_wait_until(200_000, None, 1_000);
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
 
         let ContinuationDecision::Exhausted { note } = store
             .try_claim_continuation("sess-both", Some(9_999), 1_000, false, None)
@@ -1809,7 +1850,7 @@ mod tests {
             .with_pursuit(PursuitMode::Active { max_iterations: 5 })
             .with_deadline_ms(Some(300_000))
             .with_wait_until(61_000, None, 1_000);
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
         let ContinuationDecision::Fire { wake_ms, .. } = store
             .try_claim_continuation("sess-ib", None, 1_000, false, None)
             .unwrap()
@@ -1849,7 +1890,7 @@ mod tests {
         let g = Goal::new("sess-task", "obj", 0, 1_000)
             .with_pursuit(PursuitMode::Active { max_iterations: 5 })
             .with_wait_on_task("task-42".into(), None, 1_000);
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
 
         assert!(matches!(
             store
@@ -1888,7 +1929,7 @@ mod tests {
         let g = Goal::new("sess-tree", "obj", 0, 1)
             .with_pursuit(PursuitMode::Active { max_iterations: 5 })
             .with_budget(Some(10_000));
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
         assert!(store
             .register_budget_member("sess-tree", "agent:child:main", 100, 2)
             .unwrap());
@@ -1906,7 +1947,7 @@ mod tests {
             .register_budget_member("sess-tree", "sess-tree", 0, 4)
             .unwrap());
         // Unbudgeted goal → not enrolled.
-        store.put(&Goal::new("sess-plain", "obj", 0, 1)).unwrap();
+        store.put_without_origin(&Goal::new("sess-plain", "obj", 0, 1)).unwrap();
         assert!(!store
             .register_budget_member("sess-plain", "agent:child:main", 0, 5)
             .unwrap());
@@ -1916,7 +1957,7 @@ mod tests {
     fn commit_field_update_preserves_live_budget_members() {
         let (store, _d) = temp_store();
         let g = Goal::new("sess-merge", "obj", 0, 1).with_budget(Some(10_000));
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
         // Tool snapshots the goal, then a delegation enrolls a member.
         let tool_snapshot = store.get("sess-merge").unwrap().unwrap();
         assert!(store
@@ -1940,7 +1981,7 @@ mod tests {
         let g = Goal::new("sess-done", "obj", 0, 0)
             .with_wait_on_task("t".into(), None, 1)
             .with_status(GoalStatus::Complete, 2);
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
         assert!(!store
             .clear_wait_barrier("sess-done", Some("t"), None, 3)
             .unwrap());
@@ -1955,10 +1996,10 @@ mod tests {
         let (store, _d) = temp_store();
         // The goal waits on task A, then is re-pointed at task B.
         store
-            .put(&Goal::new("sess-1", "obj", 0, 0).with_wait_on_task("a".into(), None, 1))
+            .put_without_origin(&Goal::new("sess-1", "obj", 0, 0).with_wait_on_task("a".into(), None, 1))
             .unwrap();
         store
-            .put(&Goal::new("sess-1", "obj", 0, 0).with_wait_on_task("b".into(), None, 1))
+            .put_without_origin(&Goal::new("sess-1", "obj", 0, 0).with_wait_on_task("b".into(), None, 1))
             .unwrap();
 
         // The stale wake (which observed task A) must not release task B.
@@ -1980,7 +2021,7 @@ mod tests {
     fn put_get_roundtrip() {
         let (store, _d) = temp_store();
         let g = Goal::new("sess-1", "Do the thing", 0, 0);
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
         let got = store.get("sess-1").unwrap().unwrap();
         assert_eq!(got.objective, "Do the thing");
         assert_eq!(got.status, GoalStatus::Active);
@@ -1989,8 +2030,8 @@ mod tests {
     #[test]
     fn put_replaces_existing_for_same_session() {
         let (store, _d) = temp_store();
-        store.put(&Goal::new("sess-1", "first", 0, 0)).unwrap();
-        store.put(&Goal::new("sess-1", "second", 0, 0)).unwrap();
+        store.put_without_origin(&Goal::new("sess-1", "first", 0, 0)).unwrap();
+        store.put_without_origin(&Goal::new("sess-1", "second", 0, 0)).unwrap();
         let got = store.get("sess-1").unwrap().unwrap();
         assert_eq!(got.objective, "second", "one active goal per session");
     }
@@ -2004,7 +2045,7 @@ mod tests {
     #[test]
     fn delete_removes_row() {
         let (store, _d) = temp_store();
-        store.put(&Goal::new("sess-1", "x", 0, 0)).unwrap();
+        store.put_without_origin(&Goal::new("sess-1", "x", 0, 0)).unwrap();
         store.delete("sess-1").unwrap();
         assert!(store.get("sess-1").unwrap().is_none());
     }
@@ -2012,8 +2053,8 @@ mod tests {
     #[test]
     fn list_all_returns_every_session_goal() {
         let (store, _d) = temp_store();
-        store.put(&Goal::new("sess-1", "a", 0, 0)).unwrap();
-        store.put(&Goal::new("sess-2", "b", 0, 0)).unwrap();
+        store.put_without_origin(&Goal::new("sess-1", "a", 0, 0)).unwrap();
+        store.put_without_origin(&Goal::new("sess-2", "b", 0, 0)).unwrap();
         let all = store.list_all().unwrap();
         assert_eq!(all.len(), 2);
         let mut objs: Vec<&str> = all.iter().map(|g| g.objective.as_str()).collect();
@@ -2040,7 +2081,7 @@ mod tests {
     #[test]
     fn claim_fires_once_then_gates_until_the_continuation_lands() {
         let (store, _d) = temp_store();
-        store.put(&pursuing("s", 5)).unwrap();
+        store.put_without_origin(&pursuing("s", 5)).unwrap();
 
         let first = store
             .try_claim_continuation("s", None, 1_000, false, None)
@@ -2077,7 +2118,7 @@ mod tests {
     #[test]
     fn a_dead_claim_self_heals_past_the_stale_grace() {
         let (store, _d) = temp_store();
-        store.put(&pursuing("s", 5)).unwrap();
+        store.put_without_origin(&pursuing("s", 5)).unwrap();
         let ContinuationDecision::Fire { wake_ms, .. } = store
             .try_claim_continuation("s", None, 1_000, false, None)
             .unwrap()
@@ -2103,7 +2144,7 @@ mod tests {
     #[test]
     fn confirm_fire_refuses_a_goal_that_ended_during_the_delay() {
         let (store, _d) = temp_store();
-        store.put(&pursuing("s", 5)).unwrap();
+        store.put_without_origin(&pursuing("s", 5)).unwrap();
         let ContinuationDecision::Fire { wake_ms, .. } = store
             .try_claim_continuation("s", None, 1_000, false, None)
             .unwrap()
@@ -2122,7 +2163,7 @@ mod tests {
     #[test]
     fn rearm_after_busy_retries_the_same_step_without_spending_another() {
         let (store, _d) = temp_store();
-        store.put(&pursuing("s", 5)).unwrap();
+        store.put_without_origin(&pursuing("s", 5)).unwrap();
         let ContinuationDecision::Fire { wake_ms, .. } = store
             .try_claim_continuation("s", None, 1_000, false, None)
             .unwrap()
@@ -2155,7 +2196,7 @@ mod tests {
         let (store, _d) = temp_store();
         let mut g = pursuing("s", 2);
         g.continuations_used = 2;
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
         let ContinuationDecision::Exhausted { note } = store
             .try_claim_continuation("s", None, 1_000, false, None)
             .unwrap()
@@ -2172,7 +2213,7 @@ mod tests {
     fn awaiting_gate_stamps_an_in_flight_marker_and_dedups_a_second_gate() {
         let (store, _d) = temp_store();
         let g = pursuing("s", 5).with_status(GoalStatus::Complete, 1);
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
 
         // First claim: arbitrate the gate, stamping an in-flight marker. Gate
         // arbitration owns the terminal transition, so the iteration is NOT
@@ -2208,12 +2249,12 @@ mod tests {
     fn gate_verdicts_are_discarded_when_the_goal_changed_under_the_gate() {
         let (store, _d) = temp_store();
         let gated = pursuing("s", 5).with_status(GoalStatus::Complete, 1);
-        store.put(&gated).unwrap();
+        store.put_without_origin(&gated).unwrap();
 
         // The gate is a shell command: while it runs (tens of seconds, run slot
         // free) the user replaces the objective.
         let replacement = Goal::new("s", "something else entirely", 0, 5);
-        store.put(&replacement).unwrap();
+        store.put_without_origin(&replacement).unwrap();
 
         let confirmed = gated.clone().with_gate_outcome(GateOutcome::Passed, 9);
         assert!(
@@ -2234,7 +2275,7 @@ mod tests {
     fn gate_pass_commits_when_the_goal_is_untouched() {
         let (store, _d) = temp_store();
         let gated = pursuing("s", 5).with_status(GoalStatus::Complete, 1);
-        store.put(&gated).unwrap();
+        store.put_without_origin(&gated).unwrap();
         let confirmed = gated.clone().with_gate_outcome(GateOutcome::Passed, 9);
         assert!(store.commit_gate_pass(&gated, &confirmed).unwrap());
         assert_eq!(
@@ -2246,7 +2287,7 @@ mod tests {
     #[test]
     fn commit_field_update_keeps_the_live_pending_marker() {
         let (store, _d) = temp_store();
-        store.put(&pursuing("s", 5)).unwrap();
+        store.put_without_origin(&pursuing("s", 5)).unwrap();
         // The tool reads a snapshot…
         let snapshot = store.get("s").unwrap().unwrap();
         assert_eq!(snapshot.pending_continuation_ms, None);
@@ -2278,7 +2319,7 @@ mod tests {
     fn commit_field_update_reports_a_goal_cleared_under_it() {
         let (store, _d) = temp_store();
         let g = pursuing("s", 5);
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
         store.delete("s").unwrap();
         assert_eq!(
             store.commit_field_update(&g, g.status).unwrap(),
@@ -2293,7 +2334,7 @@ mod tests {
     #[test]
     fn commit_field_update_status_cas_keeps_a_concurrent_block() {
         let (store, _d) = temp_store();
-        store.put(&pursuing("s", 5)).unwrap();
+        store.put_without_origin(&pursuing("s", 5)).unwrap();
         // Tool snapshots an Active goal…
         let snapshot = store.get("s").unwrap().unwrap();
         // …a continuation failure blocks it in the read→write gap…
@@ -2322,7 +2363,7 @@ mod tests {
     #[test]
     fn commit_field_update_applies_a_status_change_when_the_cas_holds() {
         let (store, _d) = temp_store();
-        store.put(&pursuing("s", 5)).unwrap();
+        store.put_without_origin(&pursuing("s", 5)).unwrap();
         let snapshot = store.get("s").unwrap().unwrap();
         let paused = snapshot.with_status(GoalStatus::Paused, 500);
         assert_eq!(
@@ -2340,7 +2381,7 @@ mod tests {
         // A deadline-timer-parked pursuit recovers via GoalWakeService, not the
         // abandoned run — blocking it would strand the barrier forever.
         store
-            .put(&pursuing("sess-timer", 5).with_wait_until(9_999, None, 1))
+            .put_without_origin(&pursuing("sess-timer", 5).with_wait_until(9_999, None, 1))
             .unwrap();
         assert!(!store
             .block_if_abandonable("sess-timer", "abandoned", 100)
@@ -2351,7 +2392,7 @@ mod tests {
         );
         // Same for a task-barrier-parked pursuit.
         store
-            .put(&pursuing("sess-task", 5).with_wait_on_task("t".into(), None, 1))
+            .put_without_origin(&pursuing("sess-task", 5).with_wait_on_task("t".into(), None, 1))
             .unwrap();
         assert!(!store
             .block_if_abandonable("sess-task", "abandoned", 100)
@@ -2362,7 +2403,7 @@ mod tests {
         );
         // An unparked active pursuit IS abandonable — its recovery hung on the
         // crashed run.
-        store.put(&pursuing("sess-live", 5)).unwrap();
+        store.put_without_origin(&pursuing("sess-live", 5)).unwrap();
         assert!(store
             .block_if_abandonable("sess-live", "abandoned", 100)
             .unwrap());
@@ -2371,7 +2412,7 @@ mod tests {
             GoalStatus::Blocked
         );
         // A passive goal is never abandonable (its recovery is the user).
-        store.put(&Goal::new("sess-passive", "obj", 0, 1)).unwrap();
+        store.put_without_origin(&Goal::new("sess-passive", "obj", 0, 1)).unwrap();
         assert!(!store
             .block_if_abandonable("sess-passive", "abandoned", 100)
             .unwrap());
@@ -2381,7 +2422,7 @@ mod tests {
     fn block_and_pause_drop_the_wait_barrier() {
         let (store, _d) = temp_store();
         store
-            .put(&pursuing("s-block", 5).with_wait_until(9_999, None, 1))
+            .put_without_origin(&pursuing("s-block", 5).with_wait_until(9_999, None, 1))
             .unwrap();
         assert!(store.block_if_active("s-block", "boom", 100).unwrap());
         assert!(
@@ -2389,7 +2430,7 @@ mod tests {
             "a blocked goal is no longer waiting on anything"
         );
         store
-            .put(&pursuing("s-pause", 5).with_wait_on_task("t".into(), None, 1))
+            .put_without_origin(&pursuing("s-pause", 5).with_wait_on_task("t".into(), None, 1))
             .unwrap();
         assert!(store.pause_if_active("s-pause", "hold", 100).unwrap());
         let paused = store.get("s-pause").unwrap().unwrap();
@@ -2400,7 +2441,7 @@ mod tests {
     #[test]
     fn claim_records_workspace_and_tool_updates_preserve_it() {
         let (store, _d) = temp_store();
-        store.put(&pursuing("s", 5)).unwrap();
+        store.put_without_origin(&pursuing("s", 5)).unwrap();
         // A post-run claim records the originating run's project root.
         let d = store
             .try_claim_continuation("s", None, 1_000, false, Some("/proj/x"))
@@ -2482,7 +2523,7 @@ mod tests {
             .unwrap();
         // A plain `put` (state-machine writers) must not touch it either.
         let again = store.get("s-pub").unwrap().unwrap();
-        store.put(&again).unwrap();
+        store.put_without_origin(&again).unwrap();
         assert_eq!(
             store
                 .origin_for(&store.get("s-pub").unwrap().unwrap())
@@ -2502,7 +2543,7 @@ mod tests {
 
         // A goal written by a pre-origin build (plain `put`, no row).
         let old = pursuing("s-old", 5);
-        store.put(&old).unwrap();
+        store.put_without_origin(&old).unwrap();
         assert_eq!(
             store.origin_for(&old).unwrap(),
             MarkerRestore::LegacyUnproven
@@ -2754,7 +2795,7 @@ mod tests {
         store.delete("s-del").unwrap();
         assert_eq!(origin_rows(&store), 0);
         // Re-created through a bare `put` must not resurrect the old origin.
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
         assert_eq!(store.origin_for(&g).unwrap(), MarkerRestore::LegacyUnproven);
     }
 
@@ -2770,7 +2811,7 @@ mod tests {
         // (plain `put` of a different objective) leaves a stale origin: the
         // new goal must not inherit it, and must not be treated as ordinary.
         let swapped = Goal::new("s-mis", "swapped via plain put", 0, 3_000);
-        store.put(&swapped).unwrap();
+        store.put_without_origin(&swapped).unwrap();
         assert!(matches!(
             store.origin_for(&swapped).unwrap(),
             MarkerRestore::Refuse(_)
@@ -2826,7 +2867,7 @@ mod tests {
     fn commit_field_update_never_clobbers_the_author() {
         let (store, _d) = temp_store();
         let owned = pursuing("s-author", 5).with_author(Some("u-bob".into()));
-        store.put(&owned).unwrap();
+        store.put_without_origin(&owned).unwrap();
         let snapshot = store.get("s-author").unwrap().unwrap();
         // A tool snapshot rebuilt without the author must not erase it.
         let edited = snapshot
@@ -2847,7 +2888,7 @@ mod tests {
         let (store, _d) = temp_store();
         let attr = crate::scope::ScopeAttribution::personal("u-alice");
         let owned = pursuing("s", 5).with_owner_scope(Some(&attr));
-        store.put(&owned).unwrap();
+        store.put_without_origin(&owned).unwrap();
 
         let snapshot = store.get("s").unwrap().unwrap();
         assert_eq!(snapshot.owner_user_id.as_deref(), Some("u-alice"));
@@ -2876,16 +2917,16 @@ mod tests {
         let alice = crate::scope::ScopeAttribution::personal("u-alice");
         let bob = crate::scope::ScopeAttribution::personal("u-bob");
         store
-            .put(&pursuing("s-alice-1", 5).with_owner_scope(Some(&alice)))
+            .put_without_origin(&pursuing("s-alice-1", 5).with_owner_scope(Some(&alice)))
             .unwrap();
         store
-            .put(&pursuing("s-alice-2", 5).with_owner_scope(Some(&alice)))
+            .put_without_origin(&pursuing("s-alice-2", 5).with_owner_scope(Some(&alice)))
             .unwrap();
         store
-            .put(&pursuing("s-bob", 5).with_owner_scope(Some(&bob)))
+            .put_without_origin(&pursuing("s-bob", 5).with_owner_scope(Some(&bob)))
             .unwrap();
         // A legacy (pre-P1) row: owner_user_id is None, never alice's.
-        store.put(&pursuing("s-legacy", 5)).unwrap();
+        store.put_without_origin(&pursuing("s-legacy", 5)).unwrap();
 
         let count = store.pause_all_owned_by("u-alice").unwrap();
         assert_eq!(count, 2, "only alice's two active goals are paused");
@@ -2922,20 +2963,20 @@ mod tests {
         let alice = crate::scope::ScopeAttribution::personal("u-alice");
         let bob = crate::scope::ScopeAttribution::personal("u-bob");
         store
-            .put(&pursuing("s-alice-active", 5).with_owner_scope(Some(&alice)))
+            .put_without_origin(&pursuing("s-alice-active", 5).with_owner_scope(Some(&alice)))
             .unwrap();
         store
-            .put(
+            .put_without_origin(
                 &pursuing("s-alice-paused", 5)
                     .with_owner_scope(Some(&alice))
                     .with_status(GoalStatus::Paused, 1),
             )
             .unwrap();
         store
-            .put(&pursuing("s-bob", 5).with_owner_scope(Some(&bob)))
+            .put_without_origin(&pursuing("s-bob", 5).with_owner_scope(Some(&bob)))
             .unwrap();
         // Legacy (pre-P1) row: owned by nobody, so counted for nobody.
-        store.put(&pursuing("s-legacy", 5)).unwrap();
+        store.put_without_origin(&pursuing("s-legacy", 5)).unwrap();
 
         assert_eq!(
             store.count_owned_by("u-alice").unwrap(),
@@ -2959,7 +3000,7 @@ mod tests {
         let (store, _d) = temp_store();
         let bob = crate::scope::ScopeAttribution::personal("u-bob");
         store
-            .put(&pursuing("s-bob", 5).with_owner_scope(Some(&bob)))
+            .put_without_origin(&pursuing("s-bob", 5).with_owner_scope(Some(&bob)))
             .unwrap();
         assert_eq!(store.pause_all_owned_by("u-alice").unwrap(), 0);
         assert_eq!(
@@ -2972,14 +3013,14 @@ mod tests {
     fn block_if_active_never_clobbers_a_terminal_goal() {
         let (store, _d) = temp_store();
         let done = pursuing("s", 5).with_status(GoalStatus::Complete, 1);
-        store.put(&done).unwrap();
+        store.put_without_origin(&done).unwrap();
         assert!(!store.block_if_active("s", "boom", 9).unwrap());
         assert_eq!(
             store.get("s").unwrap().unwrap().status,
             GoalStatus::Complete
         );
 
-        store.put(&pursuing("s", 5)).unwrap();
+        store.put_without_origin(&pursuing("s", 5)).unwrap();
         assert!(store.block_if_active("s", "boom", 9).unwrap());
         let g = store.get("s").unwrap().unwrap();
         assert_eq!(g.status, GoalStatus::Blocked);
@@ -2994,7 +3035,7 @@ mod tests {
         // be resumed again (arming is refused cross-session and this session is
         // about to become unreachable). Retire it honestly.
         let paused = Goal::new("sess-p", "obj", 0, 1_000).with_status(GoalStatus::Paused, 1_000);
-        store.put(&paused).unwrap();
+        store.put_without_origin(&paused).unwrap();
         assert!(store
             .block_if_not_terminal("sess-p", "closed", 2_000)
             .unwrap());
@@ -3004,7 +3045,7 @@ mod tests {
 
         // Active: same as `block_if_active`.
         let active = Goal::new("sess-a", "obj", 0, 1_000);
-        store.put(&active).unwrap();
+        store.put_without_origin(&active).unwrap();
         assert!(store
             .block_if_not_terminal("sess-a", "closed", 2_000)
             .unwrap());
@@ -3018,7 +3059,7 @@ mod tests {
             let g = Goal::new("sess-t", "obj", 0, 1_000)
                 .with_status(status, 1_000)
                 .with_note(Some("original".into()), 1_000);
-            store.put(&g).unwrap();
+            store.put_without_origin(&g).unwrap();
             assert!(!store
                 .block_if_not_terminal("sess-t", "closed", 2_000)
                 .unwrap());
@@ -3146,7 +3187,7 @@ mod tests {
         assert!(legacy.completed_at_ms.is_none());
         assert_eq!(legacy.status, GoalStatus::Complete);
 
-        store.put(&legacy).unwrap();
+        store.put_without_origin(&legacy).unwrap();
         assert!(
             store.try_claim_settle_notify(&legacy).unwrap(),
             "the first claim on a legacy Complete row still fires"
@@ -3163,7 +3204,7 @@ mod tests {
             .clone()
             .with_lesson_appended("lesson X".into(), 2_000)
             .with_note(Some("post-mortem".into()), 3_000);
-        store.put(&edited).unwrap();
+        store.put_without_origin(&edited).unwrap();
         assert!(
             !store.try_claim_settle_notify(&edited).unwrap(),
             "post-completion field edits on a legacy Complete goal must NOT re-fire"
@@ -3182,7 +3223,7 @@ mod tests {
             .with_deadline_ms(Some(50_000))
             .with_wait_until(200_000, None, 1_000)
             .with_pending_continuation(Some(200_000));
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
 
         let FireDecision::OutOfBounds { note } =
             store.confirm_fire("sess-late", 200_000, 200_000).unwrap()
@@ -3214,7 +3255,7 @@ mod tests {
             .with_deadline_ms(Some(30_000))
             .with_wait_until(20_000, None, 1_000)
             .with_pending_continuation(Some(20_000));
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
 
         let FireDecision::OutOfBounds { note } = store
             .confirm_fire("sess-late-now", 20_000, 18_020_000)
@@ -3235,7 +3276,7 @@ mod tests {
             .with_deadline_ms(Some(30_000))
             .with_wait_until(20_000, None, 1_000)
             .with_pending_continuation(Some(20_000));
-        store.put(&ok).unwrap();
+        store.put_without_origin(&ok).unwrap();
         assert!(matches!(
             store.confirm_fire("sess-on-time", 20_000, 20_050).unwrap(),
             FireDecision::Proceed
@@ -3249,7 +3290,7 @@ mod tests {
         let g = Goal::new("sess-ok", "obj", 0, 1_000)
             .with_pursuit(PursuitMode::Active { max_iterations: 5 })
             .with_pending_continuation(Some(7_000));
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
         assert!(matches!(
             store.confirm_fire("sess-ok", 7_000, 7_000).unwrap(),
             FireDecision::Proceed
@@ -3277,7 +3318,7 @@ mod tests {
         let g = Goal::new("sess-fired", "obj", 0, 1_000)
             .with_pursuit(PursuitMode::Active { max_iterations: 5 })
             .with_wait_until(61_000, Some("cooldown".into()), 1_000);
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
         let ContinuationDecision::Fire { wake_ms, .. } = store
             .try_claim_continuation("sess-fired", None, 1_000, false, None)
             .unwrap()
@@ -3332,7 +3373,7 @@ mod tests {
             .with_pursuit(PursuitMode::Active { max_iterations: 5 })
             .with_wait_on_task("task-9".into(), Some("waiting on the build".into()), 6_900)
             .with_pending_continuation(Some(7_000));
-        store.put(&task_parked).unwrap();
+        store.put_without_origin(&task_parked).unwrap();
         assert_eq!(
             store
                 .confirm_fire("sess-other-barrier", 7_000, 7_100)
@@ -3355,7 +3396,7 @@ mod tests {
         let g = Goal::new("sess-park", "obj", 0, 1_000)
             .with_pursuit(PursuitMode::Active { max_iterations: 5 })
             .with_pending_continuation(Some(1_000));
-        store.put(&g).unwrap();
+        store.put_without_origin(&g).unwrap();
 
         assert!(store
             .park_if_active("sess-park", 300_000, "RATE_LIMITED: retry later", 2_000)
@@ -3382,7 +3423,7 @@ mod tests {
             GoalStatus::Paused,
         ] {
             let g = Goal::new("sess-t", "obj", 0, 1_000).with_status(status, 1_000);
-            store.put(&g).unwrap();
+            store.put_without_origin(&g).unwrap();
             assert!(
                 !store
                     .park_if_active("sess-t", 300_000, "why", 2_000)

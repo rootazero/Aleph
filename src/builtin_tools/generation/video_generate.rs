@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tracing::info;
 
-use crate::builtin_tools::error::ToolError;
-use crate::error::Result;
+use crate::error::{AlephError, Result};
 use crate::gateway::media::{detect_mime, MediaItem};
 use crate::generation::{
     GenerationData, GenerationProviderRegistry, GenerationRequest, GenerationType,
@@ -64,7 +63,7 @@ impl VideoGenerateTool {
     async fn call_impl(
         &self,
         args: VideoGenerateArgs,
-    ) -> std::result::Result<VideoGenerateOutput, ToolError> {
+    ) -> std::result::Result<VideoGenerateOutput, AlephError> {
         let start = Instant::now();
 
         info!(prompt = %args.prompt, provider = ?args.provider, "Starting video generation");
@@ -75,18 +74,20 @@ impl VideoGenerateTool {
 
             if let Some(ref name) = args.provider {
                 let p = reg.get(name).ok_or_else(|| {
-                    ToolError::InvalidArgs(format!("Video provider '{name}' not found"))
+                    AlephError::tool(format!("Video provider '{name}' not found"))
                 })?;
                 if !p.supports(GenerationType::Video) {
-                    return Err(ToolError::InvalidArgs(format!(
+                    return Err(AlephError::tool(format!(
                         "Provider '{name}' does not support video generation"
                     )));
                 }
                 (name.clone(), p)
             } else {
-                reg.first_for_type(GenerationType::Video).ok_or_else(|| {
-                    ToolError::Execution("No video generation provider available".to_string())
-                })?
+                reg.default_for_type(GenerationType::Video)
+                    .or_else(|| reg.first_for_type(GenerationType::Video))
+                    .ok_or_else(|| {
+                        AlephError::tool("No video generation provider available".to_string())
+                    })?
             }
         };
 
@@ -96,7 +97,7 @@ impl VideoGenerateTool {
         let mut request = GenerationRequest::video(&args.prompt);
         request.params.aspect_ratio = args.aspect_ratio;
 
-        let output = provider.generate(request).await.map_err(ToolError::from)?;
+        let output = provider.generate(request).await.map_err(AlephError::from)?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -104,7 +105,7 @@ impl VideoGenerateTool {
             GenerationData::Url(url) => (url.clone(), "url"),
             GenerationData::LocalPath(path) => (path.clone(), "file"),
             GenerationData::Bytes(_) => {
-                return Err(ToolError::Execution(
+                return Err(AlephError::tool(
                     "Video provider returned raw bytes — expected URL or file path".to_string(),
                 ));
             }
@@ -150,6 +151,6 @@ impl AlephTool for VideoGenerateTool {
     type Output = VideoGenerateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        self.call_impl(args).await.map_err(Into::into)
+        self.call_impl(args).await
     }
 }

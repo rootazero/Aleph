@@ -569,7 +569,7 @@ async fn boot_rearm_respawns_the_parked_wake_under_the_stored_origin() {
         let wake_ms = super::super::goal_continuation::now_ms().saturating_sub(1);
         let goal = parked_goal(&rig.session_str, wake_ms);
         if legacy {
-            rig.store.put(&goal).unwrap();
+            rig.store.put_without_origin(&goal).unwrap();
         } else {
             rig.store.put_with_origin(&goal, origin.as_ref()).unwrap();
         }

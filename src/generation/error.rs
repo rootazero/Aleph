@@ -644,9 +644,19 @@ impl GenerationError {
 /// not falsely tripped).
 impl From<GenerationError> for AlephError {
     fn from(err: GenerationError) -> Self {
+        // A provider failure the user can fix (a wrong key, an exhausted
+        // quota, a filtered prompt, an unknown model) — or one that another
+        // provider could serve — carries one actionable sentence. Without it
+        // the model only sees the raw provider message and cannot tell the
+        // user what to change.
+        let actionable_hint = if err.needs_user_action() || err.should_fallback() {
+            format!(" {}", err.user_friendly_message())
+        } else {
+            String::new()
+        };
         match err {
             GenerationError::AuthenticationError { message, provider } => {
-                Self::authentication(provider, message)
+                Self::authentication(provider, format!("{message}{actionable_hint}"))
             }
             GenerationError::RateLimitError {
                 message,
@@ -678,7 +688,9 @@ impl From<GenerationError> for AlephError {
                 let reset_hint = resets_at
                     .map(|r| format!(" (resets at: {r})"))
                     .unwrap_or_default();
-                Self::rate_limit(format!("Quota exceeded: {message}{reset_hint}"))
+                Self::rate_limit(format!(
+                    "Quota exceeded: {message}{reset_hint}{actionable_hint}"
+                ))
             }
             GenerationError::TimeoutError { duration } => Self::Timeout {
                 suggestion: Some(format!(
@@ -691,15 +703,19 @@ impl From<GenerationError> for AlephError {
                 let param_hint = parameter
                     .map(|p| format!(" (parameter: {p})"))
                     .unwrap_or_default();
-                Self::invalid_config(format!("{message}{param_hint}"))
+                Self::invalid_config(format!("{message}{param_hint}{actionable_hint}"))
             }
             GenerationError::ContentFilteredError { message, category } => {
                 let cat_hint = category
                     .map(|c| format!(" (category: {c})"))
                     .unwrap_or_default();
-                Self::provider(format!("Content filtered: {message}{cat_hint}"))
+                Self::provider(format!(
+                    "Content filtered: {message}{cat_hint}{actionable_hint}"
+                ))
             }
-            GenerationError::UnsupportedFeatureError { message, .. } => Self::provider(message),
+            GenerationError::UnsupportedFeatureError { message, .. } => {
+                Self::provider(format!("{message}{actionable_hint}"))
+            }
             GenerationError::ProviderError {
                 message,
                 provider,
@@ -720,20 +736,20 @@ impl From<GenerationError> for AlephError {
             }
             GenerationError::Cancelled => Self::cancelled(),
             GenerationError::InternalError { message } => Self::other(message),
-            GenerationError::ModelNotFoundError { model, provider } => {
-                Self::invalid_config(format!("Model '{model}' not found on {provider}"))
-            }
+            GenerationError::ModelNotFoundError { model, provider } => Self::invalid_config(
+                format!("Model '{model}' not found on {provider}{actionable_hint}"),
+            ),
             GenerationError::UnsupportedGenerationTypeError {
                 generation_type,
                 provider,
             } => Self::provider(format!(
-                "{provider} does not support {generation_type} generation"
+                "{provider} does not support {generation_type} generation{actionable_hint}"
             )),
             GenerationError::UnsupportedFormatError { format, .. } => {
-                Self::invalid_config(format!("Unsupported format: {format}"))
+                Self::invalid_config(format!("Unsupported format: {format}{actionable_hint}"))
             }
             GenerationError::UnsupportedDimensionError { message, .. } => {
-                Self::invalid_config(message)
+                Self::invalid_config(format!("{message}{actionable_hint}"))
             }
             GenerationError::JobFailedError { message, job_id } => {
                 let job_hint = job_id

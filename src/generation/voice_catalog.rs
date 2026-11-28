@@ -18,39 +18,73 @@
 //! [`GenerationProviderRegistry::get_voices_for_provider`]: crate::generation::GenerationProviderRegistry::get_voices_for_provider
 
 use crate::generation::providers::{
-    AzureSpeechProvider, CartesiaProvider, DeepgramTtsProvider, ElevenLabsProvider,
-    MinimaxTtsProvider, OpenAiTtsProvider, VolcengineTtsProvider,
+    canonical_provider_type, AzureSpeechProvider, CartesiaProvider, DeepgramTtsProvider,
+    ElevenLabsProvider, MinimaxTtsProvider, OpenAiTtsProvider, VolcengineTtsProvider,
 };
 use crate::generation::VoiceInfo;
 
 /// The date the static voice catalogs were last audited against the vendor
 /// docs. Voice lists are inherently stale-prone — vendors add voices between
 /// releases (OpenAI added `sage`/`verse`/`marin`/`cedar` in 2025), and users
-/// otherwise have no signal that their picker is out of date. Surfaced in the
-/// Settings RPC payload so the UI can show a "catalog as of …" hint; bump
-/// this constant whenever a `static_voice_list()` is updated.
-pub const CATALOG_GENERATED_AT: &str = "2026-08-27";
+/// otherwise have no signal that their picker is out of date.
+///
+/// This was a `pub const` that nothing read, while its own doc promised it
+/// was "surfaced in the Settings RPC payload" — a wire that was never built.
+/// The Settings RPC answers with a bare `Vec<VoiceInfo>`, so carrying a date
+/// would mean changing that response's shape and the Panel's voice picker
+/// with it; that is a contract change, not a wire repair, so it is
+/// deliberately NOT done here. Until then the audit date lives here as a
+/// maintenance note: bump it whenever a `static_voice_list()` is updated.
+#[cfg(test)]
+const CATALOG_GENERATED_AT: &str = "2026-08-27";
+
+/// A test that the catalog audit date is still written as a date, so a
+/// careless edit ("2026-8-27") is caught here rather than in a UI that will
+/// never show it.
+#[cfg(test)]
+mod catalog_date_tests {
+    use super::CATALOG_GENERATED_AT;
+
+    #[test]
+    fn the_catalog_audit_date_is_an_iso_date() {
+        assert!(
+            CATALOG_GENERATED_AT.len() == 10 && CATALOG_GENERATED_AT.contains('-'),
+            "the catalog audit date must be written as YYYY-MM-DD"
+        );
+    }
+}
 
 /// Voices known statically for a `provider_type`, using the same aliases the
 /// provider factory accepts (`create_provider`) so a type that constructs a
 /// speech provider always resolves a catalog here too.
 ///
+/// The provider type is canonicalized with the factory's own alias table
+/// (`canonical_provider_type`), so the two cannot drift: before that, this
+/// function listed `"openai"` beside the OpenAI TTS voices while the factory
+/// maps `"openai"` to the **image** provider, and it listed spellings the
+/// factory rejects (`"openai-tts"`, `"openai-compat"`), so a row could get a
+/// voice picker for a provider type that cannot even be constructed.
+///
 /// Returns an empty vec for types with no static catalog — notably `local`
 /// (a BYO server's voices are whatever *it* serves, discovered live from
 /// `{endpoint}/audio/voices`) and every non-speech type.
+///
+/// `openai_compat` deliberately has NO catalog: the OpenAI-compatible shim
+/// does not implement `list_voices`, so the live registry answers `[]` for
+/// it. A static list here would claim voices the provider cannot serve — the
+/// catalog and the live list would drift apart, which is exactly what the
+/// two accessors are supposed to prevent.
 #[must_use]
 pub fn static_voices_for_provider_type(provider_type: &str) -> Vec<VoiceInfo> {
-    match provider_type.trim().to_ascii_lowercase().as_str() {
-        // OpenAI TTS and the OpenAI-compatible shim speak the same voice names.
-        "openai" | "openai_tts" | "openai-tts" | "tts" | "openai_compat" | "openai-compat" => {
-            OpenAiTtsProvider::static_voice_list()
-        }
+    let canonical = canonical_provider_type(provider_type);
+    match canonical.as_ref() {
+        "openai_tts" => OpenAiTtsProvider::static_voice_list(),
         "elevenlabs" => ElevenLabsProvider::static_voice_list(),
         "minimax_tts" => MinimaxTtsProvider::static_voice_list(),
         "volcengine_tts" => VolcengineTtsProvider::static_voice_list(),
         // Newly reachable: all three ship a static list that no caller could see.
         "cartesia" => CartesiaProvider::static_voice_list(),
-        "azure_speech" | "azure_tts" => AzureSpeechProvider::static_voice_list(),
+        "azure_speech" => AzureSpeechProvider::static_voice_list(),
         "deepgram_tts" => DeepgramTtsProvider::static_voice_list(),
         _ => Vec::new(),
     }
@@ -97,8 +131,28 @@ mod tests {
     }
 
     #[test]
-    fn openai_compat_reuses_openai_voice_names() {
-        let compat = static_voices_for_provider_type("openai_compat");
-        assert!(compat.iter().any(|v| v.id == "alloy"));
+    fn openai_compat_has_no_voice_catalog() {
+        // The OpenAI-compatible shim implements no `list_voices`, so the live
+        // registry answers `[]` for it. The static catalog must not claim
+        // voices the provider cannot serve.
+        assert!(static_voices_for_provider_type("openai_compat").is_empty());
+    }
+
+    /// The catalog must answer for the SAME provider the factory builds.
+    ///
+    /// `"openai"` selects the image provider in the factory, so a voice
+    /// picker for it was offering OpenAI TTS voices for a provider that
+    /// cannot speak.
+    #[test]
+    fn the_image_provider_type_has_no_voice_catalog() {
+        assert!(static_voices_for_provider_type("openai").is_empty());
+        assert!(static_voices_for_provider_type("dalle").is_empty());
+    }
+
+    /// A spelling the factory rejects must not resolve a catalog either.
+    #[test]
+    fn spellings_the_factory_rejects_have_no_catalog() {
+        assert!(static_voices_for_provider_type("openai-tts").is_empty());
+        assert!(static_voices_for_provider_type("openai-compat").is_empty());
     }
 }

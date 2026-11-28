@@ -6,6 +6,7 @@
 
 use std::fmt;
 
+use aleph_slot_api::ai::ThinkLevel;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -49,12 +50,18 @@ impl Speaker {
 /// Maximum number of characters allowed in a persona's `system_prompt`.
 const MAX_SYSTEM_PROMPT_LEN: usize = 2000;
 
-/// Valid values for [`Persona::thinking_level`]. Mirrors
-/// `crate::agents::thinking::ThinkLevel`'s `FromStr` arm set — kept as a
-/// literal list here so `validate()` doesn't need to import the agents
-/// module (group_chat is consumed by channels; keeping the dependency edge
-/// one-way avoids a cycle when agents code later wants Persona types).
-const VALID_THINKING_LEVELS: &[&str] = &["low", "medium", "high", "xhigh"];
+/// Valid values for [`Persona::thinking_level`].
+///
+/// Derived from the authoritative enum (`aleph_slot_api::ai::ThinkLevel`)
+/// rather than kept as a hand-written list: the list used to name only
+/// `low` / `medium` / `high` / `xhigh` and silently rejected `off` and
+/// `minimal`, which the far end has always accepted (shape #1 — the same
+/// fact kept in two places). The dependency is on the slot-api crate, not on
+/// the `agents` module, so the one-way edge the group chat keeps stays
+/// one-way.
+fn valid_thinking_levels() -> Vec<&'static str> {
+    ThinkLevel::ALL.iter().map(|level| level.id()).collect()
+}
 
 /// Defines a persona that can participate in group chat discussions.
 ///
@@ -132,12 +139,13 @@ impl Persona {
         // create_session so the misconfiguration surfaces where it was made.
         if let Some(level) = &self.thinking_level {
             let normalized = level.trim().to_ascii_lowercase();
-            if !VALID_THINKING_LEVELS.contains(&normalized.as_str()) {
+            let valid = valid_thinking_levels();
+            if !valid.contains(&normalized.as_str()) {
                 return Err(GroupChatError::InvalidPersona(format!(
                     "persona '{}' thinking_level '{}' is not one of {}",
                     self.id,
                     level,
-                    VALID_THINKING_LEVELS.join(", ")
+                    valid.join(", ")
                 )));
             }
         }
@@ -277,13 +285,11 @@ impl fmt::Display for GroupChatStatus {
 pub struct CoordinatorPlan {
     /// The personas that should respond in this round, in order.
     pub respondents: Vec<RespondentPlan>,
-    /// Whether a summary should be generated after all respondents have spoken.
-    ///
-    /// Defaults to `false` when omitted by the coordinator LLM. Tolerating this
-    /// omission prevents an otherwise-valid plan from being discarded in favor of
-    /// the all-personas fallback just because the model dropped an optional field.
-    #[serde(default)]
-    pub need_summary: bool,
+    // A `need_summary` flag used to sit here: the coordinator prompt asked
+    // the model for it and the plan parsed it, but no synthesis step ever
+    // existed, so the value went nowhere while the model was told to produce
+    // it. The flag was removed together with the prompt line; `respondents`
+    // is the whole plan.
 }
 
 /// A planned response from a specific persona.

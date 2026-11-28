@@ -842,6 +842,21 @@ token_budget. \
                             .to_string(),
                     ));
                 }
+                // Same rule for the two fields this arm would otherwise drop
+                // on the floor: a goal is born Active and lesson-free, so
+                // `status` / `lesson` belong to `update`. The schema is one
+                // flat struct for every action, so nothing stops a caller
+                // from passing them here — and a caller that passed them
+                // would be told "Set." while its lesson vanished.
+                if args.status.is_some() || args.lesson.is_some() {
+                    return Err(AlephError::tool(
+                        "status / lesson apply to action='update' — a goal is born \
+                         Active with no lessons; set it first, then change the \
+                         status or append the lesson when the pursuit has learned \
+                         something."
+                            .to_string(),
+                    ));
+                }
                 if let Some(cmd) = args.gate_command.as_deref() {
                     if !cmd.trim().is_empty() {
                         validate_gate_command(cmd)?;
@@ -1917,7 +1932,7 @@ mod tests {
         let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
         let goal = Goal::new("sess-lessons", "ship it", 0, 0)
             .with_lesson_appended("run migrations first".into(), 1);
-        store.put(&goal).unwrap();
+        store.put_without_origin(&goal).unwrap();
 
         let backend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
         let tool = GoalTool::new(store.clone())
@@ -1959,7 +1974,7 @@ mod tests {
         let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
         let old = Goal::new("sess-reset", "old objective", 0, 0)
             .with_lesson_appended("the deploy needs a fresh token".into(), 1);
-        store.put(&old).unwrap();
+        store.put_without_origin(&old).unwrap();
 
         let backend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
         let tool = GoalTool::new(store.clone())
@@ -3040,7 +3055,7 @@ mod tests {
             .with_pursuit(PursuitMode::Active { max_iterations: 5 })
             .with_status(GoalStatus::Complete, 1)
             .with_gate_outcome(crate::goal::GateOutcome::Passed, 1);
-        tool.store.put(&g).unwrap();
+        tool.store.put_without_origin(&g).unwrap();
 
         let out = tool
             .call(GoalArgs {
@@ -3076,7 +3091,7 @@ mod tests {
             .with_pursuit(PursuitMode::Active { max_iterations: 3 })
             .with_status(GoalStatus::Blocked, 1);
         g.continuations_used = 3;
-        tool.store.put(&g).unwrap();
+        tool.store.put_without_origin(&g).unwrap();
 
         let out = tool
             .call(GoalArgs {
