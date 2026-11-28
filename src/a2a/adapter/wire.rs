@@ -1,7 +1,7 @@
 //! JSON-RPC payloads at the 0.3 and 1.0 A2A boundaries.
 
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 use crate::a2a::domain::message::FileContent;
 use crate::a2a::domain::{

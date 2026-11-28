@@ -309,7 +309,11 @@ impl A2ARequestProcessor {
         match self
             .state
             .task_manager
-            .cancel_owned(TaskScope::Legacy(auth.owner), id)
+            .cancel_owned(
+                TaskScope::Legacy(auth.owner),
+                id,
+                self.state.streaming.as_ref(),
+            )
             .await
         {
             Ok(task) => JsonRpcResponse::serialize_ok(request.id, &task),
@@ -712,12 +716,10 @@ mod tests {
             assert!(resp.error.is_some());
             let err = resp.error.unwrap();
             assert_eq!(err["code"], -32601);
-            assert!(
-                err["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains("nonexistent/method")
-            );
+            assert!(err["message"]
+                .as_str()
+                .unwrap()
+                .contains("nonexistent/method"));
         }
 
         #[tokio::test]

@@ -1,5 +1,8 @@
 use std::sync::RwLockReadGuard;
 
+use crate::a2a::adapter::client::http_client::{
+    DelegationResponse, DispatchError, PreparedDelegation,
+};
 use crate::a2a::adapter::client::{A2AClient, A2AClientPool};
 use crate::a2a::config::A2AConfig;
 use crate::a2a::domain::{A2AError, AgentCard, TrustLevel};
@@ -92,11 +95,25 @@ impl CardRegistry {
             .ok_or_else(stale_dispatch)
     }
 
-    /// The mutation lock linearizes admission against replacement, removal and close.
-    pub async fn admit_dispatch(&self, agent_id: &str, generation: Uuid) -> A2AResult<()> {
-        self.is_current(agent_id, generation)
-            .then_some(())
-            .ok_or_else(stale_dispatch)
+    /// Hand the prepared request to its dispatch owner while the registration
+    /// is still current. The HTTP task owns the request after admission.
+    pub(crate) fn start_dispatch(
+        &self,
+        agent_id: &str,
+        generation: Uuid,
+        prepared: PreparedDelegation,
+    ) -> A2AResult<tokio::task::JoinHandle<Result<DelegationResponse, DispatchError>>> {
+        let state = self.read_state();
+        if !state
+            .agents
+            .iter()
+            .any(|agent| agent.card.id == agent_id && agent.invocation_generation() == generation)
+        {
+            return Err(stale_dispatch());
+        }
+        let dispatch = tokio::spawn(prepared.send());
+        drop(state);
+        Ok(dispatch)
     }
 
     fn read_state(&self) -> RwLockReadGuard<'_, RegistryState> {

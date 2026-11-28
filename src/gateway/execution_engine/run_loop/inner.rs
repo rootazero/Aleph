@@ -1167,7 +1167,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 self.config.truncate_tool_descriptions,
                 deferred.clone(),
                 self.tool_health.clone(),
-            );
+            )
+            .with_remote_clarification(chat_cancellation);
             #[cfg(target_os = "linux")]
             let tool_service = tool_service.with_paired_shell(
                 super::super::shell_effect::PairedShellRoute::for_turn(request, agent.clone()),

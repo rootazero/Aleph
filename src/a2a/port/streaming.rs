@@ -19,7 +19,7 @@ pub trait A2AStreamingHandler: Send + Sync {
 
     /// Broadcast a status update to all subscribers of a task
     async fn broadcast_status(&self, task_id: &str, update: TaskStatusUpdateEvent)
-    -> A2AResult<()>;
+        -> A2AResult<()>;
 
     /// Broadcast an artifact update to all subscribers of a task.
     ///

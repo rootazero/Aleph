@@ -217,6 +217,10 @@ pub struct AskUserOutput {
 // Tool
 // =============================================================================
 
+tokio::task_local! {
+    pub(crate) static REMOTE_CLARIFICATION: crate::gateway::execution_adapter::ChatRunCancellation;
+}
+
 /// Tool that asks the user clarifying questions and waits for the replies.
 #[derive(Clone)]
 pub struct AskUserTool {
@@ -389,6 +393,32 @@ impl AlephTool for AskUserTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let request = Self::build_request(&args)?;
+        if let Ok(run) = REMOTE_CLARIFICATION.try_with(Clone::clone) {
+            if request.questions().iter().any(|question| question.secret) {
+                return Err(AlephError::tool(
+                    "ask_user: this remote task cannot request secrets",
+                ));
+            }
+            let mut questions = Vec::new();
+            for (index, question) in request.questions().iter().enumerate() {
+                let mut text = format!("{}. {}", index + 1, question.prompt);
+                for option in &question.options {
+                    text.push_str("\n- ");
+                    text.push_str(&option.label);
+                }
+                questions.push(text);
+            }
+            let text = crate::exec::masker::SecretMasker::new().mask(&questions.join("\n\n"));
+            run.request_clarification(text)
+                .map_err(|e| AlephError::tool(format!("ask_user: {e}")))?;
+            return Ok(AskUserOutput {
+                status: "input_required".into(),
+                answer: None,
+                selected_index: None,
+                answers: Vec::new(),
+                withheld: None,
+            });
+        }
         let outcome = ask(&self.deps, request)
             .await
             .map_err(|e| AlephError::tool(format!("ask_user: {e}")))?;
@@ -667,6 +697,31 @@ mod tests {
         assert_eq!(request.questions()[0].header.as_deref(), Some("Env"));
         assert_eq!(request.questions()[1].id, "token");
         assert!(request.questions()[1].secret);
+    }
+
+    #[tokio::test]
+    async fn remote_clarification_refuses_secret_without_stopping_the_run() {
+        let run = crate::gateway::execution_adapter::ChatRunCancellation::for_remote_task();
+        let request = AskUserArgs {
+            question: None,
+            choices: vec![],
+            questions: vec![AskUserQuestionArg {
+                id: None,
+                header: None,
+                question: "API token?".into(),
+                choices: vec![],
+                multi_select: false,
+                secret: true,
+            }],
+        };
+        let tool = tool();
+        let error = REMOTE_CLARIFICATION
+            .scope(run.clone(), tool.call(request))
+            .await
+            .expect_err("remote callers cannot be asked to provide secrets");
+        assert!(error.to_string().contains("cannot request secrets"));
+        assert!(run.check().is_ok());
+        assert!(run.clarification().is_none());
     }
 
     /// Merging the two shapes would have to invent an order, and the order is

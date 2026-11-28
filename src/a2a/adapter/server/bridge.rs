@@ -22,10 +22,10 @@ use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{
-    BUSY_INPUT_MODE_KEY, ExecutionError, RunRequest, UNATTENDED_KEY,
+    ExecutionError, RunRequest, BUSY_INPUT_MODE_KEY, UNATTENDED_KEY,
 };
 use crate::gateway::router::SessionKey;
-use crate::tools::turn_context::{TURN_CONTEXT, TurnContext};
+use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
 
 use super::task_store::{TaskClaim, TaskStore};
 
@@ -199,6 +199,10 @@ impl AgentLoopBridge {
                         "No default agent registered".into(),
                     )
                 })?;
+                let input = match &claim.pending_question {
+                    Some(question) => format!("Previous clarification requested for this task:\n{question}\n\nRemote caller follow-up:\n{input}"),
+                    None => input,
+                };
                 let request = Self::build_run_request(&claim.session_id, claim.run_id, &input);
                 let turn = Self::a2a_turn_context(&request);
                 info!(run_id = %request.run_id, task_id = %claim.task.id, "Executing A2A task");
@@ -215,16 +219,20 @@ impl AgentLoopBridge {
                     .await
             };
             let outcome = AssertUnwindSafe(execution).catch_unwind().await;
-            let (state, text) = match outcome {
-                Ok(Ok(())) => (
+            let clarification = claim.cancellation.clarification();
+            let (state, text) = match (outcome, clarification) {
+                (Ok(_), Some(question)) => (TaskState::InputRequired, question),
+                (Ok(Ok(())), None) => (
                     TaskState::Completed,
                     emitter
                         .take_final_response()
                         .unwrap_or_else(|| DEFAULT_COMPLETION_TEXT.into()),
                 ),
-                Ok(Err(ExecutionError::Cancelled)) => (TaskState::Canceled, "Task canceled".into()),
-                Ok(Err(error)) => (TaskState::Failed, format!("Execution failed: {error}")),
-                Err(_) => (TaskState::Failed, "Execution failed unexpectedly".into()),
+                (Ok(Err(ExecutionError::Cancelled)), None) => {
+                    (TaskState::Canceled, "Task canceled".into())
+                }
+                (Ok(Err(error)), None) => (TaskState::Failed, format!("Execution failed: {error}")),
+                (Err(_), _) => (TaskState::Failed, "Execution failed unexpectedly".into()),
             };
             let result = bridge.finish(&claim, state, text).await;
             if let Err(error) = bridge.streaming.cleanup_task(&claim.instance_id).await {
@@ -281,12 +289,13 @@ impl AgentLoopBridge {
                 tracing::warn!(%error, "A2A artifact update could not be published");
             }
         }
-        let event = TaskStatusUpdateEvent::new(
+        let mut event = TaskStatusUpdateEvent::new(
             task.id.clone(),
             task.context_id.clone(),
             task.status.clone(),
             None,
         );
+        event.is_final = true;
         if let Err(error) = self
             .streaming
             .broadcast_status(&claim.instance_id, event)
@@ -441,6 +450,49 @@ mod tests {
             .claim_legacy(TaskOwner::Loopback, alias, context, None)
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn clarification_is_owned_and_resumes_with_a_new_run() {
+        let (_temp, bridge) = make_bridge(MockExecutionAdapter::succeeding()).await;
+        let owner = TaskOwner::Credential(uuid::Uuid::new_v4());
+        let other = TaskOwner::Credential(uuid::Uuid::new_v4());
+        let request = A2AMessage::text(A2ARole::User, "choose a color");
+        let initial = bridge
+            .task_manager
+            .claim_standard(owner, None, None, &[], &request)
+            .await
+            .unwrap();
+        let id = initial.task.id.clone();
+        let context = initial.task.context_id.clone();
+        let previous_run = initial.run_id;
+        initial
+            .cancellation
+            .request_clarification("Which color?".into())
+            .unwrap();
+        assert!(!initial.cancellation.request().await.unwrap());
+        let (run, _) = bridge.start(initial, request, false).await.unwrap();
+        let paused = run.await.unwrap().unwrap();
+        assert_eq!(paused.status.state, TaskState::InputRequired);
+        let answer = A2AMessage::text(A2ARole::User, "blue");
+        assert!(matches!(
+            bridge
+                .task_manager
+                .claim_standard(other, Some(&id), Some(&context), &[], &answer)
+                .await,
+            Err(A2AError::TaskNotFound(_))
+        ));
+        let resumed = bridge
+            .task_manager
+            .claim_standard(owner, Some(&id), Some(&context), &[], &answer)
+            .await
+            .unwrap();
+        assert_ne!(resumed.run_id, previous_run);
+        assert_eq!(resumed.pending_question.as_deref(), Some("Which color?"));
+        let completed = bridge.handle_message(resumed, answer).await.unwrap();
+        assert_eq!(completed.id, id);
+        assert_eq!(completed.context_id, context);
+        assert_eq!(completed.status.state, TaskState::Completed);
     }
 
     /// The peer on an A2A wire is a machine. There is no channel to render an

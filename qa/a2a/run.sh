@@ -39,8 +39,7 @@ if [ "$MODE" != gateway ]; then
   exit 64
 fi
 
-# Runtime route QA is deliberately opt-in and never builds Rust. The operator
-# supplies a binary built from the integration branch when the route lands.
+# The caller supplies an already-built server; this runner only exercises it.
 SERVER_BIN="${ALEPH_SERVER_BIN:-}"
 [ -x "$SERVER_BIN" ] || { echo "set ALEPH_SERVER_BIN to an executable aleph-server; no build is run" >&2; exit 2; }
 OWN_QA_ROOT=0
@@ -76,7 +75,7 @@ kill "$GEN_PID" 2>/dev/null || true
 wait "$GEN_PID" 2>/dev/null || true
 [ -f "$CONFIG" ] || { echo "server did not generate $CONFIG" >&2; tail -30 "$QA_ROOT/config-gen.log"; exit 1; }
 python3 "$HERE/enable_a2a.py" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT"
-python3 "$REPO/qa/busy_input/mock_anthropic.py" "$MOCK_PORT" /etc/hostname long-run >"$QA_ROOT/mock-provider.log" 2>&1 &
+python3 "$REPO/qa/busy_input/mock_anthropic.py" "$MOCK_PORT" /etc/hostname a2a >"$QA_ROOT/mock-provider.log" 2>&1 &
 MOCK_PID=$!
 "$SERVER_BIN" start >"$QA_ROOT/server.log" 2>&1 &
 SERVER_PID=$!
@@ -85,6 +84,11 @@ for _ in $(seq 1 90); do
   kill -0 "$SERVER_PID" 2>/dev/null || { echo "Gateway exited during startup" >&2; tail -40 "$QA_ROOT/server.log"; exit 1; }
   sleep 1
 done
+curl -fsS "http://127.0.0.1:$GATEWAY_PORT/health" >/dev/null || {
+  echo "Gateway did not become ready" >&2
+  tail -40 "$QA_ROOT/server.log"
+  exit 1
+}
 
 ENV_DIR="$QA_ROOT/venv-$SDK_TAG"
 export UV_CACHE_DIR="$QA_ROOT/uv-cache"

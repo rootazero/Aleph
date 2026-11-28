@@ -402,7 +402,7 @@ impl PreparedDelegation {
                     response.bytes_stream(),
                     STREAM_IDLE_TIMEOUT,
                     move |_, data| {
-                        let result = rpc_result(data, Some(&self.id), self.timeout)
+                        let result = rpc_result(protocol, data, Some(&self.id), self.timeout)
                             .map_err(|err| err.error)?;
                         decode_stream_result(protocol, result)
                     },
@@ -415,6 +415,7 @@ impl PreparedDelegation {
                 .await
                 .map_err(|err| DispatchError::unknown(transport_error(err)))?;
             let result = rpc_result(
+                protocol,
                 &body,
                 (protocol != RpcProtocol::Legacy).then_some(self.id.as_str()),
                 self.timeout,
@@ -430,6 +431,7 @@ fn transport_error(err: reqwest::Error) -> A2AError {
 }
 
 fn rpc_result(
+    protocol: RpcProtocol,
     body: &[u8],
     request_id: Option<&str>,
     timeout: Duration,
@@ -467,7 +469,11 @@ fn rpc_result(
                 -32001 => A2AError::TaskNotFound(error.message),
                 -32002 => A2AError::TaskNotCancelable(crate::a2a::domain::TaskState::Failed),
                 -32003 => A2AError::PushNotSupported,
+                -32004 if protocol != RpcProtocol::Legacy => {
+                    A2AError::UnsupportedOperation("Remote operation not supported")
+                }
                 -32004 => A2AError::UnsupportedContentType,
+                -32005 if protocol != RpcProtocol::Legacy => A2AError::UnsupportedContentType,
                 -32005 => A2AError::Forbidden,
                 -32010 => A2AError::AgentUnreachable(error.message),
                 -32011 => A2AError::NoMatchingAgent,
@@ -698,13 +704,50 @@ mod tests {
     }
 
     #[test]
+    fn selected_protocol_controls_remote_error_meaning() {
+        let timeout = Duration::from_secs(1);
+        let decode = |protocol, code| {
+            let envelope = json!({"jsonrpc":"2.0", "id":"one", "error": {
+                "code": code, "message":"remote error"
+            }});
+            rpc_result(
+                protocol,
+                &serde_json::to_vec(&envelope).unwrap(),
+                Some("one"),
+                timeout,
+            )
+            .unwrap_err()
+            .error
+        };
+        for protocol in [RpcProtocol::V03, RpcProtocol::V1] {
+            assert!(matches!(
+                decode(protocol, -32004),
+                A2AError::UnsupportedOperation(_)
+            ));
+            assert!(matches!(
+                decode(protocol, -32005),
+                A2AError::UnsupportedContentType
+            ));
+        }
+        assert!(matches!(
+            decode(RpcProtocol::Legacy, -32004),
+            A2AError::UnsupportedContentType
+        ));
+        assert!(matches!(
+            decode(RpcProtocol::Legacy, -32005),
+            A2AError::Forbidden
+        ));
+    }
+
+    #[test]
     fn rpc_envelope_validates_version_and_response_id() {
         let timeout = Duration::from_secs(1);
         for response in [
             br#"{"jsonrpc":"1.0","id":"one","result":{}}"#.as_slice(),
             br#"{"jsonrpc":"2.0","id":"two","result":{}}"#.as_slice(),
         ] {
-            let error = rpc_result(response, Some("one"), timeout).unwrap_err();
+            let error =
+                rpc_result(RpcProtocol::Legacy, response, Some("one"), timeout).unwrap_err();
             assert_eq!(error.delivery, DeliveryStatus::Unknown);
         }
     }

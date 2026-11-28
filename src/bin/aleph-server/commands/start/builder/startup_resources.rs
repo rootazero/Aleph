@@ -266,6 +266,48 @@ mod tests {
 
     use super::StartupResources;
 
+    #[tokio::test]
+    async fn shutdown_joins_a2a_workers_and_closes_the_registry() {
+        use alephcore::a2a::domain::{A2AError, AgentCard, TrustLevel};
+        use alephcore::a2a::port::AgentResolver;
+        use alephcore::a2a::service::CardRegistry;
+
+        let registry = Arc::new(CardRegistry::new());
+        let mut resources = StartupResources::new();
+        resources.install_a2a_registry(registry.clone());
+
+        let mut worker_stops = Vec::new();
+        for _ in 0..2 {
+            let (ready, running) = tokio::sync::oneshot::channel();
+            let (alive, stopped) = tokio::sync::oneshot::channel::<()>();
+            resources.install_a2a_worker(tokio::spawn(async move {
+                ready.send(()).unwrap();
+                std::future::pending::<()>().await;
+                drop(alive);
+            }));
+            running.await.unwrap();
+            worker_stops.push(stopped);
+        }
+
+        resources.cleanup().await.unwrap();
+        for mut stopped in worker_stops {
+            assert!(matches!(
+                stopped.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+            ));
+        }
+        let card: AgentCard = serde_json::from_value(serde_json::json!({
+            "id": "late", "name": "Late arrival", "version": "1", "interfaces": [],
+        }))
+        .unwrap();
+        assert!(matches!(
+            registry
+                .register_with_token(card, "https://example.com", TrustLevel::Trusted, None)
+                .await,
+            Err(A2AError::AgentUnreachable(_))
+        ));
+    }
+
     struct ShutdownTool(alephcore::tools::service::ToolDefinition);
 
     #[async_trait::async_trait]

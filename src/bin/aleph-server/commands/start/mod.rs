@@ -2678,7 +2678,7 @@ async fn start_server_body(
             use alephcore::a2a::adapter::server::A2AServerState;
             use alephcore::a2a::adapter::server::{AgentLoopBridge, StreamHub, TaskStore};
             use alephcore::a2a::port::authenticator::A2AAuthenticator;
-            use alephcore::a2a::port::{A2AMessageHandler, A2AStreamingHandler, A2ATaskManager};
+            use alephcore::a2a::port::{A2AMessageHandler, A2AStreamingHandler};
             use alephcore::a2a::service::{CardBuilder, CardRegistry, NotificationService};
             use alephcore::a2a::sub_agent::A2ASubAgent;
 
@@ -2732,13 +2732,11 @@ async fn start_server_body(
                 });
                 server.set_a2a_state(a2a_server_state);
 
-                let card_registry = Arc::new(CardRegistry::with_ssrf_policy(
-                    webhook_ssrf_policy.clone(),
-                ));
+                let card_registry =
+                    Arc::new(CardRegistry::with_ssrf_policy(webhook_ssrf_policy.clone()));
                 card_registry.load_from_config(&a2a_config).await;
-                let client_pool = Arc::new(A2AClientPool::with_ssrf_policy(
-                    webhook_ssrf_policy.clone(),
-                ));
+                let client_pool =
+                    Arc::new(A2AClientPool::with_ssrf_policy(webhook_ssrf_policy.clone()));
                 let a2a_sub_agent = Arc::new(
                     A2ASubAgent::new(card_registry.clone(), client_pool.clone())
                         .with_raw_memory_writer(raw_store.clone())
@@ -2796,7 +2794,8 @@ async fn start_server_body(
                 if !args.daemon {
                     println!("A2A protocol: enabled");
                     println!("  - Agent Card: /.well-known/agent-card.json");
-                    println!("  - RPC:        /a2a (sync), /a2a/stream (SSE)");
+                    println!("  - RPC:        /a2a/rpc (A2A 0.3 and 1.0)");
+                    println!("  - Legacy RPC: /a2a (sync), /a2a/stream (SSE)");
                     println!();
                 }
             } else {

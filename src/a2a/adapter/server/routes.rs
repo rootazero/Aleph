@@ -3,13 +3,13 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 
-use axum::Router;
 use axum::extract::{ConnectInfo, FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
+use axum::Router;
 use futures::StreamExt;
 
 use crate::a2a::adapter::wire;
@@ -686,12 +686,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&data).unwrap();
         assert!(json.get("result").is_none());
         assert_eq!(json["error"]["code"], -32001);
-        assert!(
-            json["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("missing")
-        );
+        assert_eq!(json["error"]["message"], "Task not found");
     }
 
     use std::pin::Pin;
@@ -700,7 +695,7 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::a2a::adapter::server::request_processor::A2AServerState;
-    use crate::a2a::adapter::server::{TaskStore, task_store::TaskClaim};
+    use crate::a2a::adapter::server::{task_store::TaskClaim, TaskStore};
     use crate::a2a::domain::security::TrustLevel;
     use crate::a2a::domain::{A2AMessage, SecurityScheme};
     use crate::a2a::port::authenticator::{

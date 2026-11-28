@@ -143,6 +143,7 @@ pub struct ScopedToolService {
     /// (sandbox escalation, `requires_confirmation`, `ask_user`) can route a
     /// prompt back to the originating channel.
     pub(super) turn_context: Option<crate::tools::turn_context::TurnContext>,
+    pub(super) remote_clarification: Option<crate::gateway::execution_adapter::ChatRunCancellation>,
     #[cfg(target_os = "linux")]
     pub(super) paired_shell:
         Option<crate::gateway::execution_engine::shell_effect::PairedShellRoute>,

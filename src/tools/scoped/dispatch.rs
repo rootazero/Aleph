@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::capability::backend::TOOL_NAMESPACE;
 use crate::capability::descriptor::CapabilityId;
 use crate::capability::facade::{BackendLease, Reference, Zahir};
-use crate::capability::ownership::{OwnerRef, RunId, VisibilityScope};
+use crate::capability::ownership::VisibilityScope;
 use crate::capability::policy_runtime::{
     CapabilityCallContext, PolicyAttachment, ResourceUse, RunningCapabilityCall,
 };
@@ -1689,8 +1689,15 @@ impl ScopedToolService {
                 }
                 _ => None,
             };
-            // carry restores the original turn, call identity and tier; the
-            // desktop context adds only the held invocation's authority.
+            let remote_clarification = self.remote_clarification.clone().filter(|_| {
+                entry.descriptor.name == "ask_user"
+                    && matches!(
+                        entry.descriptor.source,
+                        crate::tools::service::ToolSource::Builtin
+                    )
+            });
+            // The canonical owner carries the admitted invocation's turn and
+            // its optional desktop or A2A authority through settlement.
             let owned = crate::memory::runtime::carry(async move {
                 let _running_call = running_call;
                 let result = crate::tools::dispatch_verdict::with_gate_admission(
@@ -1714,6 +1721,14 @@ impl ScopedToolService {
                                 ),
                             ),
                         );
+                        let invocation = async move {
+                            match remote_clarification {
+                                Some(run) => crate::builtin_tools::ask_user::REMOTE_CLARIFICATION
+                                    .scope(run, invocation)
+                                    .await,
+                                None => invocation.await,
+                            }
+                        };
                         let result = match domain_call {
                             Some(call) => {
                                 crate::capability::special_dispatch::DOMAIN_TOOL_CALL

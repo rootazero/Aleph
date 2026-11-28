@@ -162,11 +162,9 @@ mod tests {
             A2AError::TaskNotCancelable(TaskState::Failed).to_string(),
             "Task not cancelable in state: Failed"
         );
-        assert!(
-            A2AError::Timeout(Duration::from_secs(30))
-                .to_string()
-                .contains("30")
-        );
+        assert!(A2AError::Timeout(Duration::from_secs(30))
+            .to_string()
+            .contains("30"));
     }
 
     #[test]

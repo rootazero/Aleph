@@ -417,9 +417,10 @@ impl SpecialRegistrationHandle {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.closed
-            || !state.entries.get(&self.id).is_some_and(|entry| {
-                entry.capture.descriptor.revision.0 == self.revision
-            })
+            || !state
+                .entries
+                .get(&self.id)
+                .is_some_and(|entry| entry.capture.descriptor.revision.0 == self.revision)
         {
             return false;
         }

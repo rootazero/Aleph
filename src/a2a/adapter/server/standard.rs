@@ -1,23 +1,23 @@
 use std::convert::Infallible;
 
-use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 use futures::StreamExt;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::a2a::adapter::wire::{self, WireVersion};
 use crate::a2a::domain::{A2AError, A2ATask, ListTasksParams, TaskState};
-use crate::a2a::port::A2AResult;
 use crate::a2a::port::authenticator::{A2AAction, A2AAuthContext, A2AAuthPrincipal};
 use crate::a2a::port::streaming::TaskUpdateStream;
+use crate::a2a::port::A2AResult;
 use crate::sync_primitives::Arc;
 
 use super::request_processor::{A2AServerState, JsonRpcRequest, JsonRpcResponse};
-use super::routes::{PeerAddr, extract_credentials, headers_to_map, serialize_rpc_frame};
+use super::routes::{extract_credentials, headers_to_map, serialize_rpc_frame, PeerAddr};
 use super::task_store::TaskScope;
 
 #[derive(Deserialize)]
@@ -171,6 +171,7 @@ async fn dispatch(
                     input.task_id.as_deref(),
                     input.context_id.as_deref(),
                     &input.reference_task_ids,
+                    &input.message,
                 )
                 .await?;
             if streaming || immediate {
@@ -201,7 +202,10 @@ async fn dispatch(
         }
         Operation::Cancel => {
             let query: TaskParams = wire::from_value(params)?;
-            let task = state.task_manager.cancel_owned(scope, &query.id).await?;
+            let task = state
+                .task_manager
+                .cancel_owned(scope, &query.id, state.streaming.as_ref())
+                .await?;
             wire::task(version, &task)
         }
         Operation::Subscribe => {
@@ -330,11 +334,15 @@ async fn list_tasks(
     let tasks: Vec<_> = page
         .into_iter()
         .map(|task| {
-            let mut task = limit_history(task, query.history_length);
+            let mut result =
+                wire::task(WireVersion::V10, &limit_history(task, query.history_length));
             if query.include_artifacts != Some(true) {
-                task.artifacts.clear();
+                result
+                    .as_object_mut()
+                    .expect("task is an object")
+                    .remove("artifacts");
             }
-            wire::task(WireVersion::V10, &task)
+            result
         })
         .collect();
     Ok(json!({"tasks": tasks, "pageSize": page_size, "totalSize": total, "nextPageToken": next}))

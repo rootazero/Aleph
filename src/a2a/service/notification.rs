@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::a2a::domain::{A2AError, UpdateEvent};
 use crate::a2a::port::A2AResult;
-use crate::security::ssrf::{SsrfPolicy, validate_url_with_pinned};
+use crate::security::ssrf::{validate_url_with_pinned, SsrfPolicy};
 
 /// Configuration for push notifications on a task
 #[derive(Clone, Serialize, Deserialize)]

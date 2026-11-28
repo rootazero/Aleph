@@ -21,8 +21,8 @@ use crate::a2a::adapter::server::request_processor::{
 };
 use crate::a2a::adapter::server::routes::a2a_routes;
 use crate::a2a::adapter::server::{
-    StreamHub, TaskStore,
     task_store::{TaskClaim, TaskScope},
+    StreamHub, TaskStore,
 };
 use crate::a2a::config::{A2ASecurityConfig, A2AServerConfig, A2ASkillConfig};
 use crate::a2a::domain::*;
@@ -252,7 +252,11 @@ async fn test_task_crud_lifecycle() {
 
     // Cancel completed task -> should fail
     let err = store
-        .cancel_owned(TaskScope::Legacy(TaskOwner::Loopback), "task-1")
+        .cancel_owned(
+            TaskScope::Legacy(TaskOwner::Loopback),
+            "task-1",
+            &StreamHub::new(),
+        )
         .await
         .unwrap_err();
     assert!(matches!(
@@ -340,31 +344,26 @@ async fn test_tiered_auth_localhost_bypass() {
     assert!(principal.permissions.contains(&"*".to_string()));
 
     // Should be authorized for all actions
-    assert!(
-        auth.authorize(&principal, &A2AAction::SendMessage)
-            .await
-            .unwrap()
-    );
-    assert!(
-        auth.authorize(&principal, &A2AAction::GetTask)
-            .await
-            .unwrap()
-    );
-    assert!(
-        auth.authorize(&principal, &A2AAction::CancelTask)
-            .await
-            .unwrap()
-    );
-    assert!(
-        auth.authorize(&principal, &A2AAction::ListTasks)
-            .await
-            .unwrap()
-    );
-    assert!(
-        auth.authorize(&principal, &A2AAction::Subscribe)
-            .await
-            .unwrap()
-    );
+    assert!(auth
+        .authorize(&principal, &A2AAction::SendMessage)
+        .await
+        .unwrap());
+    assert!(auth
+        .authorize(&principal, &A2AAction::GetTask)
+        .await
+        .unwrap());
+    assert!(auth
+        .authorize(&principal, &A2AAction::CancelTask)
+        .await
+        .unwrap());
+    assert!(auth
+        .authorize(&principal, &A2AAction::ListTasks)
+        .await
+        .unwrap());
+    assert!(auth
+        .authorize(&principal, &A2AAction::Subscribe)
+        .await
+        .unwrap());
 }
 
 // ============================================================
@@ -867,7 +866,7 @@ async fn recycled_alias_has_a_new_instance_and_no_inherited_push() {
 
 #[tokio::test]
 async fn standard_discovery_and_rpc_use_advertised_binding_and_scoped_ids() {
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     let app = a2a_routes(credential_scoped_state());
     let response = app
@@ -934,6 +933,23 @@ async fn standard_discovery_and_rpc_use_advertised_binding_and_scoped_ids() {
         newer["result"]["task"]["status"]["state"],
         "TASK_STATE_COMPLETED"
     );
+    let default_list = rpc(Some("1.0"), alpha, "ListTasks", json!({})).await;
+    assert!(
+        default_list["result"]["tasks"]
+            .as_array()
+            .is_some_and(|tasks| {
+                !tasks.is_empty() && tasks.iter().all(|task| task.get("artifacts").is_none())
+            }),
+        "{default_list}"
+    );
+    let artifact_list = rpc(
+        Some("1.0"),
+        alpha,
+        "ListTasks",
+        json!({"includeArtifacts": true}),
+    )
+    .await;
+    assert!(artifact_list["result"]["tasks"][0]["artifacts"].is_array());
     let foreign = rpc(Some("1.0"), beta, "GetTask", json!({"id": task_id})).await;
     let absent = rpc(Some("1.0"), beta, "GetTask", json!({"id": "absent"})).await;
     assert_eq!(foreign["error"], absent["error"]);

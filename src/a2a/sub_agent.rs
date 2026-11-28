@@ -151,15 +151,25 @@ impl A2ASubAgent {
             Ok(prepared) => prepared,
             Err(error) => return (failure(error.to_string()), DeliveryStatus::NotSent),
         };
-        if let Err(error) = self
-            .card_registry
-            .admit_dispatch(&agent.card.id, agent.invocation_generation())
-            .await
-        {
-            return (failure(error.to_string()), DeliveryStatus::NotSent);
-        }
+        let dispatched = match self.card_registry.start_dispatch(
+            &agent.card.id,
+            agent.invocation_generation(),
+            prepared,
+        ) {
+            Ok(dispatched) => dispatched,
+            Err(error) => return (failure(error.to_string()), DeliveryStatus::NotSent),
+        };
+        let response = match dispatched.await {
+            Ok(response) => response,
+            Err(error) => {
+                let result = failure(format!("A2A dispatch outcome unavailable: {error}"));
+                self.record_delegation_memory(request, &result, &agent.card.id)
+                    .await;
+                return (result, DeliveryStatus::Unknown);
+            }
+        };
 
-        let (result, delivery) = match prepared.send().await {
+        let (result, delivery) = match response {
             Ok(DelegationResponse::Unary(task)) => (
                 unary_result(&request.id, task),
                 DeliveryStatus::ResponseReceived,
@@ -270,7 +280,9 @@ impl A2ASubAgent {
         #[cfg(test)]
         return Ok(self.execute_registered_delegation(&target, &request).await);
         #[cfg(not(test))]
-        Err(crate::error::AlephError::tool("A2A capability source is unavailable"))
+        Err(crate::error::AlephError::tool(
+            "A2A capability source is unavailable",
+        ))
     }
 
     /// Dispatch a selection carrying the invocation generation read from the registry.
@@ -574,6 +586,43 @@ mod tests {
             .unwrap();
         assert!(!outcome.result.success);
         assert_eq!(outcome.delivery, DeliveryStatus::Unknown);
+    }
+
+    #[tokio::test]
+    async fn final_dispatch_handoff_orders_against_withdrawal() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a"))
+            .respond_with(ResponseTemplate::new(502))
+            .expect(1)
+            .mount(&server)
+            .await;
+        for withdraw_first in [true, false] {
+            let sub = build_sub_agent(vec![legacy_registered("Peer", &server.uri(), false)]).await;
+            let selected = sub.card_registry.snapshot().await.remove(0);
+            let client = sub.client_pool.get_or_create(&selected).await.unwrap();
+            let prepared = client
+                .prepare_delegation("handoff", &A2AMessage::text(A2ARole::User, "do it"))
+                .await
+                .unwrap();
+            if withdraw_first {
+                sub.card_registry.unregister("peer").await.unwrap();
+            }
+            let handoff = sub.card_registry.start_dispatch(
+                "peer",
+                selected.invocation_generation(),
+                prepared,
+            );
+            if withdraw_first {
+                assert!(handoff.is_err());
+                assert!(server.received_requests().await.unwrap().is_empty());
+            } else {
+                sub.card_registry.unregister("peer").await.unwrap();
+                let result = handoff.unwrap().await.unwrap();
+                assert!(result.is_err());
+                assert_eq!(server.received_requests().await.unwrap().len(), 1);
+            }
+        }
     }
 
     #[tokio::test]

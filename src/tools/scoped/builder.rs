@@ -21,6 +21,14 @@ use super::traits::ToolDefinitionRewriter;
 use super::ScopedToolService;
 
 impl ScopedToolService {
+    pub(crate) fn with_remote_clarification(
+        mut self,
+        run: Option<&crate::gateway::execution_adapter::ChatRunCancellation>,
+    ) -> Self {
+        self.remote_clarification = run.filter(|run| run.allows_remote_clarification()).cloned();
+        self
+    }
+
     #[cfg(target_os = "linux")]
     pub(crate) fn with_paired_shell(
         mut self,
@@ -47,6 +55,7 @@ impl ScopedToolService {
             approval_requester: None,
             config_approval_requester: None,
             turn_context: None,
+            remote_clarification: None,
             #[cfg(target_os = "linux")]
             paired_shell: None,
             result_store: None,

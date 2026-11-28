@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use tokio::sync::watch;
+use tokio::sync::{watch, RwLockWriteGuard};
 
 use crate::a2a::domain::{
-    A2AError, A2AMessage, A2ATask, Artifact, ListTasksParams, ListTasksResult, TaskState,
-    TaskStatus,
+    A2AError, A2AMessage, A2ARole, A2ATask, Artifact, ListTasksParams, ListTasksResult, TaskState,
+    TaskStatus, TaskStatusUpdateEvent,
 };
 use uuid::Uuid;
 
@@ -56,6 +56,7 @@ pub struct TaskClaim {
     pub(crate) session_id: String,
     pub(crate) run_id: Uuid,
     pub(crate) cancellation: ChatRunCancellation,
+    pub(crate) pending_question: Option<String>,
     pub(crate) task: A2ATask,
 }
 
@@ -145,6 +146,29 @@ impl TaskStore {
         }
     }
 
+    async fn lock_for_task_action(
+        &self,
+        scope: TaskScope,
+        alias: Option<&str>,
+    ) -> RwLockWriteGuard<'_, RetainedTasks> {
+        loop {
+            let tasks = self.tasks.write().await;
+            let settling = alias
+                .and_then(|alias| tasks.resolve(scope, alias).ok())
+                .map(|instance| &tasks.by_instance[instance])
+                .filter(|record| record.task.status.state == TaskState::InputRequired)
+                .and_then(|record| record.active.as_ref());
+            let Some(run) = settling else {
+                return tasks;
+            };
+            // The paused snapshot can be visible before its stream is closed.
+            // Recheck ownership and state after cleanup releases the old run.
+            let mut settlement = run.settlement.subscribe();
+            drop(tasks);
+            let _ = settlement.changed().await;
+        }
+    }
+
     pub(crate) async fn claim_legacy(
         &self,
         owner: TaskOwner,
@@ -152,8 +176,8 @@ impl TaskStore {
         requested_context: Option<&str>,
         push: Option<PushNotificationConfig>,
     ) -> A2AResult<TaskClaim> {
-        let mut tasks = self.tasks.write().await;
         let scope = TaskScope::Legacy(owner);
+        let mut tasks = self.lock_for_task_action(scope, Some(alias)).await;
         let previous = tasks.resolve(scope, alias).ok().map(str::to_owned);
         let instance = if let Some(instance) = previous.as_ref() {
             let record = &tasks.by_instance[instance];
@@ -201,9 +225,10 @@ impl TaskStore {
         alias: Option<&str>,
         requested_context: Option<&str>,
         references: &[String],
+        message: &A2AMessage,
     ) -> A2AResult<TaskClaim> {
-        let mut tasks = self.tasks.write().await;
         let scope = TaskScope::Standard(owner);
+        let mut tasks = self.lock_for_task_action(scope, alias).await;
         let resolve = |id: &str| tasks.resolve(scope, id).map(str::to_owned);
         for reference in references {
             resolve(reference)?;
@@ -259,6 +284,7 @@ impl TaskStore {
             .by_instance
             .get_mut(&instance)
             .expect("admitted task is retained");
+        record.task.history.push(message.clone());
         Ok(Self::admit(record, instance, context_id, None))
     }
 
@@ -271,13 +297,23 @@ impl TaskStore {
         if let Some(push) = push {
             record.push = Some(push);
         }
+        let pending_question = (record.task.status.state == TaskState::InputRequired)
+            .then(|| {
+                record
+                    .task
+                    .status
+                    .message
+                    .as_ref()
+                    .map(A2AMessage::text_content)
+            })
+            .flatten();
         record.task.status = TaskStatus {
             state: TaskState::Working,
             message: None,
             timestamp: Utc::now(),
         };
         let run_id = Uuid::new_v4();
-        let cancellation = ChatRunCancellation::default();
+        let cancellation = ChatRunCancellation::for_remote_task();
         record.active = Some(ActiveRun {
             id: run_id,
             cancellation: cancellation.clone(),
@@ -288,6 +324,7 @@ impl TaskStore {
             session_id,
             run_id,
             cancellation,
+            pending_question,
             task: record.task.clone(),
         }
     }
@@ -569,11 +606,40 @@ impl TaskStore {
         }
     }
 
-    pub(crate) async fn cancel_owned(&self, scope: TaskScope, alias: &str) -> A2AResult<A2ATask> {
+    pub(crate) async fn cancel_owned(
+        &self,
+        scope: TaskScope,
+        alias: &str,
+        streaming: &dyn A2AStreamingHandler,
+    ) -> A2AResult<A2ATask> {
         let (cancellation, mut settlement) = {
-            let tasks = self.tasks.read().await;
-            let instance = tasks.resolve(scope, alias)?;
-            let record = &tasks.by_instance[instance];
+            let mut tasks = self.lock_for_task_action(scope, Some(alias)).await;
+            let instance = tasks.resolve(scope, alias)?.to_owned();
+            let record = tasks
+                .by_instance
+                .get_mut(&instance)
+                .expect("resolved task is retained");
+            if record.task.status.state == TaskState::InputRequired && record.active.is_none() {
+                let message = A2AMessage::text(A2ARole::Agent, "Task canceled");
+                record.task.status = TaskStatus {
+                    state: TaskState::Canceled,
+                    message: Some(message.clone()),
+                    timestamp: Utc::now(),
+                };
+                record.task.history.push(message);
+                let task = record.task.clone();
+                drop(tasks);
+                let event = TaskStatusUpdateEvent::new(
+                    task.id.clone(),
+                    task.context_id.clone(),
+                    task.status.clone(),
+                    None,
+                );
+                if let Err(error) = streaming.broadcast_status(&instance, event).await {
+                    tracing::warn!(%error, "A2A cancellation update could not be published");
+                }
+                return Ok(task);
+            }
             if record.task.status.state != TaskState::Working {
                 return Err(A2AError::TaskNotCancelable(record.task.status.state));
             }
@@ -694,11 +760,57 @@ mod tests {
                 .unwrap();
             store.release_run(&claim).await;
         };
+        let streaming = crate::a2a::adapter::server::StreamHub::new();
         let (task, ()) = tokio::join!(
-            store.cancel_owned(TaskScope::Legacy(TaskOwner::Loopback), "t1"),
+            store.cancel_owned(TaskScope::Legacy(TaskOwner::Loopback), "t1", &streaming),
             settle
         );
         assert_eq!(task.unwrap().status.state, TaskState::Canceled);
+    }
+
+    #[tokio::test]
+    async fn earlier_run_cannot_settle_or_release_a_resumed_task() {
+        let store = TaskStore::new();
+        let owner = TaskOwner::Credential(Uuid::new_v4());
+        let request = A2AMessage::text(A2ARole::User, "choose a color");
+        let initial = store
+            .claim_standard(owner, None, None, &[], &request)
+            .await
+            .unwrap();
+        let question = A2AMessage::text(A2ARole::Agent, "Which color?");
+        store
+            .finish_run(&initial, TaskState::InputRequired, Some(question), None)
+            .await
+            .unwrap();
+        let answer = A2AMessage::text(A2ARole::User, "blue");
+        let resume = store.claim_standard(owner, Some(&initial.task.id), None, &[], &answer);
+        tokio::pin!(resume);
+        assert!(futures::poll!(resume.as_mut()).is_pending());
+        store.release_run(&initial).await;
+        let resumed = resume.await.unwrap();
+        assert_ne!(initial.run_id, resumed.run_id);
+        assert!(matches!(
+            store
+                .finish_run(&initial, TaskState::Failed, None, None)
+                .await,
+            Err(A2AError::InternalError(_))
+        ));
+        store.release_run(&initial).await;
+        let current = store
+            .get_owned(TaskScope::Standard(owner), &resumed.task.id, None)
+            .await
+            .unwrap();
+        assert_eq!(current.status.state, TaskState::Working);
+        assert_eq!(
+            store
+                .finish_run(&resumed, TaskState::Completed, None, None)
+                .await
+                .unwrap()
+                .status
+                .state,
+            TaskState::Completed
+        );
+        store.release_run(&resumed).await;
     }
 
     #[tokio::test]
@@ -711,7 +823,11 @@ mod tests {
             .unwrap();
 
         let err = store
-            .cancel_owned(TaskScope::Legacy(TaskOwner::Loopback), "t1")
+            .cancel_owned(
+                TaskScope::Legacy(TaskOwner::Loopback),
+                "t1",
+                &crate::a2a::adapter::server::StreamHub::new(),
+            )
             .await
             .unwrap_err();
         assert!(matches!(

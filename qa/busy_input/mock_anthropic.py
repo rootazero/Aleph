@@ -131,6 +131,7 @@ _lock = threading.Lock()
 PLANS = {
     "burst-drain": [(3, "tool"), (30, "tool"), (45, "tool"), (45, "tool"), (0, "end")],
     "long-run": [(3, "tool"), (90, "tool"), (0, "end")],
+    "a2a": [],
     "quick": [(1, "tool"), (1, "tool"), (0, "end")],
     # For scenarios that put SEVERAL runs in flight (interrupt / queue bursts).
     # The turn counter is global, not per-run, so a plan that ends after a few
@@ -179,6 +180,20 @@ def sse(payload):
     return f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n".encode()
 
 
+def user_message_text(message):
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(block.get("text", "") for block in content if isinstance(block, dict))
+    return ""
+
+
+def latest_user_text(messages):
+    latest = next((msg for msg in reversed(messages) if msg.get("role") == "user"), {})
+    return user_message_text(latest)
+
+
 def describe(msgs):
     """What the harness is carrying into this turn.
 
@@ -189,20 +204,7 @@ def describe(msgs):
     """
     if not msgs:
         return "no messages"
-    last_user = next(
-        (m for m in reversed(msgs) if m.get("role") == "user"),
-        None,
-    )
-    text = ""
-    if last_user:
-        content = last_user.get("content")
-        if isinstance(content, str):
-            text = content
-        elif isinstance(content, list):
-            text = " ".join(
-                b.get("text", "") for b in content if isinstance(b, dict)
-            )
-    return f"{len(msgs)} messages, last user text: {text.strip()[:120]!r}"
+    return f"{len(msgs)} messages, last user text: {latest_user_text(msgs).strip()[:120]!r}"
 
 
 class H(BaseHTTPRequestHandler):
@@ -375,6 +377,30 @@ class H(BaseHTTPRequestHandler):
     def _do_post(self):
         n = int(self.headers.get("content-length", 0))
         body = json.loads(self.rfile.read(n) or b"{}")
+        if PLAN_NAME == "a2a":
+            messages = body.get("messages", [])
+            probes = ("SDK v0.3.26 inbound QA", "SDK v1.0.3 inbound QA",
+                      "A2A clarification probe", "Remote caller follow-up:")
+            probe = next((
+                label
+                for message in reversed(messages) if message.get("role") == "user"
+                for label in probes if label in user_message_text(message)
+            ), "")
+            with _lock:
+                _n[0] += 1
+                turn = _n[0]
+            names = {tool.get("name") for tool in body.get("tools", [])}
+            log(f"turn #{turn} (tools={len(names)}) (probe={probe!r}, {describe(messages)})")
+            if names and "inbound QA" in probe:
+                time.sleep(90)
+            calls = []
+            if "ask_user" in names and probe == "A2A clarification probe":
+                calls = [{
+                    "name": "ask_user",
+                    "input": {"question": "Which color should I use?", "choices": ["Blue", "Gold"]},
+                }]
+            self._respond(body, turn, calls)
+            return
         if SCRIPTED:
             self._scripted_post(body)
             return
