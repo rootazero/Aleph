@@ -318,29 +318,66 @@ pub fn top_window_for_pid(pid: u32) -> Option<u64> {
 /// of silently dropping out of the app list.
 #[must_use]
 pub fn process_image_path(pid: u32) -> Option<PathBuf> {
-    use windows::core::PWSTR;
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-        PROCESS_QUERY_LIMITED_INFORMATION,
-    };
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let path = process_image_path_for_handle(handle);
+    // SAFETY: this call owns the handle returned above.
+    let _ = unsafe { CloseHandle(handle) };
+    path
+}
 
-    // SAFETY: the handle is closed on every path below; `QueryFullProcessImageNameW`
-    // writes at most `size` UTF-16 units into `buf` and updates `size`.
+fn process_image_path_for_handle(handle: windows::Win32::Foundation::HANDLE) -> Option<PathBuf> {
+    use windows::core::PWSTR;
+    use windows::Win32::System::Threading::{QueryFullProcessImageNameW, PROCESS_NAME_WIN32};
+
+    let mut buf = [0u16; 1024];
+    let mut size = buf.len() as u32;
+    // SAFETY: the caller keeps the handle live; `size` bounds the buffer.
     unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
-        let mut buf = [0u16; 1024];
-        let mut size = buf.len() as u32;
-        let ok = QueryFullProcessImageNameW(
+        QueryFullProcessImageNameW(
             handle,
             PROCESS_NAME_WIN32,
             PWSTR(buf.as_mut_ptr()),
-            std::ptr::addr_of_mut!(size),
+            &mut size,
         )
-        .is_ok();
-        let _ = CloseHandle(handle);
-        ok.then(|| PathBuf::from(String::from_utf16_lossy(&buf[..size as usize])))
     }
+    .ok()?;
+    Some(PathBuf::from(String::from_utf16_lossy(
+        &buf[..size as usize],
+    )))
+}
+
+pub fn desktop_process_identity(pid: i32) -> Option<crate::system_types::DesktopProcessIdentity> {
+    use windows::Win32::Foundation::{CloseHandle, FILETIME, STILL_ACTIVE};
+    use windows::Win32::System::Threading::{
+        GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    let process_id = u32::try_from(pid).ok()?;
+    // SAFETY: the handle receives the exact PID and is owned until closed below.
+    let handle =
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) }.ok()?;
+    let path = process_image_path_for_handle(handle);
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    // SAFETY: all output pointers refer to initialized, distinct FILETIMEs.
+    let times =
+        unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) };
+    let mut exit_code = 0;
+    let status = unsafe { GetExitCodeProcess(handle, &mut exit_code) };
+    let _ = unsafe { CloseHandle(handle) };
+    times.ok()?;
+    status.ok()?;
+    if exit_code != STILL_ACTIVE.0 as u32 {
+        return None;
+    }
+    Some(crate::system_types::DesktopProcessIdentity {
+        pid,
+        bundle_id: path?.to_string_lossy().into_owned(),
+        launch_stamp: (u64::from(creation.dwHighDateTime) << 32)
+            | u64::from(creation.dwLowDateTime),
+    })
 }
 
 /// The name a person calls this app.

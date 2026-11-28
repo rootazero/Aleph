@@ -1680,8 +1680,14 @@ mod secure_value_never_reaches_the_model {
 
     #[test]
     fn not_in_the_ax_snapshot_projection() {
-        let (elements, _, _) =
-            crate::builtin_tools::desktop::ax::flatten_interactable(&login_form(), 200, "test");
+        let elements: Vec<_> = login_form()
+            .children
+            .iter()
+            .enumerate()
+            .map(|(index, element)| {
+                crate::builtin_tools::desktop::ax::element_to_json(index, element)
+            })
+            .collect();
         let json = serde_json::to_string(&elements).unwrap();
         assert!(!json.contains(SECRET), "desktop_ax_snapshot leaked: {json}");
         // The element itself is still reported — the model must know the field
@@ -2539,8 +2545,9 @@ mod post_observation {
         WindowInfo, WindowShot,
     };
     use aleph_protocol::desktop_bridge::methods::ax::{
-        AxActionResult, AxElement, QueryByRoleParams, QueryFocusedParams, QueryListResult,
-        QueryResult, QueryTreeParams, SetValueParams,
+        AxActionResult, AxElement, AxMutation, AxReferenceAction, AxReferenceSnapshot,
+        AxSnapshotRequest, AxSnapshotRow, AxVerification, NativeAxReference, QueryByRoleParams,
+        QueryFocusedParams, QueryListResult, QueryResult, QueryTreeParams, SetValueParams,
     };
     use std::sync::Mutex;
 
@@ -2557,6 +2564,7 @@ mod post_observation {
         WindowCapture(u64),
         OwnedCapture(u64, i32),
         SetValue(Option<i32>),
+        NativeAction(AxReferenceAction),
         WindowList,
         MoveWindow(u64),
     }
@@ -2737,6 +2745,64 @@ mod post_observation {
         async fn query_by_role(&self, _: QueryByRoleParams) -> DesktopResult<QueryListResult> {
             unused()
         }
+        async fn snapshot_references(
+            &self,
+            args: AxSnapshotRequest,
+        ) -> DesktopResult<AxReferenceSnapshot> {
+            let element = AxElement {
+                role: "AXTextField".into(),
+                title: Some("fixture field".into()),
+                pid: PID,
+                secure: Some(true),
+                settable: Some(true),
+                value: Some("private fixture value".into()),
+                ..Default::default()
+            };
+            Ok(AxReferenceSnapshot {
+                app_pid: PID,
+                window_id: args.window_id,
+                tree_available: true,
+                elements: vec![AxSnapshotRow {
+                    element,
+                    reference: Some(NativeAxReference {
+                        lease: "opaque fixture lease".into(),
+                        index: 3,
+                    }),
+                }],
+                focused: None,
+                tree_truncated: false,
+                truncated: false,
+                nodes_walked: 1,
+                total_interactable: 1,
+            })
+        }
+
+        async fn act_on_reference(
+            &self,
+            action: AxReferenceAction,
+        ) -> DesktopResult<AxActionResult> {
+            self.record(Call::NativeAction(action));
+            if let Some(state) = &self.interactive {
+                if state
+                    .hold_native_action
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    state.native_started.notify_one();
+                    state.release_native.notified().await;
+                }
+            }
+            Ok(AxActionResult {
+                performed: true,
+                path: "accessibility".into(),
+                matched: None,
+                verification: Some(AxVerification {
+                    state: "verified".into(),
+                    reason: None,
+                    actual_preview: None,
+                }),
+            })
+        }
+
         async fn set_value(&self, params: SetValueParams) -> DesktopResult<AxActionResult> {
             self.record(Call::SetValue(params.locator.pid));
             Ok(AxActionResult {
@@ -2752,6 +2818,9 @@ mod post_observation {
         launch_stamp: std::sync::atomic::AtomicU64,
         escape_generation: std::sync::atomic::AtomicU64,
         frame_x: std::sync::atomic::AtomicU64,
+        hold_native_action: std::sync::atomic::AtomicBool,
+        native_started: tokio::sync::Notify,
+        release_native: tokio::sync::Notify,
     }
 
     #[async_trait]
@@ -2890,6 +2959,9 @@ mod post_observation {
         };
         use std::sync::atomic::{AtomicU64, Ordering};
 
+        let _store = super::super::element_ref::TEST_STORE_GUARD
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let manager = Arc::new(ExecApprovalManager::new());
         let bus = Arc::new(GatewayEventBus::new());
@@ -2904,6 +2976,9 @@ mod post_observation {
             launch_stamp: AtomicU64::new(1),
             escape_generation: AtomicU64::new(1),
             frame_x: AtomicU64::new(10),
+            hold_native_action: false.into(),
+            native_started: tokio::sync::Notify::new(),
+            release_native: tokio::sync::Notify::new(),
         });
         platform.window_owner = Some(PID as u64);
         let platform = Arc::new(platform);
@@ -2929,21 +3004,22 @@ mod post_observation {
         )));
         inner.bind_canonical_registry(registry.clone(), Arc::new(|_| true));
         assert!(inner.bind_canonical_facade(host.facade()));
+        let turn = TurnContext {
+            session_key: SessionKey::main("desktop-operator-fixture"),
+            run_id: "desktop-operator-fixture".into(),
+            channel_id: "test".into(),
+            conversation_id: "origin".into(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: false,
+            plan_gate: None,
+            side_question: false,
+            telecom_authority: None,
+        };
         let service = Arc::new(
             ScopedToolService::new(Arc::new(inner), Default::default())
                 .with_exec_tier(ExecTier::Auto)
-                .with_turn_context(TurnContext {
-                    session_key: SessionKey::main("desktop-operator-fixture"),
-                    run_id: "desktop-operator-fixture".into(),
-                    channel_id: "test".into(),
-                    conversation_id: "origin".into(),
-                    caller_role: None,
-                    channel_tool_permissions: None,
-                    unattended: false,
-                    plan_gate: None,
-                    side_question: false,
-                    telecom_authority: None,
-                })
+                .with_turn_context(turn.clone())
                 .with_operator_approval(requester),
         );
         let call = |label: &str, input| {
@@ -2961,6 +3037,120 @@ mod post_observation {
             })
         };
         const SECRET: &str = "synthetic-approval-secret";
+        let snapshot = super::super::ax::DesktopAxSnapshot::new().with_platform(platform.clone());
+        let read_snapshot = || async {
+            let args = serde_json::from_value(serde_json::json!({ "pid": PID })).unwrap();
+            AlephTool::call(&snapshot, args).await.unwrap()
+        };
+        let read = || async {
+            let data = read_snapshot().await.data.unwrap();
+            let row = &data["elements"][0];
+            assert!(row.get("center").is_none());
+            let serialized = data.to_string();
+            assert!(!serialized.contains("opaque fixture lease"));
+            assert!(!serialized.contains("private fixture value"));
+            row["token"].as_str().unwrap().to_owned()
+        };
+        for (index, case) in ["reference-approved", "reference-superseded"]
+            .into_iter()
+            .enumerate()
+        {
+            use crate::tools::turn_context::TURN_CONTEXT;
+            let token = TURN_CONTEXT.scope(turn.clone(), read()).await;
+            let mut action = call(
+                case,
+                serde_json::json!({
+                    "action": "set_value", "element": token, "text": SECRET
+                }),
+            );
+            let approval_id = loop {
+                let event = tokio::select! {
+                    returned = &mut action => panic!("{case} settled before approval: {returned:?}"),
+                    event = events.recv() => event.unwrap(),
+                };
+                if let crate::gateway::events::GatewayEventFrame::ApprovalRequested {
+                    approval_id,
+                    tool_call_id,
+                    ..
+                } = &event
+                {
+                    assert!(!format!("{event:?}").contains(SECRET));
+                    assert_eq!(tool_call_id.as_deref(), Some(case));
+                    break approval_id.clone();
+                }
+            };
+            let recorded_count = || {
+                platform
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|call| matches!(call, Call::NativeAction(_)))
+                    .count()
+            };
+            assert_eq!(recorded_count(), index);
+            if index == 1 {
+                assert_ne!(TURN_CONTEXT.scope(turn.clone(), read()).await, token);
+            }
+            assert!(manager.resolve(&approval_id, ApprovalDecisionType::AllowOnce, None));
+            let result = action.await.unwrap().unwrap();
+            let output = result.value.to_string();
+            assert_eq!(recorded_count(), 1, "{case}: {output}");
+            if index == 0 {
+                assert!(output.contains("confirmed"), "{output}");
+                platform.assert_calls(&[Call::NativeAction(AxReferenceAction {
+                    reference: NativeAxReference {
+                        lease: "opaque fixture lease".into(),
+                        index: 3,
+                    },
+                    mutation: AxMutation::SetValue {
+                        value: SECRET.into(),
+                    },
+                })]);
+            } else {
+                assert!(output.contains("stale_reference"), "{output}");
+            }
+        }
+        use crate::tools::turn_context::TURN_CONTEXT;
+        let token = TURN_CONTEXT.scope(turn.clone(), read()).await;
+        state.hold_native_action.store(true, Ordering::Release);
+        let mut action = call(
+            "reference-cancelled-after-dispatch",
+            serde_json::json!({
+                "action": "ax_action", "element": token, "ax_action_name": "AXPress"
+            }),
+        );
+        let approval_id = loop {
+            let event = tokio::select! {
+                returned = &mut action => panic!("Action settled before approval: {returned:?}"),
+                event = events.recv() => event.unwrap(),
+            };
+            if let crate::gateway::events::GatewayEventFrame::ApprovalRequested {
+                approval_id,
+                ..
+            } = event
+            {
+                break approval_id;
+            }
+        };
+        assert!(manager.resolve(&approval_id, ApprovalDecisionType::AllowOnce, None));
+        state.native_started.notified().await;
+        action.abort();
+        assert!(action.await.unwrap_err().is_cancelled());
+        let pending = TURN_CONTEXT.scope(turn.clone(), read_snapshot()).await;
+        assert!(!pending.success);
+        assert_eq!(pending.data.unwrap()["code"], "action_pending");
+        state.release_native.notify_one();
+        loop {
+            let settled = TURN_CONTEXT.scope(turn.clone(), read_snapshot()).await;
+            if settled.success {
+                break;
+            }
+            assert_eq!(settled.data.unwrap()["code"], "action_pending");
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(platform.calls.lock().unwrap().len(), 2);
+        platform.calls.lock().unwrap().clear();
         let type_args = serde_json::json!({ "action":"type_text", "pid":PID, "text":SECRET, "force":true, "observe":"state" });
         let click_args =
             serde_json::json!({ "action":"click", "pid":PID, "x":12, "y":22, "window_id":WINDOW });

@@ -4,7 +4,7 @@
 //! Tested on Debian/Ubuntu; should work on most distributions.
 
 use aleph_desktop::script_exec::{is_spawn_failure, output_capped_blocking, DESKTOP_QUERY_TIMEOUT};
-use aleph_desktop::system_types::{AppInfo, ClipboardContent, SystemInfo};
+use aleph_desktop::system_types::{AppInfo, ClipboardContent, DesktopProcessIdentity, SystemInfo};
 use aleph_desktop::traits::SystemCapability;
 use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
@@ -66,6 +66,31 @@ impl SystemCapability for LinuxSystem {
         tokio::task::spawn_blocking(move || aleph_desktop::linux::app::quit(&app_name))
             .await
             .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
+    }
+
+    async fn desktop_process_identity(&self, pid: i32) -> Result<Option<DesktopProcessIdentity>> {
+        if pid <= 0 {
+            return Ok(None);
+        }
+        tokio::task::spawn_blocking(move || {
+            let directory = std::path::PathBuf::from(format!("/proc/{pid}"));
+            let launch_stamp = || {
+                // The command name is parenthesized and may contain whitespace
+                // or ')'. Start time is field 22, after the state in field 3.
+                let stat = std::fs::read_to_string(directory.join("stat")).ok()?;
+                let (_, fields) = stat.rsplit_once(") ")?;
+                fields.split_whitespace().nth(19)?.parse::<u64>().ok()
+            };
+            let stamp = launch_stamp()?;
+            let image = std::fs::read_link(directory.join("exe")).ok()?;
+            (launch_stamp()? == stamp).then(|| DesktopProcessIdentity {
+                pid,
+                bundle_id: image.to_string_lossy().into_owned(),
+                launch_stamp: stamp,
+            })
+        })
+        .await
+        .map_err(|e| DesktopError::PlatformError(format!("task join error: {e}")))
     }
 
     async fn list_running_apps(&self) -> Result<Vec<AppInfo>> {
