@@ -11,6 +11,7 @@ mod gui_locate;
 mod held_inputs;
 mod interactable;
 mod native;
+mod native_ref;
 mod observe;
 pub(crate) mod operator_approval;
 mod perm;
@@ -660,15 +661,12 @@ is. That path is refused by default (the operator can allow it with
 `[desktop] allow_global_pointer = true`). Every result says which rail ran, as
 `delivery: "targeted" | "global"`.
 
-For reliable clicking, call `desktop_ax_snapshot` first: it returns the app's
-interactable elements with a `token` each — pass it back as `element` (alone;
-it carries its own target) to click / double_click / hover / scroll / set_value
-/ ax_action. A token is re-resolved against the live UI at action time: a moved
-window is found at its new position, and a superseded snapshot's token fails
-with a named stale error instead of clicking whatever moved there. `app_pid`
-is the `pid` to pass when targeting by raw `center` coordinates instead. `set_value` / `ax_action` are better still for text
-fields and buttons: direct addressing, verified writes, cursor-free. Use a
-screenshot only when you need to *see* visual state the tree cannot describe.
+Start with `desktop_ax_snapshot`. Pass a row's `token` as `element` to
+`ax_action` with one of its advertised `actions`, or to `set_value` with `text`.
+Read the same scope again to verify the effect. A new snapshot replaces this
+session's tokens for the app. Refresh stale refs and wait for pending actions
+before reading or acting on that target. `center` and `app_pid` support explicit
+coordinate actions. Use screenshots for visual state outside the AX tree.
 
 Driving a web page? Reach for the `browser_*` tools first — they read the DOM, so
 they are faster and exact. Come back to this tool for what the DOM cannot reach:
@@ -777,6 +775,10 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
         // 1. Unconditional safety hard-block (sits below the approval policy).
         if let Some(out) = check_hard_block(&args) {
             return Ok(out);
+        }
+
+        if let Some(token) = args.element.as_deref() {
+            return Ok(self.dispatch_reference(&args, token).await);
         }
 
         // 1.5 Loop-control verbs (UI-TARS `finished` / `call_user`). The model
@@ -928,12 +930,7 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
                 if output.success
                     && (classify_approval(&args).is_some() || args.action == "focus_window")
                 {
-                    let effect = types::effect_for(&args.action, output.data.as_ref());
-                    let mut data = output.data.take().unwrap_or_else(|| serde_json::json!({}));
-                    if let Some(obj) = data.as_object_mut() {
-                        obj.insert("effect".into(), effect.as_str().into());
-                    }
-                    output.data = Some(data);
+                    output.grade_effect(&args.action);
                 }
                 return Ok(output);
             }

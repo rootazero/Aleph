@@ -11,12 +11,15 @@
 
 #![cfg(target_os = "linux")]
 
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use aleph_desktop::DesktopError;
 use aleph_desktop::traits::AccessibilityCapability;
 use aleph_desktop_linux::LinuxAccessibility;
 use aleph_protocol::desktop_bridge::methods::ax::{
-    AxElement, QueryFocusedParams, QueryResult, QueryTreeParams, DEFAULT_MAX_NODES,
+    AxElement, AxMutation, AxReferenceAction, AxReferenceError, AxReferenceSnapshot,
+    AxSnapshotRequest, DEFAULT_MAX_NODES, QueryFocusedParams, QueryResult, QueryTreeParams,
 };
 
 fn flatten(node: &AxElement, out: &mut Vec<AxElement>) {
@@ -400,4 +403,418 @@ async fn cached_attributes_equal_live_ones() {
         compared > 0,
         "no application served a cache to compare against"
     );
+}
+
+/// This fixture exports its own controls over a real AT-SPI bus. Its tree
+/// deliberately omits Component, and the second provider reuses every path.
+#[tokio::test]
+#[ignore = "needs a live AT-SPI bus and registry; only mutates its own provider"]
+async fn atspi_ref_rejects_provider_restart_and_recycled_path() {
+    let ax = LinuxAccessibility::probe().expect("live AT-SPI bus");
+    let fixture = ReferenceFixture::start().await;
+    let scope = AxSnapshotRequest {
+        pid: Some(std::process::id().try_into().unwrap()),
+        window_id: None,
+        max_depth: 8,
+        max_nodes: DEFAULT_MAX_NODES,
+        max_elements: 16,
+    };
+    let error = ax
+        .snapshot_references(AxSnapshotRequest {
+            window_id: Some(u64::MAX),
+            ..scope.clone()
+        })
+        .await
+        .unwrap_err();
+    assert_ref_error(error, AxReferenceError::WindowScopeUnsupported);
+
+    let initial = ax
+        .snapshot_references(scope.clone())
+        .await
+        .expect("owned snapshot");
+    assert!(initial.tree_available);
+    assert_eq!(Some(initial.app_pid), scope.pid);
+    assert_eq!(initial.window_id, None);
+    let entry = initial
+        .elements
+        .iter()
+        .find(|row| row.element.role == "AXTextField")
+        .unwrap();
+    assert!(entry.element.bounds.is_none());
+    assert_eq!(entry.element.settable, Some(true));
+    let written = "汉字 — acción 🌱";
+    let receipt = ax
+        .act_on_reference(AxReferenceAction {
+            reference: entry
+                .reference
+                .clone()
+                .expect("entry lease without geometry"),
+            mutation: AxMutation::SetValue {
+                value: written.into(),
+            },
+        })
+        .await
+        .expect("native Unicode write");
+    assert!(receipt.performed);
+    assert_eq!(receipt.verification.unwrap().state, "verified");
+    assert_eq!(fixture.state.entry.lock().unwrap().as_str(), written);
+    let observed = ax
+        .snapshot_references(scope.clone())
+        .await
+        .expect("independent readback");
+    assert!(
+        observed
+            .elements
+            .iter()
+            .any(|row| row.element.value.as_deref() == Some(written))
+    );
+
+    let target = duplicate_button_action(&observed);
+    fixture.state.buttons.lock().unwrap().reverse = true;
+    let mut dispatched = Box::pin(ax.act_on_reference(target.clone()));
+    tokio::select! {
+        () = fixture.state.action_started.notified() => {},
+        result = &mut dispatched => panic!("action settled before the provider replied: {result:?}"),
+        () = tokio::time::sleep(Duration::from_secs(5)) => panic!("provider never received DoAction"),
+    }
+    assert_eq!(fixture.state.buttons.lock().unwrap().clicks, [0, 0]);
+    fixture.state.finish_action.notify_one();
+    assert!(dispatched.await.expect("native button action").performed);
+    assert_eq!(fixture.state.buttons.lock().unwrap().clicks, [0, 1]);
+
+    fixture.state.buttons.lock().unwrap().second_label = "Recycled";
+    assert_ref_error(
+        ax.act_on_reference(target.clone()).await.unwrap_err(),
+        AxReferenceError::StaleReference,
+    );
+    assert_eq!(fixture.state.buttons.lock().unwrap().clicks, [0, 1]);
+    fixture
+        .connection
+        .close()
+        .await
+        .expect("disconnect the provider");
+    assert_ref_error(
+        ax.act_on_reference(target.clone()).await.unwrap_err(),
+        AxReferenceError::StaleReference,
+    );
+
+    let replacement = ReferenceFixture::start().await;
+    let fresh = ax
+        .snapshot_references(scope)
+        .await
+        .expect("snapshot the restarted provider");
+    let fresh_action = duplicate_button_action(&fresh);
+    assert_ref_error(
+        ax.act_on_reference(target).await.unwrap_err(),
+        AxReferenceError::StaleReference,
+    );
+    assert_eq!(replacement.state.buttons.lock().unwrap().clicks, [0, 0]);
+    replacement.state.finish_action.notify_one();
+    assert!(ax.act_on_reference(fresh_action).await.unwrap().performed);
+    assert_eq!(replacement.state.buttons.lock().unwrap().clicks, [0, 1]);
+    replacement
+        .connection
+        .close()
+        .await
+        .expect("disconnect the replacement");
+}
+
+fn assert_ref_error(error: DesktopError, expected: AxReferenceError) {
+    assert!(
+        matches!(error, DesktopError::AxReference { code, .. } if code == expected),
+        "expected {expected:?}, got {error:?}"
+    );
+}
+
+fn duplicate_button_action(snapshot: &AxReferenceSnapshot) -> AxReferenceAction {
+    let buttons: Vec<_> = snapshot
+        .elements
+        .iter()
+        .filter(|row| row.element.title.as_deref() == Some("Same label"))
+        .collect();
+    assert_eq!(buttons.len(), 2);
+    AxReferenceAction {
+        reference: buttons[1]
+            .reference
+            .clone()
+            .expect("second duplicate has a lease"),
+        mutation: AxMutation::Perform {
+            action: "click".into(),
+        },
+    }
+}
+
+const FIXTURE_ROOT: &str = "/org/a11y/atspi/accessible/root";
+const FIXTURE_WINDOW: &str = "/org/a11y/atspi/accessible/window";
+const FIXTURE_ENTRY: &str = "/org/a11y/atspi/accessible/entry";
+const FIXTURE_FIRST: &str = "/org/a11y/atspi/accessible/button_first";
+const FIXTURE_SECOND: &str = "/org/a11y/atspi/accessible/button_second";
+
+struct ReferenceFixture {
+    connection: zbus::Connection,
+    state: Arc<FixtureState>,
+}
+
+struct FixtureState {
+    entry: Mutex<String>,
+    buttons: Mutex<FixtureButtons>,
+    action_started: tokio::sync::Notify,
+    finish_action: tokio::sync::Notify,
+}
+
+struct FixtureButtons {
+    clicks: [usize; 2],
+    second_label: &'static str,
+    reverse: bool,
+}
+
+impl ReferenceFixture {
+    async fn start() -> Self {
+        let accessibility = atspi::AccessibilityConnection::new()
+            .await
+            .expect("fixture bus");
+        let connection = accessibility.connection().clone();
+        let owner = connection
+            .unique_name()
+            .expect("fixture unique bus owner")
+            .to_owned();
+        let state = Arc::new(FixtureState {
+            entry: Mutex::new("Initial".into()),
+            buttons: Mutex::new(FixtureButtons {
+                clicks: [0, 0],
+                second_label: "Same label",
+                reverse: false,
+            }),
+            action_started: tokio::sync::Notify::new(),
+            finish_action: tokio::sync::Notify::new(),
+        });
+        let server = connection.object_server();
+        for (path, role, parent) in [
+            (FIXTURE_ROOT, atspi::Role::Application, None),
+            (FIXTURE_WINDOW, atspi::Role::Frame, Some(FIXTURE_ROOT)),
+            (FIXTURE_ENTRY, atspi::Role::Entry, Some(FIXTURE_WINDOW)),
+            (FIXTURE_FIRST, atspi::Role::Button, Some(FIXTURE_WINDOW)),
+            (FIXTURE_SECOND, atspi::Role::Button, Some(FIXTURE_WINDOW)),
+        ] {
+            assert!(
+                server
+                    .at(
+                        path,
+                        FixtureAccessible {
+                            path,
+                            role,
+                            parent,
+                            owner: owner.clone().into(),
+                            state: state.clone(),
+                        }
+                    )
+                    .await
+                    .unwrap()
+            );
+        }
+        assert!(
+            server
+                .at(FIXTURE_ROOT, FixtureApplication(0))
+                .await
+                .unwrap()
+        );
+        assert!(
+            server
+                .at(FIXTURE_ENTRY, FixtureEditableText(state.clone()))
+                .await
+                .unwrap()
+        );
+        assert!(
+            server
+                .at(FIXTURE_ENTRY, FixtureText(state.clone()))
+                .await
+                .unwrap()
+        );
+        assert!(
+            server
+                .at(
+                    FIXTURE_FIRST,
+                    FixtureAction {
+                        index: 0,
+                        state: state.clone()
+                    }
+                )
+                .await
+                .unwrap()
+        );
+        assert!(
+            server
+                .at(
+                    FIXTURE_SECOND,
+                    FixtureAction {
+                        index: 1,
+                        state: state.clone()
+                    }
+                )
+                .await
+                .unwrap()
+        );
+        let registry = atspi::proxy::socket::SocketProxy::new(&connection)
+            .await
+            .expect("AT-SPI registry");
+        registry
+            .embed(&(
+                owner.as_str(),
+                zbus::zvariant::ObjectPath::try_from(FIXTURE_ROOT).unwrap(),
+            ))
+            .await
+            .expect("register the owned fixture");
+        Self { connection, state }
+    }
+}
+
+struct FixtureAccessible {
+    path: &'static str,
+    role: atspi::Role,
+    parent: Option<&'static str>,
+    owner: zbus::names::UniqueName<'static>,
+    state: Arc<FixtureState>,
+}
+
+#[zbus::interface(name = "org.a11y.atspi.Accessible")]
+impl FixtureAccessible {
+    fn get_role(&self) -> atspi::Role {
+        self.role
+    }
+
+    fn get_children(&self) -> Vec<atspi::ObjectRefOwned> {
+        let paths: &[_] = match self.path {
+            FIXTURE_ROOT => &[FIXTURE_WINDOW],
+            FIXTURE_WINDOW if self.state.buttons.lock().unwrap().reverse => {
+                &[FIXTURE_ENTRY, FIXTURE_SECOND, FIXTURE_FIRST]
+            }
+            FIXTURE_WINDOW => &[FIXTURE_ENTRY, FIXTURE_FIRST, FIXTURE_SECOND],
+            _ => &[],
+        };
+        paths
+            .iter()
+            .map(|&path| {
+                atspi::ObjectRef::new_owned(
+                    self.owner.clone(),
+                    zbus::zvariant::ObjectPath::try_from(path).expect("fixture accessible path"),
+                )
+            })
+            .collect()
+    }
+
+    fn get_state(&self) -> atspi::StateSet {
+        let mut states = atspi::StateSet::new(atspi::State::Enabled);
+        states.insert(atspi::State::Sensitive);
+        if self.path == FIXTURE_ENTRY {
+            states.insert(atspi::State::Editable);
+            states.insert(atspi::State::Focused);
+        }
+        states
+    }
+
+    fn get_interfaces(&self) -> atspi::InterfaceSet {
+        let mut interfaces = atspi::InterfaceSet::new(atspi::Interface::Accessible);
+        match self.path {
+            FIXTURE_ENTRY => {
+                interfaces.insert(atspi::Interface::EditableText);
+                interfaces.insert(atspi::Interface::Text);
+            }
+            FIXTURE_FIRST | FIXTURE_SECOND => interfaces.insert(atspi::Interface::Action),
+            _ => {}
+        }
+        interfaces
+    }
+
+    #[zbus(property)]
+    fn name(&self) -> &str {
+        match self.path {
+            FIXTURE_ROOT => "Aleph owned accessibility fixture",
+            FIXTURE_ENTRY => "Entry",
+            FIXTURE_FIRST => "Same label",
+            FIXTURE_SECOND => self.state.buttons.lock().unwrap().second_label,
+            _ => "Fixture window",
+        }
+    }
+
+    #[zbus(property)]
+    fn description(&self) -> &str {
+        ""
+    }
+
+    #[zbus(property)]
+    fn accessible_id(&self) -> &str {
+        self.path
+    }
+
+    #[zbus(property)]
+    fn parent(&self) -> atspi::ObjectRefOwned {
+        self.parent
+            .map_or_else(atspi::ObjectRefOwned::default, |path| {
+                atspi::ObjectRef::new_owned(
+                    self.owner.clone(),
+                    zbus::zvariant::ObjectPath::try_from(path).expect("fixture parent path"),
+                )
+            })
+    }
+}
+
+struct FixtureApplication(i32);
+
+#[zbus::interface(name = "org.a11y.atspi.Application")]
+impl FixtureApplication {
+    #[zbus(property)]
+    fn id(&self) -> i32 {
+        self.0
+    }
+
+    #[zbus(property)]
+    fn set_id(&mut self, id: i32) {
+        self.0 = id;
+    }
+}
+
+struct FixtureAction {
+    index: usize,
+    state: Arc<FixtureState>,
+}
+
+#[zbus::interface(name = "org.a11y.atspi.Action")]
+impl FixtureAction {
+    #[zbus(property)]
+    fn n_actions(&self) -> i32 {
+        1
+    }
+
+    fn get_name(&self, _index: i32) -> &str {
+        "click"
+    }
+
+    async fn do_action(&self, index: i32) -> bool {
+        assert_eq!(index, 0);
+        if self.index == 1 {
+            self.state.action_started.notify_one();
+            self.state.finish_action.notified().await;
+        }
+        self.state.buttons.lock().unwrap().clicks[self.index] += 1;
+        true
+    }
+}
+
+struct FixtureEditableText(Arc<FixtureState>);
+
+#[zbus::interface(name = "org.a11y.atspi.EditableText")]
+impl FixtureEditableText {
+    fn set_text_contents(&self, contents: &str) -> bool {
+        *self.0.entry.lock().unwrap() = contents.into();
+        true
+    }
+}
+
+struct FixtureText(Arc<FixtureState>);
+
+#[zbus::interface(name = "org.a11y.atspi.Text")]
+impl FixtureText {
+    fn get_text(&self, _start: i32, _end: i32) -> String {
+        self.0.entry.lock().unwrap().clone()
+    }
 }

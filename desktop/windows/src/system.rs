@@ -1,6 +1,6 @@
 //! Windows `SystemCapability` implementation using Win32 APIs.
 
-use aleph_desktop::system_types::{AppInfo, ClipboardContent, SystemInfo};
+use aleph_desktop::system_types::{AppInfo, ClipboardContent, DesktopProcessIdentity, SystemInfo};
 use aleph_desktop::traits::SystemCapability;
 use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
@@ -204,6 +204,22 @@ impl SystemCapability for WindowsSystem {
     /// the file stem as fallback, and `bundle_id` is the full executable path —
     /// Windows' closest analogue to a bundle id, and what makes `app:
     /// "chrome.exe"` resolvable. See `aleph_desktop::win_window`.
+    async fn desktop_process_identity(&self, pid: i32) -> Result<Option<DesktopProcessIdentity>> {
+        #[cfg(windows)]
+        {
+            tokio::task::spawn_blocking(move || {
+                aleph_desktop::win_window::desktop_process_identity(pid)
+            })
+            .await
+            .map_err(|e| DesktopError::PlatformError(format!("task join error: {e}")))
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = pid;
+            Ok(None)
+        }
+    }
+
     async fn list_running_apps(&self) -> Result<Vec<AppInfo>> {
         #[cfg(windows)]
         {

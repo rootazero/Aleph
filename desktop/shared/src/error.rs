@@ -62,6 +62,13 @@ pub enum DesktopError {
     #[error("platform error: {0}")]
     PlatformError(String),
 
+    /// A native accessibility reference or its observation scope was refused.
+    #[error("native AX reference: {message}")]
+    AxReference {
+        code: aleph_protocol::desktop_bridge::methods::ax::AxReferenceError,
+        message: String,
+    },
+
     /// A TCC permission was denied. The embedded `PermissionGuide` carries a
     /// deep link, human-readable steps, and a rationale that the LLM should
     /// relay to the user instead of just saying "permission denied".

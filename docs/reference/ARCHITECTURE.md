@@ -683,6 +683,12 @@ desktop/
 └── windows/                  # Windows native implementation
 ```
 
+#### 原生无障碍引用 / Native accessibility references
+
+The Core tools `desktop_ax_snapshot` and `desktop` use the existing `AccessibilityCapability`. Core binds the public element token to the session, PID, and snapshot generation. The platform driver owns the native object and validates its scope and affordances before applying a mutation. A dispatched action remains tracked through platform settlement. / Core 通过现有无障碍能力链接观察和动作，负责令牌与会话、PID、快照代次的绑定。各平台保留原生对象，执行前检查对象作用域与可用动作，派发后跟踪请求直到结束。
+
+The agent controls the read–act–read loop using AX JSON. The platform supports native operations and returns their evidence to Core. / Agent 依据 AX JSON 完成读取、动作和回读决策，平台执行原生动作并返回证据。 [Tool behavior / 工具行为](FEATURE_LOCATOR.md#原生-ax-观察与动作--native-ax-observation-and-action)
+
 ## Swift Helper Process (macOS)
 
 aleph-server spawns `AlephBridge` (Swift) as a long-lived child process for

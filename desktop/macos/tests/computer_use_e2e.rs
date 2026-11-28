@@ -55,11 +55,13 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use aleph_desktop::bridge::client::SwiftBridge;
+use aleph_desktop::{DesktopError, SwiftBridge};
 use aleph_protocol::desktop_bridge::methods::ax::{
-    AxActionResult, AxElement, AxLocator, PerformActionParams, QueryByRoleParams,
+    AxActionResult, AxElement, AxLocator, AxMutation, AxReferenceAction, AxReferenceError,
+    AxReferenceSnapshot, AxSnapshotRequest, PerformActionParams, QueryByRoleParams,
     QueryFocusedParams, QueryListResult, QueryResult, QueryTreeParams, SetValueParams,
-    DEFAULT_MAX_NODES,
+    AX_REFERENCE_TTL_SECS, DEFAULT_MAX_NODES, MAX_AX_REFERENCE_ROWS, MAX_AX_REFERENCE_SNAPSHOTS,
+    METHOD_ACT_ON_REFERENCE, METHOD_SNAPSHOT_REFERENCES,
 };
 use aleph_protocol::desktop_bridge::methods::input::{
     ClickParams, CursorPositionResult, DragParams, MouseButton, ScrollParams, TypeTextParams,
@@ -78,6 +80,7 @@ use serde::{Deserialize, Serialize};
 const SECURE_SENTINEL: &str = "aleph-fixture-secret-9F3A21";
 
 const BUTTON_TITLE: &str = "Aleph Counter Button";
+const DUPLICATE_BUTTON_TITLE: &str = "Aleph Duplicate Button";
 const TEXT_FIELD_TITLE: &str = "Aleph Text Field";
 const SECURE_FIELD_TITLE: &str = "Aleph Secure Field";
 
@@ -267,7 +270,10 @@ impl Fixture {
         // (see `ensure_accessibility_warm`), or a cold session returns a
         // window-less self-cyclic tree and every AX assertion fails spuriously.
         ensure_accessibility_warm();
+        Self::launch_unwarmed(mode)
+    }
 
+    fn launch_unwarmed(mode: Mode) -> Self {
         let binary = fixture_path();
         assert!(
             binary.exists(),
@@ -295,6 +301,16 @@ impl Fixture {
         // before that lands.
         fixture.wait_until("fixture to publish its initial state", |_| true);
         fixture
+    }
+
+    fn reference_command(&self, command: &str) -> FixtureState {
+        let before = self.state().seq;
+        let pending = self.state_path.with_extension("pending");
+        fs::write(&pending, command).unwrap();
+        fs::rename(pending, self.state_path.with_extension("command")).unwrap();
+        self.wait_until(command, |state| {
+            state.last_event().seq > before && state.last_event().kind == command
+        })
     }
 
     fn try_state(&self) -> Option<FixtureState> {
@@ -346,7 +362,9 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = fs::remove_file(&self.state_path);
+        for extension in ["json", "command", "pending"] {
+            let _ = fs::remove_file(self.state_path.with_extension(extension));
+        }
     }
 }
 
@@ -379,6 +397,270 @@ fn locator(pid: i32, role: &str, title: &str) -> AxLocator {
 }
 
 // ── Tier A — AX rail, headless ───────────────────────────────────────────────
+
+fn reference_snapshot_request(pid: i32) -> AxSnapshotRequest {
+    AxSnapshotRequest {
+        pid: Some(pid),
+        window_id: None,
+        max_depth: 10,
+        max_nodes: DEFAULT_MAX_NODES,
+        max_elements: MAX_AX_REFERENCE_ROWS,
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires the owned AppKit fixture and existing Accessibility permission"]
+async fn tier_a_ax_reference_targets_the_same_button_after_reorder_and_refuses_removal() {
+    let fixture = Fixture::launch_unwarmed(Mode::Headless);
+    let bridge = bridge();
+    let before = fixture.state();
+    let snapshot_request = reference_snapshot_request(before.pid);
+    let request = |window_id| AxSnapshotRequest {
+        window_id,
+        ..snapshot_request.clone()
+    };
+    let snapshot: AxReferenceSnapshot = bridge
+        .call(METHOD_SNAPSHOT_REFERENCES, request(None))
+        .await
+        .unwrap();
+    assert_eq!(snapshot.app_pid, before.pid);
+    assert!(snapshot.tree_available);
+    assert!(!snapshot.tree_truncated);
+    assert!(snapshot
+        .elements
+        .iter()
+        .all(|row| row.element.children.is_empty()));
+    let duplicate_rows = snapshot
+        .elements
+        .iter()
+        .filter(|row| row.element.title.as_deref() == Some(DUPLICATE_BUTTON_TITLE))
+        .collect::<Vec<_>>();
+    assert_eq!(duplicate_rows.len(), 2, "{snapshot:?}");
+    let first_button = "aleph.reference.1";
+    let second_button = "aleph.reference.2";
+    let bounds = duplicate_rows[1].element.bounds.as_ref().unwrap();
+    assert!(
+        (bounds.x + bounds.width / 2.0 - before.element(second_button).frame.center().0).abs()
+            < 1.0,
+        "second row: {bounds:?}, fixture: {:?}",
+        before.element(second_button).frame
+    );
+    let press = AxReferenceAction {
+        reference: duplicate_rows[1].reference.clone().unwrap(),
+        mutation: AxMutation::Perform {
+            action: "AXPress".into(),
+        },
+    };
+
+    let secure = snapshot
+        .elements
+        .iter()
+        .find(|row| row.element.title.as_deref() == Some(SECURE_FIELD_TITLE))
+        .unwrap();
+    assert_eq!(secure.element.secure, Some(true));
+    assert_eq!(secure.element.value, None);
+    assert!(!serde_json::to_string(&snapshot)
+        .unwrap()
+        .contains(SECURE_SENTINEL));
+    let text = snapshot
+        .elements
+        .iter()
+        .find(|row| row.element.title.as_deref() == Some(TEXT_FIELD_TITLE))
+        .unwrap();
+    let write = AxReferenceAction {
+        reference: text.reference.clone().unwrap(),
+        mutation: AxMutation::SetValue {
+            value: UNICODE_PAYLOAD.into(),
+        },
+    };
+    let receipt: AxActionResult = bridge.call(METHOD_ACT_ON_REFERENCE, write).await.unwrap();
+    assert_eq!(receipt.verification.unwrap().state, "verified");
+    fixture.wait_until("Unicode write to reach the fixture", |state| {
+        state.element("aleph.textfield").value.as_deref() == Some(UNICODE_PAYLOAD)
+    });
+    let readback: AxReferenceSnapshot = bridge
+        .call(METHOD_SNAPSHOT_REFERENCES, request(None))
+        .await
+        .unwrap();
+    assert!(readback.elements.iter().any(|row| {
+        row.element.title.as_deref() == Some(TEXT_FIELD_TITLE)
+            && row.element.value.as_deref() == Some(UNICODE_PAYLOAD)
+    }));
+
+    let reordered = fixture.reference_command("reorder");
+    assert!(reordered.element(second_button).frame.x < reordered.element(first_button).frame.x);
+    let after_reorder: AxReferenceSnapshot = bridge
+        .call(METHOD_SNAPSHOT_REFERENCES, request(None))
+        .await
+        .unwrap();
+    let first_row = after_reorder
+        .elements
+        .iter()
+        .find(|row| row.element.title.as_deref() == Some(DUPLICATE_BUTTON_TITLE))
+        .unwrap();
+    let bounds = first_row.element.bounds.as_ref().unwrap();
+    assert!(
+        (bounds.x + bounds.width / 2.0 - reordered.element(second_button).frame.center().0).abs()
+            < 1.0,
+        "first row after reorder: {bounds:?}, fixture: {:?}",
+        reordered.element(second_button).frame
+    );
+    let result: AxActionResult = bridge
+        .call(METHOD_ACT_ON_REFERENCE, press.clone())
+        .await
+        .unwrap();
+    assert!(result.performed);
+    let pressed = fixture.wait_until("retained second button to receive AXPress", |state| {
+        state.element(second_button).value.as_deref() == Some("1")
+    });
+    assert_eq!(pressed.element(first_button).value.as_deref(), Some("0"));
+    assert_eq!(pressed.last_event().element.as_deref(), Some(second_button));
+
+    let removed = fixture.reference_command("remove");
+    assert_eq!(removed.element(second_button).frame.width, 0.0);
+    let error = bridge
+        .call::<_, AxActionResult>(METHOD_ACT_ON_REFERENCE, press)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        DesktopError::AxReference {
+            code: AxReferenceError::StaleReference,
+            ..
+        }
+    ));
+    let stale_readback: AxReferenceSnapshot = bridge
+        .call(METHOD_SNAPSHOT_REFERENCES, request(None))
+        .await
+        .unwrap();
+    assert_eq!(
+        stale_readback
+            .elements
+            .iter()
+            .filter(|row| { row.element.title.as_deref() == Some(DUPLICATE_BUTTON_TITLE) })
+            .count(),
+        1
+    );
+    let final_state = fixture.state();
+    assert_eq!(final_state.seq, removed.seq);
+    assert_eq!(
+        final_state.element(first_button).value.as_deref(),
+        Some("0")
+    );
+    assert_eq!(
+        final_state.element(second_button).value.as_deref(),
+        Some("1")
+    );
+
+    let window_error = bridge
+        .call::<_, AxReferenceSnapshot>(METHOD_SNAPSHOT_REFERENCES, request(Some(u64::MAX)))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        window_error,
+        DesktopError::AxReference {
+            code: AxReferenceError::WindowScopeUnsupported,
+            ..
+        }
+    ));
+}
+
+async fn reference_counter_press(
+    bridge: &SwiftBridge,
+    request: &AxSnapshotRequest,
+) -> AxReferenceAction {
+    // A headless AppKit window may take several AX reads to become visible
+    // after launch or a long idle period. Wait for this fixture's own row.
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let snapshot: AxReferenceSnapshot = bridge
+                .call(METHOD_SNAPSHOT_REFERENCES, request)
+                .await
+                .unwrap();
+            if let Some(row) = snapshot
+                .elements
+                .into_iter()
+                .find(|row| row.element.title.as_deref() == Some(BUTTON_TITLE))
+            {
+                return AxReferenceAction {
+                    reference: row
+                        .reference
+                        .expect("the fixture counter button is actionable"),
+                    mutation: AxMutation::Perform {
+                        action: "AXPress".into(),
+                    },
+                };
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the fixture counter button becomes visible")
+}
+
+#[tokio::test]
+#[ignore = "requires the owned AppKit fixture and existing Accessibility permission"]
+async fn tier_a_ax_reference_evicts_a_live_control_at_the_snapshot_limit() {
+    let fixture = Fixture::launch_unwarmed(Mode::Headless);
+    let bridge = bridge();
+    let before = fixture.state();
+    let request = reference_snapshot_request(before.pid);
+    let oldest = reference_counter_press(&bridge, &request).await;
+    let mut latest = oldest.clone();
+    for _ in 0..MAX_AX_REFERENCE_SNAPSHOTS {
+        latest = reference_counter_press(&bridge, &request).await;
+    }
+    assert_ne!(oldest.reference.lease, latest.reference.lease);
+    let error = bridge
+        .call::<_, AxActionResult>(METHOD_ACT_ON_REFERENCE, oldest)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        DesktopError::AxReference {
+            code: AxReferenceError::StaleReference,
+            ..
+        }
+    ));
+    assert_eq!(fixture.state().seq, before.seq);
+    let result: AxActionResult = bridge.call(METHOD_ACT_ON_REFERENCE, latest).await.unwrap();
+    assert!(result.performed);
+    let after = fixture.wait_until("the current lease to press the fixture button", |state| {
+        state.counter == before.counter + 1
+    });
+    assert_eq!(after.last_event().element.as_deref(), Some("aleph.button"));
+}
+
+#[tokio::test]
+#[ignore = "requires the owned AppKit fixture, existing Accessibility permission and the lease TTL"]
+async fn tier_a_ax_reference_expires_without_refresh() {
+    let fixture = Fixture::launch_unwarmed(Mode::Headless);
+    let bridge = bridge();
+    let before = fixture.state();
+    let request = reference_snapshot_request(before.pid);
+    let oldest = reference_counter_press(&bridge, &request).await;
+    let elapsed = Duration::from_secs(AX_REFERENCE_TTL_SECS / 2);
+    tokio::time::sleep(elapsed).await;
+    let latest = reference_counter_press(&bridge, &request).await;
+    tokio::time::sleep(Duration::from_secs(AX_REFERENCE_TTL_SECS + 1) - elapsed).await;
+    let error = bridge
+        .call::<_, AxActionResult>(METHOD_ACT_ON_REFERENCE, oldest)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        DesktopError::AxReference {
+            code: AxReferenceError::StaleReference,
+            ..
+        }
+    ));
+    assert_eq!(fixture.state().seq, before.seq);
+    let result: AxActionResult = bridge.call(METHOD_ACT_ON_REFERENCE, latest).await.unwrap();
+    assert!(result.performed);
+    fixture.wait_until("the unexpired lease to press the fixture button", |state| {
+        state.counter == before.counter + 1
+    });
+}
 
 /// The AX tree of an app with nothing on screen is live, and pressing through it
 /// really presses.

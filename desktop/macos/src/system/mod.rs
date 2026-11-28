@@ -67,7 +67,7 @@ impl SystemCapability for MacOSSystem {
                 aleph_desktop::DesktopError::InputFailed(format!(
                     "desktop_process_identity task join error: {e}"
                 ))
-            })
+            })?
     }
 
     async fn list_installed_apps(&self) -> Result<Vec<InstalledApp>> {

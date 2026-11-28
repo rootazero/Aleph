@@ -8,33 +8,21 @@
 //! `DesktopPlatform::ax()`, but Windows returned `None`, so every one of those
 //! tools degraded to "AX capability not available". This module fills that gap.
 //!
-//! Two deliberate design choices keep it faithful to the existing architecture
-//! rather than introducing a parallel one:
-//!
-//! 1. **Role vocabulary is macOS-shaped.** The shared consumer
-//!    (`builtin_tools/desktop/interactable.rs`) filters elements by macOS
-//!    `"AX*"` role strings. So [`control_type_to_ax_role`] maps each UIA
-//!    `ControlType` onto the closest `"AX*"` role. The result: `desktop_som`
-//!    and the snapshot tools light up on Windows with **zero changes to any
-//!    consumer** — the same `INTERACTABLE_ROLES` allowlist just starts matching.
-//!
-//! 2. **No COM state on the struct.** COM interface pointers are neither `Send`
-//!    nor `Sync`, but `AccessibilityCapability` requires both. Every call
-//!    therefore does its COM work inside a `spawn_blocking` closure that
-//!    initializes COM (MTA), builds a fresh `IUIAutomation`, walks the tree,
-//!    and drops all pointers before returning a plain owned [`AxElement`]. This
-//!    is slightly less efficient than caching the automation object, but these
-//!    are interactive, human-paced queries — correctness and thread-safety win.
-//!
-//! [`BridgeAccessibility`]: ../../macos/src/ax.rs
+//! UIA work runs on one MTA worker. Its client and retained elements live and
+//! drop on that thread. Callers exchange owned requests and Rust value results.
 
 use async_trait::async_trait;
 
 use aleph_desktop::traits::AccessibilityCapability;
 use aleph_desktop::{DesktopError, Result};
 use aleph_protocol::desktop_bridge::methods::ax::{
-    clamp_max_nodes, AxActionResult, AxElement, PerformActionParams, QueryByRoleParams,
-    QueryFocusedParams, QueryListResult, QueryResult, QueryTreeParams, SetValueParams,
+    AxActionResult, AxElement, PerformActionParams, QueryByRoleParams, QueryFocusedParams,
+    QueryListResult, QueryResult, QueryTreeParams, SetValueParams,
+};
+
+#[cfg(windows)]
+use aleph_protocol::desktop_bridge::methods::ax::{
+    clamp_max_nodes, AxReferenceAction, AxReferenceSnapshot, AxSnapshotRequest,
 };
 
 // ── UIA ControlType → macOS AX role mapping (pure, host-testable) ────────────
@@ -206,15 +194,33 @@ const WALK_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 // ── Capability ───────────────────────────────────────────────────────────────
 
 /// `AccessibilityCapability` backed by Windows UI Automation.
-///
-/// Stateless by design — see the module docs for why no COM pointer is cached.
-pub struct WindowsAccessibility;
+pub struct WindowsAccessibility {
+    #[cfg(windows)]
+    worker: std::sync::OnceLock<std::result::Result<imp::WorkerClient, String>>,
+}
 
 impl WindowsAccessibility {
     /// Create a new Windows accessibility capability.
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self {
+            #[cfg(windows)]
+            worker: std::sync::OnceLock::new(),
+        }
+    }
+
+    #[cfg(windows)]
+    async fn run<T, F>(&self, command: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut imp::WorkerState, u64) -> Result<T> + Send + 'static,
+    {
+        self.worker
+            .get_or_init(imp::WorkerClient::connect)
+            .as_ref()
+            .map_err(|message| DesktopError::PlatformError(message.clone()))?
+            .run(command)
+            .await
     }
 }
 
@@ -224,92 +230,76 @@ impl Default for WindowsAccessibility {
     }
 }
 
+// Keep the non-Windows stub at the dispatch boundary.
+macro_rules! uia_call {
+    ($capability:expr, $params:ident, move |$state:ident, _| $command:expr) => {{
+        #[cfg(windows)]
+        {
+            $capability.run(move |$state, _| $command).await
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = $params;
+            Err(DesktopError::NotAvailable(
+                "UI Automation is only available on Windows".into(),
+            ))
+        }
+    }};
+}
+
 #[async_trait]
 impl AccessibilityCapability for WindowsAccessibility {
-    /// UI Automation answers "who has focus" for the desktop, not for a chosen
-    /// process, so the pid form of the question is satisfied by filtering. That
-    /// is not a downgrade: the contract says a `Some(pid)` answer must belong to
-    /// that process, and "the app you named is not the one holding focus" is
-    /// exactly `None`. There is no targeted input rail here anyway — Windows'
-    /// background path is the UIA write rail (`set_value` / `ax_action`).
     async fn query_focused(&self, params: QueryFocusedParams) -> Result<Option<AxElement>> {
-        let want_pid = params.pid;
-        let found = run_blocking(imp::query_focused).await?;
-        Ok(found.filter(|el| want_pid.is_none_or(|p| el.pid == p)))
+        uia_call!(self, params, move |state, _| {
+            Ok(imp::query_focused(&state.uia)?.filter(|el| params.pid.is_none_or(|p| el.pid == p)))
+        })
     }
 
     async fn query_tree(&self, params: QueryTreeParams) -> Result<QueryResult> {
-        let pid = params.pid;
-        let depth = params.max_depth;
-        let nodes = clamp_max_nodes(params.max_nodes);
-        run_blocking(move || imp::query_tree(pid, depth, nodes)).await
+        uia_call!(self, params, move |state, _| imp::query_tree(
+            &state.uia,
+            params.pid,
+            params.max_depth,
+            clamp_max_nodes(params.max_nodes),
+        ))
     }
 
     async fn query_by_role(&self, params: QueryByRoleParams) -> Result<QueryListResult> {
-        let pid = params.pid;
-        let role = params.role;
-        let nodes = clamp_max_nodes(params.max_nodes);
-        run_blocking(move || imp::query_by_role(&role, pid, nodes)).await
+        uia_call!(self, params, move |state, _| imp::query_by_role(
+            &state.uia,
+            &params.role,
+            params.pid,
+            clamp_max_nodes(params.max_nodes),
+        ))
     }
 
     async fn set_value(&self, params: SetValueParams) -> Result<AxActionResult> {
-        let locator = params.locator;
-        let value = params.value;
-        run_blocking(move || imp::set_value(&locator, &value)).await
+        uia_call!(self, params, move |state, _| imp::set_value(
+            &state.uia,
+            &params.locator,
+            &params.value
+        ))
     }
 
     async fn perform_action(&self, params: PerformActionParams) -> Result<AxActionResult> {
-        let locator = params.locator;
-        let action = params.action;
-        run_blocking(move || imp::perform_action(&locator, &action)).await
+        uia_call!(self, params, move |state, _| imp::perform_action(
+            &state.uia,
+            &params.locator,
+            &params.action
+        ))
     }
-}
 
-/// Run COM work on a blocking thread, flattening join failures into a
-/// `DesktopError`. All UIA access funnels through here so the panic/poison
-/// handling lives in exactly one place.
-async fn run_blocking<T, F>(f: F) -> Result<T>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T> + Send + 'static,
-{
-    match tokio::task::spawn_blocking(move || {
-        let _serial = uia_gate();
-        f()
-    })
-    .await
-    {
-        Ok(res) => res,
-        Err(e) => Err(DesktopError::PlatformError(format!(
-            "UI Automation worker thread failed: {e}"
-        ))),
+    #[cfg(windows)]
+    async fn snapshot_references(&self, request: AxSnapshotRequest) -> Result<AxReferenceSnapshot> {
+        self.run(move |state, owner| state.snapshot_references(owner, request))
+            .await
     }
-}
 
-/// Process-wide serialization of UI Automation client work.
-///
-/// Each call builds its own `IUIAutomation` on its own `spawn_blocking` thread —
-/// the design the module docs describe, and the one that keeps the capability
-/// `Send + Sync` without caching COM pointers. What that design does *not*
-/// survive is two of those happening at once: with two threads instantiating and
-/// tearing down the UI Automation client concurrently, one of them gets a bare
-/// `E_FAIL` out of the next call on the object it was just handed.
-///
-/// Found by running two live probes in parallel — `CreateCacheRequest failed:
-/// 0x80004005` on one of the two, every time, while each passed alone. The same
-/// shape is reachable in production the moment two desktop tools run
-/// concurrently (`desktop_som` while an `ax_query_tree` is in flight), where it
-/// would look like a flaky accessibility layer rather than a lock that was
-/// missing.
-///
-/// Serializing costs nothing real: these are interactive, human-paced queries
-/// against a single desktop, and the [`WALK_BUDGET`] bounds how long any one of
-/// them can hold the gate.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn uia_gate() -> std::sync::MutexGuard<'static, ()> {
-    static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    GATE.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    #[cfg(windows)]
+    async fn act_on_reference(&self, request: AxReferenceAction) -> Result<AxActionResult> {
+        self.run(move |state, owner| state.act_on_reference(owner, request))
+            .await
+    }
 }
 
 // ── Windows COM implementation ───────────────────────────────────────────────
@@ -320,15 +310,22 @@ mod imp {
         ax_action_to_patterns, control_type_to_ax_role, AxPattern, RESOLVE_DEPTH, ROLE_SCAN_DEPTH,
         WALK_BUDGET,
     };
-    use std::time::Instant;
+    use std::collections::VecDeque;
+    use std::hash::{BuildHasher, RandomState};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{mpsc, Arc, Mutex, Weak};
+    use std::time::{Duration, Instant};
+    use tokio::sync::oneshot;
     // The locator ranker lives in `aleph_desktop::ax_rank`: it is the contract
     // the macOS Swift helper and the Linux AT-SPI limb also implement, and three
     // hand-copied versions of one ranking rule is how platforms start
     // disagreeing about which element a locator meant.
     use aleph_desktop::{rank_candidates, DesktopError, RankCandidate, Result};
     use aleph_protocol::desktop_bridge::methods::ax::{
-        AxActionResult, AxElement, AxLocator, AxVerification, QueryListResult, QueryResult,
-        DEFAULT_MAX_NODES,
+        clamp_max_nodes, AxActionResult, AxElement, AxLocator, AxMutation, AxReferenceAction,
+        AxReferenceError, AxReferenceSnapshot, AxSnapshotRequest, AxSnapshotRow, AxVerification,
+        NativeAxReference, QueryListResult, QueryResult, AX_REFERENCE_TTL_SECS, DEFAULT_MAX_NODES,
+        MAX_AX_REFERENCE_ROWS, MAX_AX_REFERENCE_SNAPSHOTS,
     };
     use aleph_protocol::desktop_bridge::methods::screen::Region;
     use windows::core::{BOOL, BSTR};
@@ -336,7 +333,11 @@ mod imp {
     use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
-        COINIT_MULTITHREADED,
+        COINIT_MULTITHREADED, SAFEARRAY,
+    };
+    use windows::Win32::System::Ole::{
+        SafeArrayDestroy, SafeArrayGetDim, SafeArrayGetElement, SafeArrayGetElemsize,
+        SafeArrayGetLBound, SafeArrayGetUBound,
     };
     use windows::Win32::UI::Accessibility::{
         CUIAutomation, ExpandCollapseState_Expanded, ExpandCollapseState_LeafNode, IUIAutomation,
@@ -347,85 +348,234 @@ mod imp {
         UIA_ClassNamePropertyId, UIA_ControlTypePropertyId, UIA_ExpandCollapsePatternId,
         UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsOffscreenPropertyId,
         UIA_IsPasswordPropertyId, UIA_LegacyIAccessiblePatternId, UIA_NamePropertyId,
-        UIA_ProcessIdPropertyId, UIA_SelectionItemPatternId, UIA_TogglePatternId,
-        UIA_ValuePatternId,
+        UIA_NativeWindowHandlePropertyId, UIA_ProcessIdPropertyId, UIA_SelectionItemPatternId,
+        UIA_TogglePatternId, UIA_ValuePatternId,
     };
-    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetAncestor, GetForegroundWindow, GetWindowThreadProcessId, GA_ROOT,
+    };
 
-    /// Pin the process's multi-threaded apartment for the process lifetime.
-    ///
-    /// Every accessibility call runs on a `spawn_blocking` thread that joins the
-    /// MTA and leaves it again; when the leaving thread is the last member,
-    /// Windows tears the apartment down and the next call builds it back up.
-    /// Microsoft documents creating and destroying the MTA repeatedly as
-    /// something not to do, and `CoIncrementMTAUsage` is the supported way to
-    /// hold the apartment open without joining it. The cookie is deliberately
-    /// never released — the whole point is that the MTA outlives each call.
-    ///
-    /// **What this does not buy:** it is not what makes concurrent accessibility
-    /// calls safe. That was measured — with the apartment pinned and no other
-    /// change, two live probes running in parallel still failed with
-    /// `CreateCacheRequest failed: 0x80004005`, every time. The gate in
-    /// [`super::uia_gate`] is what fixed it. This stays because the apartment
-    /// churn is real and avoidable, not because it repairs anything.
-    fn pin_mta() {
-        use std::sync::OnceLock;
-        use windows::Win32::System::Com::CoIncrementMTAUsage;
+    const WORKER_QUEUE_CAPACITY: usize = 32;
+    const SNAPSHOT_MAX_DEPTH: u32 = 32;
+    const REFERENCE_TTL: Duration = Duration::from_secs(AX_REFERENCE_TTL_SECS);
 
-        static PINNED: OnceLock<bool> = OnceLock::new();
-        PINNED.get_or_init(|| {
-            // SAFETY: documented, idempotent-by-cookie apartment reference. The
-            // cookie is intentionally leaked so the MTA lives as long as the
-            // process.
-            unsafe { CoIncrementMTAUsage() }.is_ok()
-        });
+    type Command = Box<dyn FnOnce(&mut WorkerState) + Send>;
+    type CommandSender = mpsc::SyncSender<Command>;
+
+    pub(super) struct WorkerClient {
+        sender: Arc<CommandSender>,
+        owner: u64,
     }
 
-    /// RAII COM apartment guard. `CoInitializeEx` may return `S_FALSE` if the
-    /// thread was already initialized — harmless; we still balance with
-    /// `CoUninitialize` on drop. A failure HRESULT (`RPC_E_CHANGED_MODE`, when
-    /// someone else already put this thread in an STA) added no reference, so
-    /// drop must not uninitialize — these run on long-lived `spawn_blocking`
-    /// pool threads, and an unbalanced `CoUninitialize` would tear down an
-    /// apartment owned by other code. UIA still works from an STA, so the
-    /// guard continues in that case.
-    struct ComGuard {
-        initialized: bool,
+    impl WorkerClient {
+        pub(super) fn connect() -> std::result::Result<Self, String> {
+            static WORKER: Mutex<Weak<CommandSender>> = Mutex::new(Weak::new());
+            static NEXT_OWNER: AtomicU64 = AtomicU64::new(0);
+
+            let mut worker = WORKER
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let sender = if let Some(sender) = worker.upgrade() {
+                sender
+            } else {
+                let (sender, receiver) = mpsc::sync_channel(WORKER_QUEUE_CAPACITY);
+                std::thread::Builder::new()
+                    .name("aleph-uia".into())
+                    .spawn(move || {
+                        if let Err(error) = run_worker(receiver) {
+                            tracing::debug!(%error, "UI Automation worker failed");
+                        }
+                    })
+                    .map_err(|e| format!("UI Automation worker: {e}"))?;
+                let sender = Arc::new(sender);
+                *worker = Arc::downgrade(&sender);
+                sender
+            };
+            Ok(Self {
+                sender,
+                owner: NEXT_OWNER.fetch_add(1, Ordering::Relaxed),
+            })
+        }
+
+        pub(super) async fn run<T, F>(&self, command: F) -> Result<T>
+        where
+            T: Send + 'static,
+            F: FnOnce(&mut WorkerState, u64) -> Result<T> + Send + 'static,
+        {
+            let (reply, receiver) = oneshot::channel();
+            let owner = self.owner;
+            self.sender
+                .try_send(Box::new(move |state| {
+                    if !reply.is_closed() {
+                        // Once started, finish the native work even if the receiver goes away.
+                        let result = command(state, owner);
+                        let _ = reply.send(result);
+                    }
+                }))
+                .map_err(|error| match error {
+                    mpsc::TrySendError::Full(_) => reference_error(
+                        AxReferenceError::ActionPending,
+                        "The UI Automation worker is busy. Wait for current work to settle.",
+                    ),
+                    mpsc::TrySendError::Disconnected(_) => worker_unavailable(),
+                })?;
+            receiver.await.map_err(|_| worker_unavailable())?
+        }
     }
+
+    fn worker_unavailable() -> DesktopError {
+        DesktopError::PlatformError("The UI Automation worker is unavailable".into())
+    }
+
+    fn run_worker(receiver: mpsc::Receiver<Command>) -> Result<()> {
+        // A previous owner can still be finishing a native call after its last
+        // sender dropped. Dispose of that client before constructing another.
+        static APARTMENT: Mutex<()> = Mutex::new(());
+        let _serial = APARTMENT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _com = ComGuard::new()?;
+        // SAFETY: standard COM instantiation, on this thread's MTA.
+        let uia = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.map_err(
+            |e| DesktopError::PlatformError(format!("CUIAutomation create failed: {e}")),
+        )?;
+        let mut state = WorkerState {
+            leases: VecDeque::new(),
+            nonce: RandomState::new().hash_one(0u8),
+            next_lease: 0,
+            uia,
+        };
+        run_commands(&receiver, &mut state);
+        Ok(())
+    }
+
+    fn run_commands(receiver: &mpsc::Receiver<Command>, state: &mut WorkerState) {
+        loop {
+            let now = Instant::now();
+            state.expire(now);
+            let command = if let Some(lease) = state.leases.front() {
+                receiver.recv_timeout(lease.expires.saturating_duration_since(now))
+            } else {
+                receiver
+                    .recv()
+                    .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+            };
+            match command {
+                Ok(command) => {
+                    state.expire(Instant::now());
+                    command(state);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    }
+
+    struct ComGuard;
 
     impl ComGuard {
-        fn new() -> Self {
-            pin_mta();
-            // SAFETY: documented COM init. Only a success HRESULT (S_OK or
-            // S_FALSE) recorded a reference for us to balance on drop.
-            let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-            let initialized = hr.is_ok();
-            if !initialized {
-                tracing::debug!(
-                    hresult = ?hr,
-                    "CoInitializeEx(MTA) failed; thread stays in a foreign apartment, \
-                     skipping CoUninitialize on drop"
-                );
-            }
-            Self { initialized }
+        fn new() -> Result<Self> {
+            // SAFETY: this thread starts without a COM apartment.
+            unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
+                .ok()
+                .map_err(|e| DesktopError::PlatformError(format!("CoInitializeEx(MTA): {e}")))?;
+            Ok(Self)
         }
     }
 
     impl Drop for ComGuard {
         fn drop(&mut self) {
-            if self.initialized {
-                // SAFETY: balances the successful `CoInitializeEx` in `new`. The
-                // apartment itself survives this thanks to `pin_mta`.
-                unsafe { CoUninitialize() };
-            }
+            // SAFETY: balances this thread's successful CoInitializeEx, after
+            // all UIA objects on the worker have been released.
+            unsafe { CoUninitialize() };
         }
     }
 
-    /// Create a fresh UI Automation root object for this thread.
-    fn automation() -> Result<IUIAutomation> {
-        // SAFETY: standard COM instantiation of the in-process UIA server.
-        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
-            .map_err(|e| DesktopError::PlatformError(format!("CUIAutomation create failed: {e}")))
+    #[cfg(test)]
+    mod worker_tests {
+        use super::*;
+        use std::thread;
+
+        pub(super) struct ExpiryProbe(mpsc::Sender<thread::ThreadId>);
+
+        impl Drop for ExpiryProbe {
+            fn drop(&mut self) {
+                let _ = self.0.send(thread::current().id());
+            }
+        }
+
+        #[tokio::test]
+        async fn uia_worker_expires_retained_objects_on_the_owning_thread_while_idle() {
+            let worker = WorkerClient::connect().expect("start UIA worker");
+            let (dropped, wait) = mpsc::channel();
+            let owner_thread = worker
+                .run(move |state, owner| {
+                    // SAFETY: this command runs on the owning MTA.
+                    let root = unsafe { state.uia.GetRootElement() }.expect("desktop UIA root");
+                    let identity = ProviderIdentity::capture(&state.uia, &root)
+                        .expect("desktop UIA root identity");
+                    state.leases.push_front(ReferenceLease {
+                        id: "expiry-probe".into(),
+                        owner,
+                        expires: Instant::now() + Duration::from_millis(25),
+                        scope: WindowScope {
+                            hwnd: HWND::default(),
+                            pid: 0,
+                            thread: 0,
+                            launch_stamp: 0,
+                        },
+                        root,
+                        root_identity: identity,
+                        elements: Vec::new(),
+                        _expiry_probe: Some(ExpiryProbe(dropped)),
+                    });
+                    Ok(thread::current().id())
+                })
+                .await
+                .expect("insert lease on the worker");
+            assert_ne!(thread::current().id(), owner_thread);
+            assert_eq!(
+                wait.recv_timeout(Duration::from_secs(3))
+                    .expect("idle expiry"),
+                owner_thread
+            );
+            // Holding the client until after the assertion excludes shutdown cleanup.
+            drop(worker);
+        }
+        #[tokio::test]
+        async fn uia_worker_finishes_started_command_before_readback_after_cancellation() {
+            let worker = Arc::new(WorkerClient::connect().expect("start UIA worker"));
+            let (started, wait_for_start) = oneshot::channel();
+            let (finish, wait_for_finish) = mpsc::channel();
+            let settled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let command = tokio::spawn({
+                let worker = Arc::clone(&worker);
+                let settled = Arc::clone(&settled);
+                async move {
+                    worker
+                        .run(move |_, _| {
+                            let _ = started.send(());
+                            wait_for_finish.recv().expect("allow command to settle");
+                            settled.store(true, Ordering::Release);
+                            Ok(())
+                        })
+                        .await
+                }
+            });
+            wait_for_start.await.expect("command started");
+            command.abort();
+            assert!(command.await.expect_err("caller cancelled").is_cancelled());
+            let mut readback =
+                Box::pin(worker.run(move |_, _| Ok(settled.load(Ordering::Acquire))));
+            let early_readback =
+                tokio::time::timeout(Duration::from_millis(25), &mut readback).await;
+            finish.send(()).expect("allow command to settle");
+            assert!(
+                early_readback.is_err(),
+                "readback overtook a started command"
+            );
+            assert!(readback.await.expect("read after the command settled"));
+        }
     }
 
     /// Resolve the top-level window to root a query at: the first visible
@@ -469,6 +619,438 @@ mod imp {
         Ok(fg)
     }
 
+    fn reference_error(code: AxReferenceError, message: &'static str) -> DesktopError {
+        DesktopError::AxReference {
+            code,
+            message: message.into(),
+        }
+    }
+
+    fn stale_reference() -> DesktopError {
+        reference_error(
+            AxReferenceError::StaleReference,
+            "The retained UI Automation target is no longer valid. Take a fresh snapshot.",
+        )
+    }
+
+    fn unsupported_window() -> DesktopError {
+        reference_error(
+            AxReferenceError::WindowScopeUnsupported,
+            "The window is not a live UI Automation root for the requested process.",
+        )
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    struct WindowScope {
+        hwnd: HWND,
+        pid: i32,
+        thread: u32,
+        launch_stamp: u64,
+    }
+
+    impl WindowScope {
+        fn from_hwnd(hwnd: HWND) -> Option<Self> {
+            let mut pid = 0;
+            // SAFETY: Win32 validates HWNDs; pid points to writable storage.
+            let thread = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+            if thread == 0 || pid == 0 || unsafe { GetAncestor(hwnd, GA_ROOT) } != hwnd {
+                return None;
+            }
+            let pid = i32::try_from(pid).ok()?;
+            let identity = aleph_desktop::win_window::desktop_process_identity(pid)?;
+            Some(Self {
+                hwnd,
+                pid,
+                thread,
+                launch_stamp: identity.launch_stamp,
+            })
+        }
+
+        fn root(self, uia: &IUIAutomation) -> Option<IUIAutomationElement> {
+            if Self::from_hwnd(self.hwnd) != Some(self) {
+                return None;
+            }
+            // SAFETY: read-only getters on the object mapped to the exact HWND.
+            let root = unsafe { uia.ElementFromHandle(self.hwnd) }.ok()?;
+            (unsafe { root.CurrentProcessId() }.ok()? == self.pid
+                && unsafe { root.CurrentNativeWindowHandle() }.ok()? == self.hwnd)
+                .then_some(root)
+        }
+
+        fn contains_hwnd(self, hwnd: HWND) -> bool {
+            let mut pid = 0;
+            // SAFETY: Win32 validates HWNDs; pid points to writable storage.
+            unsafe {
+                GetWindowThreadProcessId(hwnd, Some(&mut pid)) != 0
+                    && i32::try_from(pid) == Ok(self.pid)
+                    && GetAncestor(hwnd, GA_ROOT) == self.hwnd
+            }
+        }
+
+        fn contains(self, raw: &IUIAutomationTreeWalker, el: &IUIAutomationElement) -> bool {
+            // SAFETY: read-only access and ancestry traversal on the owning MTA.
+            unsafe {
+                if el.CurrentProcessId().ok() != Some(self.pid) {
+                    return false;
+                }
+                let mut current = el.clone();
+                for _ in 0..=SNAPSHOT_MAX_DEPTH {
+                    let Ok(hwnd) = current.CurrentNativeWindowHandle() else {
+                        return false;
+                    };
+                    if !hwnd.0.is_null() {
+                        return self.contains_hwnd(hwnd);
+                    }
+                    let Ok(parent) = raw.GetParentElement(&current) else {
+                        return false;
+                    };
+                    current = parent;
+                }
+                false
+            }
+        }
+    }
+
+    struct RuntimeIdArray(*mut SAFEARRAY);
+
+    impl Drop for RuntimeIdArray {
+        fn drop(&mut self) {
+            // SAFETY: GetRuntimeId transferred ownership of this non-null array.
+            let _ = unsafe { SafeArrayDestroy(self.0) };
+        }
+    }
+
+    fn runtime_id(el: &IUIAutomationElement) -> Option<Vec<i32>> {
+        // SAFETY: GetRuntimeId returns a caller-owned SAFEARRAY of integers.
+        let ptr = unsafe { el.GetRuntimeId() }.ok()?;
+        if ptr.is_null() {
+            return None;
+        }
+        let array = RuntimeIdArray(ptr);
+        // SAFETY: array is live and owned here. UIA returns one dimension of
+        // 32-bit integers. Verify the shape before copying into i32 storage.
+        unsafe {
+            if SafeArrayGetDim(array.0) != 1
+                || SafeArrayGetElemsize(array.0) as usize != std::mem::size_of::<i32>()
+            {
+                return None;
+            }
+            let lower = SafeArrayGetLBound(array.0, 1).ok()?;
+            let upper = SafeArrayGetUBound(array.0, 1).ok()?;
+            let count = upper.checked_sub(lower)?.checked_add(1)?;
+            if !(1..=128).contains(&count) {
+                return None;
+            }
+            let mut id = Vec::with_capacity(count as usize);
+            for index in lower..=upper {
+                let mut part = 0i32;
+                SafeArrayGetElement(array.0, &index, (&mut part as *mut i32).cast()).ok()?;
+                id.push(part);
+            }
+            Some(id)
+        }
+    }
+
+    enum ProviderIdentity {
+        RuntimeId(Vec<i32>),
+        Hwnd(HWND),
+    }
+
+    impl ProviderIdentity {
+        fn capture(uia: &IUIAutomation, el: &IUIAutomationElement) -> Option<Self> {
+            if let Some(id) = runtime_id(el) {
+                return Some(Self::RuntimeId(id));
+            }
+            // An HWND is usable as provider evidence only if UIA maps it back
+            // to the same element. Associated ancestor handles are insufficient.
+            let hwnd = unsafe { el.CurrentNativeWindowHandle() }.ok()?;
+            let identity = Self::Hwnd(hwnd);
+            identity.matches(uia, el).then_some(identity)
+        }
+
+        fn matches(&self, uia: &IUIAutomation, el: &IUIAutomationElement) -> bool {
+            match self {
+                Self::RuntimeId(expected) => runtime_id(el).as_ref() == Some(expected),
+                Self::Hwnd(hwnd) => {
+                    // SAFETY: read-only current identity checks on the same MTA.
+                    unsafe {
+                        !hwnd.0.is_null()
+                            && el.CurrentNativeWindowHandle().ok() == Some(*hwnd)
+                            && uia.ElementFromHandle(*hwnd).is_ok_and(|current| {
+                                uia.CompareElements(el, &current).is_ok_and(BOOL::as_bool)
+                            })
+                    }
+                }
+            }
+        }
+    }
+
+    struct RetainedElement {
+        element: IUIAutomationElement,
+        identity: ProviderIdentity,
+        control_type: i32,
+        name: Option<String>,
+        settable: bool,
+        actions: Vec<String>,
+    }
+
+    struct ReferenceLease {
+        id: String,
+        owner: u64,
+        expires: Instant,
+        scope: WindowScope,
+        root: IUIAutomationElement,
+        root_identity: ProviderIdentity,
+        elements: Vec<RetainedElement>,
+        #[cfg(test)]
+        _expiry_probe: Option<worker_tests::ExpiryProbe>,
+    }
+
+    pub(super) struct WorkerState {
+        // Fields are dropped in declaration order, before the COM guard.
+        leases: VecDeque<ReferenceLease>,
+        nonce: u64,
+        next_lease: u64,
+        pub(super) uia: IUIAutomation,
+    }
+
+    impl WorkerState {
+        fn expire(&mut self, now: Instant) {
+            while self
+                .leases
+                .front()
+                .is_some_and(|lease| lease.expires <= now)
+            {
+                self.leases.pop_front();
+            }
+        }
+
+        pub(super) fn snapshot_references(
+            &mut self,
+            owner: u64,
+            request: AxSnapshotRequest,
+        ) -> Result<AxReferenceSnapshot> {
+            let hwnd = match request.window_id {
+                Some(id) => HWND(usize::try_from(id).map_err(|_| unsupported_window())?
+                    as *mut core::ffi::c_void),
+                None => resolve_root_hwnd(request.pid)?,
+            };
+            // Validate native ownership before any UIA calls for this snapshot.
+            let scope = WindowScope::from_hwnd(hwnd)
+                .filter(|scope| request.pid.is_none_or(|pid| pid == scope.pid))
+                .ok_or_else(unsupported_window)?;
+            let root = scope.root(&self.uia).ok_or_else(unsupported_window)?;
+            let root_identity = ProviderIdentity::capture(&self.uia, &root);
+            let cache = cache_request(&self.uia)?;
+            // SAFETY: build a cache on the selected root and create read-only walkers.
+            let cached_root = unsafe { root.BuildUpdatedCache(&cache) }.map_err(|e| {
+                DesktopError::PlatformError(format!("BuildUpdatedCache failed: {e}"))
+            })?;
+            let walker = unsafe { self.uia.ControlViewWalker() }.map_err(|e| {
+                DesktopError::PlatformError(format!("ControlViewWalker failed: {e}"))
+            })?;
+            let raw = unsafe { self.uia.RawViewWalker() }
+                .map_err(|e| DesktopError::PlatformError(format!("RawViewWalker failed: {e}")))?;
+            let id = format!("{:016x}-{:016x}", self.nonce, self.next_lease);
+            self.next_lease += 1;
+            let budget = Budget::new(clamp_max_nodes(request.max_nodes));
+            let mut snapshot = SnapshotWalk {
+                uia: &self.uia,
+                walker: &walker,
+                raw: &raw,
+                cache: &cache,
+                scope,
+                budget: &budget,
+                id: root_identity.as_ref().map(|_| id.as_str()),
+                row_limit: request.max_elements.min(MAX_AX_REFERENCE_ROWS),
+                rows: Vec::new(),
+                retained: Vec::new(),
+                total_rows: 0,
+                total_interactable: 0,
+            };
+            snapshot.visit(&cached_root, request.max_depth.min(SNAPSHOT_MAX_DEPTH));
+            let focused = if budget.exhausted() {
+                None
+            } else {
+                focused_element(&self.uia, &cache, |el| scope.contains(&raw, el), true)
+            };
+            if WindowScope::from_hwnd(hwnd) != Some(scope) {
+                return Err(unsupported_window());
+            }
+            let result = AxReferenceSnapshot {
+                app_pid: scope.pid,
+                window_id: Some(scope.hwnd.0 as usize as u64),
+                tree_available: true,
+                elements: snapshot.rows,
+                focused,
+                tree_truncated: budget.exhausted(),
+                truncated: snapshot.total_rows > snapshot.row_limit,
+                nodes_walked: budget.spent(),
+                total_interactable: snapshot.total_interactable,
+            };
+            let retained = snapshot.retained;
+            if let Some(root_identity) = root_identity.filter(|_| !retained.is_empty()) {
+                let now = Instant::now();
+                self.expire(now);
+                if self.leases.len() == MAX_AX_REFERENCE_SNAPSHOTS {
+                    self.leases.pop_front();
+                }
+                self.leases.push_back(ReferenceLease {
+                    id,
+                    owner,
+                    expires: now + REFERENCE_TTL,
+                    scope,
+                    root,
+                    root_identity,
+                    elements: retained,
+                    #[cfg(test)]
+                    _expiry_probe: None,
+                });
+            }
+            Ok(result)
+        }
+
+        pub(super) fn act_on_reference(
+            &self,
+            owner: u64,
+            request: AxReferenceAction,
+        ) -> Result<AxActionResult> {
+            let lease = self
+                .leases
+                .iter()
+                .find(|lease| lease.owner == owner && lease.id == request.reference.lease)
+                .ok_or_else(stale_reference)?;
+            let retained = lease
+                .elements
+                .get(request.reference.index as usize)
+                .ok_or_else(stale_reference)?;
+            let root = lease.scope.root(&self.uia).ok_or_else(stale_reference)?;
+            // SAFETY: read-only comparisons and provider checks on the owning MTA.
+            let raw = unsafe { self.uia.RawViewWalker() }.map_err(|_| stale_reference())?;
+            let el = &retained.element;
+            let root_matches = lease.root_identity.matches(&self.uia, &root)
+                && unsafe { self.uia.CompareElements(&lease.root, &root) }.is_ok_and(BOOL::as_bool);
+            if !root_matches
+                || !lease.scope.contains(&raw, el)
+                || !retained.identity.matches(&self.uia, el)
+            {
+                return Err(stale_reference());
+            }
+            let control_type = unsafe { el.CurrentControlType() }
+                .map_err(|_| stale_reference())?
+                .0;
+            let title = nonempty(
+                unsafe { el.CurrentName() }
+                    .map_err(|_| stale_reference())?
+                    .to_string(),
+            );
+            if control_type != retained.control_type || title != retained.name {
+                return Err(stale_reference());
+            }
+            check_enabled(el)?;
+            let mut summary = node_of(el);
+            summary.enabled = Some(true);
+            summary.secure = Some(summary.secure == Some(true) || current_password_or_unknown(el));
+            let target = Target::Reference(lease.expires);
+            match request.mutation {
+                AxMutation::SetValue { value } if retained.settable => {
+                    summary.settable = Some(true);
+                    set_value_on(el, summary, &value, target)
+                }
+                AxMutation::Perform { action } if retained.actions.contains(&action) => {
+                    let patterns =
+                        ax_action_to_patterns(&action).map_err(|_| unsupported_action())?;
+                    perform_action_on(el, summary, patterns, target)
+                }
+                _ => Err(unsupported_action()),
+            }
+        }
+    }
+
+    struct SnapshotWalk<'a> {
+        uia: &'a IUIAutomation,
+        walker: &'a IUIAutomationTreeWalker,
+        raw: &'a IUIAutomationTreeWalker,
+        cache: &'a IUIAutomationCacheRequest,
+        budget: &'a Budget,
+        scope: WindowScope,
+        id: Option<&'a str>,
+        row_limit: usize,
+        rows: Vec<AxSnapshotRow>,
+        retained: Vec<RetainedElement>,
+        total_rows: usize,
+        total_interactable: usize,
+    }
+
+    impl SnapshotWalk<'_> {
+        fn visit(&mut self, el: &IUIAutomationElement, depth: u32) {
+            let exhausted = self.budget.spend();
+            // SAFETY: cached read with live fallback. Native child windows
+            // must belong to the captured top-level window.
+            let hwnd = unsafe {
+                el.CachedNativeWindowHandle()
+                    .or_else(|_| el.CurrentNativeWindowHandle())
+            };
+            if !hwnd.is_ok_and(|hwnd| hwnd.0.is_null() || self.scope.contains_hwnd(hwnd)) {
+                return;
+            }
+            let mut node = node_of(el);
+            if node.pid == self.scope.pid {
+                self.total_rows += 1;
+                let publish = self.rows.len() < self.row_limit;
+                if publish {
+                    node.secure =
+                        Some(node.secure == Some(true) || current_password_or_unknown(el));
+                }
+                enrich(el, &mut node, true, publish);
+                let actionable = node.enabled == Some(true)
+                    && (node.settable == Some(true) || node.actions.is_some());
+                self.total_interactable += usize::from(actionable);
+                if publish {
+                    let reference = self
+                        .id
+                        .filter(|_| actionable && self.scope.contains(self.raw, el))
+                        .and_then(|id| self.retain(el, &node, id));
+                    self.rows.push(AxSnapshotRow {
+                        element: node,
+                        reference,
+                    });
+                }
+            }
+            if !exhausted && depth > 0 && !self.budget.exhausted() {
+                walk_children(self.walker, self.cache, el, self.budget, |child| {
+                    self.visit(child, depth - 1);
+                });
+            }
+        }
+
+        fn retain(
+            &mut self,
+            el: &IUIAutomationElement,
+            node: &AxElement,
+            id: &str,
+        ) -> Option<NativeAxReference> {
+            let identity = ProviderIdentity::capture(self.uia, el)?;
+            let control_type = control_type_of(el);
+            if control_type == 0 {
+                return None;
+            }
+            let index = self.retained.len() as u32;
+            self.retained.push(RetainedElement {
+                element: el.clone(),
+                identity,
+                control_type,
+                name: node.title.clone(),
+                settable: node.settable == Some(true),
+                actions: node.actions.clone().unwrap_or_default(),
+            });
+            Some(NativeAxReference {
+                lease: id.into(),
+                index,
+            })
+        }
+    }
+
     /// Convert a UIA bounding rectangle (physical screen pixels, top-left
     /// origin) into the shared [`Region`]. Physical pixels are what the Windows
     /// click/screenshot path already uses, so coordinates round-trip directly
@@ -506,6 +1088,7 @@ mod imp {
             UIA_NamePropertyId,
             UIA_BoundingRectanglePropertyId,
             UIA_ProcessIdPropertyId,
+            UIA_NativeWindowHandlePropertyId,
             UIA_IsEnabledPropertyId,
             UIA_IsPasswordPropertyId,
             UIA_IsOffscreenPropertyId,
@@ -549,7 +1132,7 @@ mod imp {
     /// its bounds, which `usable_bounds` then filters out of the marks.
     fn node_of(el: &IUIAutomationElement) -> AxElement {
         let role = control_type_to_ax_role(control_type_of(el)).to_string();
-        let title = Some(name_of(el)).filter(|s| !s.is_empty());
+        let title = nonempty(name_of(el));
         let bounds = if is_offscreen(el) {
             None
         } else {
@@ -590,6 +1173,15 @@ mod imp {
     fn control_type_of(el: &IUIAutomationElement) -> i32 {
         // SAFETY: cached read with a live-getter fallback.
         unsafe { el.CachedControlType().or_else(|_| el.CurrentControlType()) }.map_or(0, |ct| ct.0)
+    }
+
+    fn nonempty(text: String) -> Option<String> {
+        (!text.is_empty()).then_some(text)
+    }
+
+    fn current_password_or_unknown(el: &IUIAutomationElement) -> bool {
+        // SAFETY: read-only property. Missing data cannot establish a safe value read.
+        unsafe { el.CurrentIsPassword() }.map_or(true, BOOL::as_bool)
     }
 
     /// The element's `Name`, empty when unknown.
@@ -655,17 +1247,19 @@ mod imp {
     /// boundary at all, rather than crossing it and being redacted later by
     /// whichever projection happens to remember to.
     fn enrich_resolved(el: &IUIAutomationElement, node: &mut AxElement) {
+        enrich(el, node, false, true);
+    }
+
+    fn enrich(el: &IUIAutomationElement, node: &mut AxElement, strict: bool, read_value: bool) {
         // SAFETY: pattern getter; an element without the pattern surfaces as Err.
         let value_pattern =
             unsafe { el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }.ok();
 
-        node.settable = Some(value_pattern.as_ref().is_some_and(|vp| {
-            // SAFETY: read-only property getter. A provider that will not answer
-            // is treated as writable — `set_value` verifies by read-back anyway,
-            // so a wrong "yes" costs one honest failure, a wrong "no" costs the
-            // model the whole write path.
-            !unsafe { vp.CurrentIsReadOnly() }.is_ok_and(BOOL::as_bool)
-        }));
+        node.settable = Some(
+            value_pattern
+                .as_ref()
+                .is_some_and(|vp| !read_only(vp, strict)),
+        );
 
         // SAFETY: pattern getters; unsupported patterns surface as Err.
         let (has_press, has_expand) = unsafe {
@@ -684,17 +1278,23 @@ mod imp {
                         .GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
                             UIA_LegacyIAccessiblePatternId,
                         )
-                        .is_ok(),
+                        .is_ok_and(|pattern| legacy_available(&pattern, strict)),
                 el.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(
                     UIA_ExpandCollapsePatternId,
                 )
-                .is_ok(),
+                .is_ok_and(|pattern| {
+                    !strict
+                        || pattern.CurrentExpandCollapseState().is_ok_and(|state| {
+                            state != ExpandCollapseState_LeafNode
+                                && state != ExpandCollapseState_Expanded
+                        })
+                }),
             )
         };
         let actions = super::actions_for(has_press, has_expand);
         node.actions = (!actions.is_empty()).then_some(actions);
 
-        if node.secure != Some(true) {
+        if read_value && node.secure != Some(true) {
             node.value = value_of(el, value_pattern.as_ref());
         }
     }
@@ -847,42 +1447,121 @@ mod imp {
         Ok(Some((el.clone(), summary)))
     }
 
-    /// Write `value` into the located element's UIA `ValuePattern` and read it
-    /// back for verification. Only returns `Ok` when a write actually occurred;
-    /// "not located / not settable" is an `Err` (see the Err-vs-Ok contract).
-    pub(super) fn set_value(loc: &AxLocator, value: &str) -> Result<AxActionResult> {
-        let _com = ComGuard::new();
-        let uia = automation()?;
-        let (el, mut summary) = resolve(&uia, loc)?.ok_or_else(|| {
+    #[derive(Clone, Copy)]
+    enum Target {
+        Locator,
+        Reference(Instant),
+    }
+
+    impl Target {
+        fn is_reference(self) -> bool {
+            matches!(self, Self::Reference(_))
+        }
+
+        fn unsupported(self, locator_message: &'static str) -> DesktopError {
+            match self {
+                Self::Locator => DesktopError::NotAvailable(locator_message.into()),
+                Self::Reference(_) => unsupported_action(),
+            }
+        }
+
+        fn dispatch_error(self, method: &'static str, error: windows::core::Error) -> DesktopError {
+            match self {
+                Self::Locator => DesktopError::PlatformError(format!("{method}: {error}")),
+                Self::Reference(_) => reference_error(
+                    AxReferenceError::ActionOutcomeUnknown,
+                    "UI Automation did not confirm the action outcome. Observe the target again.",
+                ),
+            }
+        }
+
+        fn check_dispatch(self, el: &IUIAutomationElement) -> Result<()> {
+            if let Self::Reference(expires) = self {
+                check_enabled(el)?;
+                if Instant::now() >= expires {
+                    return Err(stale_reference());
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn unsupported_action() -> DesktopError {
+        reference_error(
+            AxReferenceError::ActionUnsupported,
+            "The retained element does not support the requested mutation.",
+        )
+    }
+
+    fn check_enabled(el: &IUIAutomationElement) -> Result<()> {
+        // SAFETY: read-only current provider state on the owning MTA.
+        if unsafe { el.CurrentIsEnabled() }
+            .map_err(|_| stale_reference())?
+            .as_bool()
+        {
+            Ok(())
+        } else {
+            Err(reference_error(
+                AxReferenceError::ElementDisabled,
+                "The element is disabled.",
+            ))
+        }
+    }
+
+    fn read_only(pattern: &IUIAutomationValuePattern, strict: bool) -> bool {
+        // SAFETY: read-only UIA property getter.
+        unsafe { pattern.CurrentIsReadOnly() }.map_or(strict, BOOL::as_bool)
+    }
+
+    fn legacy_available(pattern: &IUIAutomationLegacyIAccessiblePattern, strict: bool) -> bool {
+        // SAFETY: read-only UIA property getter.
+        !strict || unsafe { pattern.CurrentDefaultAction() }.is_ok_and(|action| !action.is_empty())
+    }
+
+    /// Write `value` into the located element's UIA ValuePattern and read it back.
+    pub(super) fn set_value(
+        uia: &IUIAutomation,
+        loc: &AxLocator,
+        value: &str,
+    ) -> Result<AxActionResult> {
+        let (el, summary) = resolve(uia, loc)?.ok_or_else(|| {
             DesktopError::NotAvailable("no element matched role/title; try `ax_snapshot`".into())
         })?;
+        set_value_on(&el, summary, value, Target::Locator)
+    }
+
+    fn set_value_on(
+        el: &IUIAutomationElement,
+        mut summary: AxElement,
+        value: &str,
+        target: Target,
+    ) -> Result<AxActionResult> {
         // SAFETY: pattern getter; unsupported pattern surfaces as Err.
         let vp = unsafe { el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }
             .map_err(|_| {
-                DesktopError::NotAvailable(
-                    "element does not support a settable value; fall back to click + type_text"
-                        .into(),
+                target.unsupported(
+                    "element does not support a settable value; fall back to click + type_text",
                 )
             })?;
-        // SAFETY: read-only property getter.
-        if unsafe { vp.CurrentIsReadOnly() }.is_ok_and(BOOL::as_bool) {
-            return Err(DesktopError::NotAvailable(
-                "element is read-only; fall back to click + type_text".into(),
-            ));
+        if read_only(&vp, target.is_reference()) {
+            return Err(target.unsupported("element is read-only; fall back to click + type_text"));
         }
-        // SAFETY: documented ValuePattern write.
-        unsafe { vp.SetValue(&BSTR::from(value)) }.map_err(|e| {
-            DesktopError::PlatformError(format!("ValuePattern.SetValue failed: {e}"))
-        })?;
+        target.check_dispatch(el)?;
+        // SAFETY: documented ValuePattern write, on the validated target.
+        unsafe { vp.SetValue(&BSTR::from(value)) }
+            .map_err(|e| target.dispatch_error("ValuePattern.SetValue failed", e))?;
         // SAFETY: read-back for verification.
-        let readback = unsafe { vp.CurrentValue() }
-            .map(|b| b.to_string())
-            .unwrap_or_default();
+        let readback = unsafe { vp.CurrentValue() }.map(|b| b.to_string());
+        let verified = match &readback {
+            Ok(actual) => actual == value,
+            Err(_) => !target.is_reference() && value.is_empty(),
+        };
+        let readback = readback.unwrap_or_default();
         // A verification read of a masked field is still the credential. The
         // *comparison* is safe to report; the bytes are not, so neither the
         // mismatch preview nor the element summary carries them.
         let secure = summary.secure == Some(true);
-        let verification = if readback == value {
+        let verification = if verified {
             AxVerification {
                 state: "verified".into(),
                 reason: None,
@@ -907,7 +1586,7 @@ mod imp {
     /// Try to invoke one UIA pattern on `el`. `Ok(true)` = performed;
     /// `Ok(false)` = element does not expose this pattern (caller tries the
     /// next); `Err` = the pattern's action call itself failed.
-    fn try_pattern(el: &IUIAutomationElement, pattern: AxPattern) -> Result<bool> {
+    fn try_pattern(el: &IUIAutomationElement, pattern: AxPattern, target: Target) -> Result<bool> {
         // SAFETY: each arm gets a pattern (Err if unsupported → Ok(false)) then
         // issues its documented action call.
         unsafe {
@@ -916,8 +1595,8 @@ mod imp {
                     if let Ok(p) =
                         el.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
                     {
-                        p.Invoke()
-                            .map_err(|e| DesktopError::PlatformError(format!("Invoke: {e}")))?;
+                        target.check_dispatch(el)?;
+                        p.Invoke().map_err(|e| target.dispatch_error("Invoke", e))?;
                         return Ok(true);
                     }
                 }
@@ -925,8 +1604,8 @@ mod imp {
                     if let Ok(p) =
                         el.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
                     {
-                        p.Toggle()
-                            .map_err(|e| DesktopError::PlatformError(format!("Toggle: {e}")))?;
+                        target.check_dispatch(el)?;
+                        p.Toggle().map_err(|e| target.dispatch_error("Toggle", e))?;
                         return Ok(true);
                     }
                 }
@@ -934,8 +1613,8 @@ mod imp {
                     if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(
                         UIA_SelectionItemPatternId,
                     ) {
-                        p.Select()
-                            .map_err(|e| DesktopError::PlatformError(format!("Select: {e}")))?;
+                        target.check_dispatch(el)?;
+                        p.Select().map_err(|e| target.dispatch_error("Select", e))?;
                         return Ok(true);
                     }
                 }
@@ -948,16 +1627,20 @@ mod imp {
                             // is an error on several providers, which turned
                             // "the menu you asked for is open" into a hard
                             // failure the model had to recover from.
-                            Ok(state) if state == ExpandCollapseState_Expanded => return Ok(true),
+                            Ok(state) if state == ExpandCollapseState_Expanded => {
+                                target.check_dispatch(el)?;
+                                return Ok(!target.is_reference());
+                            }
                             // A leaf has nothing to show; say so by falling
                             // through to the next pattern (there is none for
                             // `AXShowMenu`, so the caller reports it honestly)
                             // rather than claiming a menu appeared.
                             Ok(state) if state == ExpandCollapseState_LeafNode => return Ok(false),
+                            Err(_) if target.is_reference() => return Ok(false),
                             _ => {}
                         }
-                        p.Expand()
-                            .map_err(|e| DesktopError::PlatformError(format!("Expand: {e}")))?;
+                        target.check_dispatch(el)?;
+                        p.Expand().map_err(|e| target.dispatch_error("Expand", e))?;
                         return Ok(true);
                     }
                 }
@@ -965,10 +1648,12 @@ mod imp {
                     if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
                         UIA_LegacyIAccessiblePatternId,
                     ) {
-                        p.DoDefaultAction().map_err(|e| {
-                            DesktopError::PlatformError(format!("DoDefaultAction: {e}"))
-                        })?;
-                        return Ok(true);
+                        if legacy_available(&p, target.is_reference()) {
+                            target.check_dispatch(el)?;
+                            p.DoDefaultAction()
+                                .map_err(|e| target.dispatch_error("DoDefaultAction", e))?;
+                            return Ok(true);
+                        }
                     }
                 }
             }
@@ -979,15 +1664,26 @@ mod imp {
     /// Perform a macOS-style AX action on the located element by trying its
     /// UIA-pattern fallback chain. Unknown action → `NotImplemented` (from
     /// `ax_action_to_patterns`); no pattern usable → `NotAvailable`.
-    pub(super) fn perform_action(loc: &AxLocator, action: &str) -> Result<AxActionResult> {
+    pub(super) fn perform_action(
+        uia: &IUIAutomation,
+        loc: &AxLocator,
+        action: &str,
+    ) -> Result<AxActionResult> {
         let patterns = ax_action_to_patterns(action)?;
-        let _com = ComGuard::new();
-        let uia = automation()?;
-        let (el, summary) = resolve(&uia, loc)?.ok_or_else(|| {
+        let (el, summary) = resolve(uia, loc)?.ok_or_else(|| {
             DesktopError::NotAvailable("no element matched role/title; try `ax_snapshot`".into())
         })?;
+        perform_action_on(&el, summary, patterns, Target::Locator)
+    }
+
+    fn perform_action_on(
+        el: &IUIAutomationElement,
+        summary: AxElement,
+        patterns: Vec<AxPattern>,
+        target: Target,
+    ) -> Result<AxActionResult> {
         for pattern in patterns {
-            if try_pattern(&el, pattern)? {
+            if try_pattern(el, pattern, target)? {
                 return Ok(AxActionResult {
                     performed: true,
                     path: "accessibility".into(),
@@ -996,9 +1692,7 @@ mod imp {
                 });
             }
         }
-        Err(DesktopError::NotAvailable(
-            "element exposes no actionable pattern; try click at its center".into(),
-        ))
+        Err(target.unsupported("element exposes no actionable pattern; try click at its center"))
     }
 
     /// Depth-first walk rooted at `el`, bounded by `depth_remaining` and the
@@ -1014,48 +1708,62 @@ mod imp {
         if budget.spend() || depth_remaining == 0 {
             return node;
         }
-        // SAFETY: walker child/sibling traversal. windows-rs surfaces the UIA
-        // "no element" (S_OK + null) result as `Err`, so the `while let Ok`
-        // loop terminates naturally at the end of each child list.
-        let mut next = unsafe { walker.GetFirstChildElementBuildCache(el, cache) };
-        while let Ok(child) = next {
+        walk_children(walker, cache, el, budget, |child| {
             node.children
-                .push(walk(walker, cache, &child, depth_remaining - 1, budget));
-            if budget.exhausted() {
-                break;
-            }
-            // SAFETY: walker sibling traversal; terminates at end of child list.
-            next = unsafe { walker.GetNextSiblingElementBuildCache(&child, cache) };
-        }
+                .push(walk(walker, cache, child, depth_remaining - 1, budget));
+        });
         node
     }
 
-    pub(super) fn query_focused() -> Result<Option<AxElement>> {
-        let _com = ComGuard::new();
-        let uia = automation()?;
-        let cache = cache_request(&uia)?;
-        // SAFETY: documented UIA call; a missing focus surfaces as `Err`.
-        unsafe { uia.GetFocusedElementBuildCache(&cache) }.map_or(Ok(None), |el| {
-            let mut node = node_of(&el);
-            // The focused element is the one the type_text pre-flight gate reads
-            // (`secure` / `settable` / `role`), so it is worth the pattern
-            // probes — and it is the single most important place for `secure` to
-            // be right, because that gate is what stops a synthetic keystroke
-            // from landing in a password box.
-            enrich_resolved(&el, &mut node);
-            Ok(Some(node))
-        })
+    fn walk_children(
+        walker: &IUIAutomationTreeWalker,
+        cache: &IUIAutomationCacheRequest,
+        el: &IUIAutomationElement,
+        budget: &Budget,
+        mut visit: impl FnMut(&IUIAutomationElement),
+    ) {
+        // SAFETY: read-only control-view traversal. A null result terminates traversal.
+        let mut next = unsafe { walker.GetFirstChildElementBuildCache(el, cache) };
+        while let Ok(child) = next {
+            visit(&child);
+            if budget.exhausted() {
+                break;
+            }
+            next = unsafe { walker.GetNextSiblingElementBuildCache(&child, cache) };
+        }
+    }
+
+    fn focused_element(
+        uia: &IUIAutomation,
+        cache: &IUIAutomationCacheRequest,
+        in_scope: impl FnOnce(&IUIAutomationElement) -> bool,
+        strict: bool,
+    ) -> Option<AxElement> {
+        // SAFETY: read-only UIA call; a missing focus surfaces as Err.
+        let el = unsafe { uia.GetFocusedElementBuildCache(cache) }
+            .ok()
+            .filter(in_scope)?;
+        let mut node = node_of(&el);
+        if strict {
+            node.secure = Some(node.secure == Some(true) || current_password_or_unknown(&el));
+        }
+        enrich(&el, &mut node, strict, true);
+        Some(node)
+    }
+
+    pub(super) fn query_focused(uia: &IUIAutomation) -> Result<Option<AxElement>> {
+        let cache = cache_request(uia)?;
+        Ok(focused_element(uia, &cache, |_| true, false))
     }
 
     pub(super) fn query_tree(
+        uia: &IUIAutomation,
         pid: Option<i32>,
         max_depth: u32,
         max_nodes: u32,
     ) -> Result<QueryResult> {
-        let _com = ComGuard::new();
-        let uia = automation()?;
         let hwnd = resolve_root_hwnd(pid)?;
-        let cache = cache_request(&uia)?;
+        let cache = cache_request(uia)?;
         // SAFETY: `hwnd` is a validated visible/foreground window handle.
         let root = unsafe { uia.ElementFromHandleBuildCache(hwnd, &cache) }.map_err(|e| {
             DesktopError::PlatformError(format!("ElementFromHandleBuildCache failed: {e}"))
@@ -1076,6 +1784,7 @@ mod imp {
     }
 
     pub(super) fn query_by_role(
+        uia: &IUIAutomation,
         role: &str,
         pid: Option<i32>,
         max_nodes: u32,
@@ -1084,7 +1793,7 @@ mod imp {
         // Walking + filtering (rather than a UIA property condition) reuses the
         // exact same role mapping the rest of the system sees, so results are
         // consistent with `query_tree` / `desktop_som`.
-        let tree = query_tree(pid, ROLE_SCAN_DEPTH, max_nodes)?;
+        let tree = query_tree(uia, pid, ROLE_SCAN_DEPTH, max_nodes)?;
         let mut out = Vec::new();
         if let Some(root) = tree.element.as_ref() {
             collect_role(root, role, &mut out);
@@ -1111,55 +1820,6 @@ mod imp {
         for child in &node.children {
             collect_role(child, role, out);
         }
-    }
-}
-
-// ── Non-Windows stub ─────────────────────────────────────────────────────────
-//
-// The crate compiles on every host (its unit tests exercise the pure role
-// mapping), but the `windows` crate is only available under `cfg(windows)`.
-// Off-Windows the trait methods report the capability as unavailable — they are
-// never reached in production, where `DesktopPlatform::ax()` is only wired for
-// the Windows target.
-#[cfg(not(windows))]
-mod imp {
-    use aleph_desktop::{DesktopError, Result};
-    use aleph_protocol::desktop_bridge::methods::ax::AxElement;
-
-    fn unavailable<T>() -> Result<T> {
-        Err(DesktopError::NotAvailable(
-            "UI Automation is only available on Windows".into(),
-        ))
-    }
-
-    pub(super) fn query_focused() -> Result<Option<AxElement>> {
-        unavailable()
-    }
-    pub(super) fn query_tree(
-        _pid: Option<i32>,
-        _max_depth: u32,
-        _max_nodes: u32,
-    ) -> Result<aleph_protocol::desktop_bridge::methods::ax::QueryResult> {
-        unavailable()
-    }
-    pub(super) fn query_by_role(
-        _role: &str,
-        _pid: Option<i32>,
-        _max_nodes: u32,
-    ) -> Result<aleph_protocol::desktop_bridge::methods::ax::QueryListResult> {
-        unavailable()
-    }
-    pub(super) fn set_value(
-        _loc: &aleph_protocol::desktop_bridge::methods::ax::AxLocator,
-        _value: &str,
-    ) -> Result<aleph_protocol::desktop_bridge::methods::ax::AxActionResult> {
-        unavailable()
-    }
-    pub(super) fn perform_action(
-        _loc: &aleph_protocol::desktop_bridge::methods::ax::AxLocator,
-        _action: &str,
-    ) -> Result<aleph_protocol::desktop_bridge::methods::ax::AxActionResult> {
-        unavailable()
     }
 }
 

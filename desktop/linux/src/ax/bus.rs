@@ -4,19 +4,25 @@
 //! the session bus) whose root object's children are the running applications
 //! that have accessibility enabled.
 //!
-//! **No handle outlives its call.** Every proxy is addressed by (bus name,
-//! object path) and re-resolved on each use, for the same reason the Windows UI
-//! Automation limb builds a fresh element per call: a handle that outlives its
-//! call goes stale, and a locator that re-resolves is worth more than a handle
-//! that has to be invalidated.
-//!
-//! **The connection does outlive its call**, and that is not the same claim —
-//! see [`Bus::open`] for what it costs and why the distinction matters.
+//! Locators resolve per call. Snapshot references retain a proxy at a unique
+//! provider name and object path, tied to the issuing connection.
 
 use atspi::proxy::accessible::AccessibleProxy;
-use atspi::{AccessibilityConnection, State};
+use atspi::{AccessibilityConnection, Role, State};
 
 use aleph_desktop::{DesktopError, Result};
+
+pub(super) async fn wait_for_process_exit(pid: i32) {
+    loop {
+        // SAFETY: pid came from the bus daemon, and signal zero only probes existence.
+        let process_exists = unsafe { libc::kill(pid, 0) } == 0
+            || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH);
+        if !process_exists {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
 
 /// How many application pid lookups may be in flight at once.
 ///
@@ -74,20 +80,13 @@ pub struct App {
 impl Bus {
     /// A connection to the accessibility bus.
     ///
-    /// # The connection is shared; the objects on it are not
+    /// # The connection is shared
     ///
     /// Opening one is expensive in a way that is invisible from the call site:
     /// it resolves the a11y bus address over the *session* bus and then performs
     /// a second full connection handshake. **Measured on this host: 424 ms**,
     /// paid before any real work on every snapshot, locator resolution and focus
     /// query — several times the cost of the tree walk that follows it.
-    ///
-    /// This module used to open one per call, reasoning by analogy with the
-    /// Windows limb building a fresh `IUIAutomation` each time. The analogy does
-    /// not hold: what goes stale there is an *element handle*, and nothing here
-    /// keeps one. Every proxy is addressed by (bus name, object path) and
-    /// re-resolved per call, exactly as before — a D-Bus connection is a socket,
-    /// not a handle to anything that can change underneath it.
     ///
     /// # A shared connection has to be *checked*, not assumed
     ///
@@ -141,6 +140,69 @@ impl Bus {
     /// The underlying zbus connection, for building interface proxies.
     pub fn connection(&self) -> &zbus::Connection {
         self.conn.connection()
+    }
+
+    pub fn owns(&self, proxy: &AccessibleProxy<'static>) -> bool {
+        let issued = proxy.inner().connection();
+        let current = self.connection();
+        current.server_guid() == issued.server_guid()
+            && current.unique_name().is_some()
+            && current.unique_name() == issued.unique_name()
+    }
+
+    pub async fn provider_has_pid(&self, proxy: &AccessibleProxy<'static>, pid: i32) -> bool {
+        let zbus::names::BusName::Unique(owner) = proxy.inner().destination() else {
+            return false;
+        };
+        let Ok(dbus) = zbus::fdo::DBusProxy::new(self.connection()).await else {
+            return false;
+        };
+        dbus.get_connection_unix_process_id(zbus::names::BusName::Unique(owner.clone()))
+            .await
+            .is_ok_and(|actual| i32::try_from(actual) == Ok(pid))
+    }
+
+    /// Prove current membership in the application and the captured AX window.
+    /// Parent links tolerate sibling reorder and never search for similar nodes.
+    pub async fn in_scope(
+        &self,
+        proxy: &AccessibleProxy<'static>,
+        mut role: Role,
+        root_path: &str,
+        expected_window: Option<&str>,
+    ) -> bool {
+        const MAX_ANCESTORS: usize = 64;
+        let mut current = proxy.clone();
+        let mut found_window = false;
+        for _ in 0..MAX_ANCESTORS {
+            let path = current.inner().path().as_str();
+            if !found_window && super::walk::is_window(role) {
+                if Some(path) != expected_window
+                    || !current.get_state().await.is_ok_and(super::walk::live_state)
+                {
+                    return false;
+                }
+                found_window = true;
+            }
+            if path == root_path {
+                return found_window == expected_window.is_some() && role == Role::Application;
+            }
+            let Ok(parent) = current.parent().await else {
+                return false;
+            };
+            if parent.name_as_str() != Some(proxy.inner().destination().as_str()) {
+                return false;
+            }
+            let Ok(parent) = self.proxy_for(&parent).await else {
+                return false;
+            };
+            let Ok(parent_role) = parent.get_role().await else {
+                return false;
+            };
+            current = parent;
+            role = parent_role;
+        }
+        false
     }
 
     /// Build an `Accessible` proxy for a child reference.

@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use aleph_protocol::desktop_bridge::methods::ax::{
-    clamp_max_nodes, AxElement, QueryByRoleParams, QueryFocusedParams, QueryTreeParams,
-    DEFAULT_MAX_NODES,
+    clamp_max_nodes, AxElement, AxReferenceSnapshot, AxSnapshotRequest, QueryByRoleParams,
+    QueryFocusedParams, QueryTreeParams, DEFAULT_MAX_NODES, MAX_AX_REFERENCE_ROWS,
 };
 
 use crate::error::Result;
@@ -25,9 +25,7 @@ use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 use crate::utils::text_format::truncate_with_marker;
 
-use super::interactable::{
-    affordance_fields, collect_interactable, redact_secure_values, safe_value, usable_bounds,
-};
+use super::interactable::{affordance_fields, redact_secure_values, safe_value, usable_bounds};
 use super::types::DesktopOutput;
 
 // ── Argument types ───────────────────────────────────────────────────────────
@@ -339,23 +337,23 @@ impl AlephTool for DesktopAxQueryByRole {
 const SNAPSHOT_DEFAULT_DEPTH: u32 = 16;
 const SNAPSHOT_MAX_DEPTH: u32 = 32;
 const SNAPSHOT_DEFAULT_ELEMENTS: usize = 200;
-const SNAPSHOT_MAX_ELEMENTS: usize = 500;
 const SNAPSHOT_TEXT_CAP: usize = 120;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DesktopAxSnapshotArgs {
-    /// Target process ID. Omit to snapshot the frontmost application.
+    /// Target PID. Defaults to the frontmost app.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
-    /// Maximum AX subtree depth to walk (default 16, capped at 32).
+    /// Exact window ID where supported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<u64>,
+    /// Tree depth (default 16, max 32).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_depth: Option<u32>,
-    /// Maximum number of elements to return (default 200, capped at 500).
+    /// Rows returned (default 200, max 500).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_elements: Option<usize>,
-    /// Node budget for the underlying accessibility walk (default 1500, ceiling
-    /// 10000). Distinct from `max_elements`: this bounds how much of the app is
-    /// *examined*, that one bounds how much is *returned*.
+    /// Nodes examined (default 1500, max 10000).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_nodes: Option<u32>,
 }
@@ -366,22 +364,22 @@ fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
 
-/// Render one element as a compact JSON object with a pre-computed click
-/// `center`, so the model never has to derive coordinates itself.
+/// Render AX semantics and include a center only when bounds are available.
 ///
 /// `value` goes through [`safe_value`] — a secure field's contents must not
 /// appear here — and the element's own affordances (`actions` / `enabled` /
 /// `settable` / `secure`) are appended by [`affordance_fields`], which omits
 /// everything the model already assumes.
 pub(super) fn element_to_json(index: usize, el: &AxElement) -> serde_json::Value {
-    let (x, y, w, h) = usable_bounds(el).unwrap_or((0.0, 0.0, 0.0, 0.0));
     let mut map = serde_json::Map::new();
     map.insert("index".into(), json!(index));
     map.insert("role".into(), json!(el.role));
-    map.insert(
-        "center".into(),
-        json!([round1(x + w / 2.0), round1(y + h / 2.0)]),
-    );
+    if let Some((x, y, width, height)) = usable_bounds(el) {
+        map.insert(
+            "center".into(),
+            json!([round1(x + width / 2.0), round1(y + height / 2.0)]),
+        );
+    }
     if let Some(name) = el.title.as_deref().filter(|s| !s.trim().is_empty()) {
         map.insert(
             "name".into(),
@@ -398,57 +396,79 @@ pub(super) fn element_to_json(index: usize, el: &AxElement) -> serde_json::Value
     serde_json::Value::Object(map)
 }
 
-/// Flatten an AX tree into an indexed list of interactable elements,
-/// returning `(elements, truncated, total)` where `truncated` is set when the
-/// list was cut to `max_elements` and `total` is the pre-truncation count.
-///
-/// Every returned element carries a `token` minted from a snapshot issued in
-/// `session`'s lane for this app (see [`super::element_ref`]) — the reference a
-/// later `click` / `set_value` / … passes back instead of hand-copied
-/// coordinates.
-pub(super) fn flatten_interactable(
-    root: &AxElement,
-    max_elements: usize,
+fn render_reference_snapshot(
+    snapshot: AxReferenceSnapshot,
+    read: &super::element_ref::SnapshotRead,
     session: &str,
-) -> (Vec<serde_json::Value>, bool, usize) {
-    let mut collected: Vec<&AxElement> = Vec::new();
-    collect_interactable(root, &mut collected);
-    let total = collected.len();
-    let truncated = total > max_elements;
-    let selected: Vec<&AxElement> = collected.into_iter().take(max_elements).collect();
+) -> DesktopOutput {
+    use super::element_ref::{self, ElementRecord};
 
-    // Tokens bind to the *returned* list, so an index in a token always names
-    // an element the model actually saw — never one cut by `max_elements`.
-    let records = selected.iter().map(|el| record_of(el)).collect();
-    let snapshot_id = super::element_ref::issue(session, root.pid, records);
-    let elements = selected
+    let mut records = Vec::new();
+    let mut elements = Vec::with_capacity(snapshot.elements.len());
+    for (index, row) in snapshot.elements.into_iter().enumerate() {
+        let projected = element_to_json(index, &row.element);
+        let token_index = row.reference.map(|reference| {
+            let token_index = records.len();
+            records.push(ElementRecord {
+                pid: snapshot.app_pid,
+                window_id: snapshot.window_id,
+                reference,
+            });
+            token_index
+        });
+        elements.push((projected, token_index));
+    }
+    let generation = if snapshot.app_pid > 0 {
+        match read.publish(session, snapshot.app_pid, records) {
+            Ok(id) => Some(id),
+            Err(error) => return element_ref::token_error_output(&error),
+        }
+    } else {
+        None
+    };
+    let elements: Vec<_> = elements
         .into_iter()
-        .enumerate()
-        .map(|(index, el)| {
-            let mut v = element_to_json(index, el);
-            v["token"] = json!(super::element_ref::render(snapshot_id, index));
-            v
+        .map(|(mut projected, token_index)| {
+            if let Some((id, index)) = generation.zip(token_index) {
+                projected["token"] = json!(element_ref::render(id, index));
+            }
+            projected
         })
         .collect();
-    (elements, truncated, total)
-}
-
-/// The snapshot-identity record one element is issued under.
-///
-/// `center` comes from [`usable_bounds`], which [`collect_interactable`] has
-/// already filtered for — an element in this list always has a real rectangle.
-fn record_of(el: &AxElement) -> super::element_ref::ElementRecord {
-    let (x, y, w, h) = usable_bounds(el).unwrap_or((0.0, 0.0, 0.0, 0.0));
-    super::element_ref::ElementRecord {
-        pid: el.pid,
-        role: el.role.clone(),
-        title: el.title.clone(),
-        center: [x + w / 2.0, y + h / 2.0],
+    let focused = snapshot
+        .focused
+        .map(|element| json!({ "role": element.role, "title": element.title }));
+    let mut data = json!({
+        "app_pid": snapshot.app_pid,
+        "count": elements.len(),
+        "truncated": snapshot.truncated,
+        "tree_truncated": snapshot.tree_truncated,
+        "nodes_walked": snapshot.nodes_walked,
+        "total_interactable": snapshot.total_interactable,
+        "focused": focused,
+        "elements": elements,
+    });
+    if let Some(window_id) = snapshot.window_id {
+        data["window_id"] = json!(window_id);
+    }
+    let message = if !snapshot.tree_available {
+        Some("No accessible UI tree for the target application.".into())
+    } else if snapshot.tree_truncated {
+        Some(
+            "The accessibility walk hit its budget. Narrow the target or increase the node budget."
+                .into(),
+        )
+    } else {
+        None
+    };
+    DesktopOutput {
+        success: true,
+        data: Some(data),
+        message,
     }
 }
 
-/// LLM tool: snapshot an app's interactable UI as a flat, indexed element
-/// list with ready-to-click coordinates (a "set of marks" for the GUI).
+/// Observe accessibility state and issue session-bound native element references.
 #[derive(Clone, Default)]
 pub struct DesktopAxSnapshot {
     pub(super) platform: Option<Arc<dyn aleph_desktop::DesktopPlatform>>,
@@ -470,102 +490,61 @@ impl DesktopAxSnapshot {
 impl AlephTool for DesktopAxSnapshot {
     const NAME: &'static str = "desktop_ax_snapshot";
     const DESCRIPTION: &'static str =
-        "Snapshot an application's interactable UI as a flat, indexed element list — the \
-         reliable way to drive a GUI. Each element carries its accessibility `role`, a \
-         `name`/`value`, a pre-computed `center` [x, y], and a `token` for the \
-         `desktop` tool's `element` argument — prefer it over raw coordinates, \
-         which go stale silently. Elements also report their own \
-         affordances: `actions` lists the exact AX action names that element supports — pass \
-         one of those verbatim to the `desktop` tool's `ax_action`, never a guessed name; \
-         `enabled:false` means the control is greyed out (acting on it will do nothing — fix \
-         the precondition instead); `settable:false` means its value cannot be written with \
-         `set_value`; `secure:true` marks a password field, whose value is never returned and \
-         which must not be typed into. Omit `pid` to snapshot the frontmost app. Available on \
-         macOS (Accessibility permission required), Windows (UI Automation) and Linux (AT-SPI2, \
-         when the desktop has accessibility enabled); where no accessibility layer is available, \
-         fall back to screenshot + gui_locate.";
+        "Read an application's accessibility UI as JSON. Use a row's token as desktop.element \
+         with ax_action or set_value. Pass an action from the row's actions list verbatim. \
+         A token is valid only for the current session and observation. Read a new snapshot \
+         of the same application or window after each action to verify the result. \
+         Coordinates are optional. Disabled or secure controls can restrict actions. \
+         Omit pid and window_id for the frontmost application.";
 
     type Args = DesktopAxSnapshotArgs;
     type Output = DesktopOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let platform = match self.platform.as_ref() {
-            Some(p) => p,
-            None => return Ok(no_platform_output()),
+        use super::element_ref::{self, SnapshotRead};
+
+        let Some(platform) = self.platform.as_ref() else {
+            return Ok(no_platform_output());
         };
-        let ax = match platform.ax() {
-            Some(a) => a,
-            None => return Ok(no_ax_capability_output()),
+        let Some(ax) = platform.ax() else {
+            return Ok(no_ax_capability_output());
         };
-        let max_depth = args
-            .max_depth
-            .unwrap_or(SNAPSHOT_DEFAULT_DEPTH)
-            .min(SNAPSHOT_MAX_DEPTH);
-        let max_elements = args
-            .max_elements
-            .unwrap_or(SNAPSHOT_DEFAULT_ELEMENTS)
-            .min(SNAPSHOT_MAX_ELEMENTS);
-        let params = QueryTreeParams {
+        let read = match SnapshotRead::begin(args.pid) {
+            Ok(read) => read,
+            Err(error) => return Ok(element_ref::token_error_output(&error)),
+        };
+        let session = super::held_inputs::current_session_id();
+        let request = AxSnapshotRequest {
             pid: args.pid,
-            max_depth,
+            window_id: args.window_id,
+            max_depth: args
+                .max_depth
+                .unwrap_or(SNAPSHOT_DEFAULT_DEPTH)
+                .min(SNAPSHOT_MAX_DEPTH),
             max_nodes: clamp_max_nodes(args.max_nodes.unwrap_or(DEFAULT_MAX_NODES)),
+            max_elements: args
+                .max_elements
+                .unwrap_or(SNAPSHOT_DEFAULT_ELEMENTS)
+                .min(MAX_AX_REFERENCE_ROWS),
         };
-        let result = match ax.query_tree(params).await {
-            Ok(r) => r,
-            Err(e) => return Ok(bridge_err_output(e)),
+        let snapshot = match ax.snapshot_references(request).await {
+            Ok(snapshot) => snapshot,
+            Err(error) => return Ok(element_ref::driver_error_output(error)),
         };
-        match result.element {
-            Some(root) => {
-                let (elements, truncated, total) = flatten_interactable(
-                    &root,
-                    max_elements,
-                    &super::held_inputs::current_session_id(),
-                );
-                // Ask the *snapshotted* app which of its elements has focus, not
-                // the system. They differ whenever the target is not frontmost,
-                // which is the ordinary case for a background app.
-                let focused = match ax
-                    .query_focused(QueryFocusedParams {
-                        pid: Some(root.pid),
-                    })
-                    .await
-                {
-                    Ok(Some(el)) => Some(json!({
-                        "role": el.role,
-                        "title": el.title,
-                    })),
-                    _ => None,
-                };
-                Ok(DesktopOutput {
-                    success: true,
-                    data: Some(json!({
-                        "app_pid": root.pid,
-                        "count": elements.len(),
-                        // Two different cuts, kept apart on purpose: `truncated`
-                        // is "the element LIST was capped at max_elements";
-                        // `tree_truncated` is "the WALK ran out of node budget,
-                        // so elements beyond it were never seen at all".
-                        "truncated": truncated,
-                        "tree_truncated": result.truncated,
-                        "nodes_walked": result.node_count,
-                        "total_interactable": total,
-                        "focused": focused,
-                        "elements": elements,
-                    })),
-                    message: result.truncated.then(|| {
-                        "The accessibility walk hit its node budget, so this app has interactable \
-                         elements that were never reached. Narrow the snapshot with `pid` or a \
-                         smaller `max_depth`."
-                            .to_string()
-                    }),
-                })
-            }
-            None => Ok(DesktopOutput {
-                success: true,
-                data: Some(json!({ "count": 0, "truncated": false, "elements": [] })),
-                message: Some("No accessible UI tree for the target application.".to_string()),
-            }),
+        if args.pid.is_some_and(|pid| pid != snapshot.app_pid)
+            || args
+                .window_id
+                .is_some_and(|id| Some(id) != snapshot.window_id)
+            || snapshot
+                .elements
+                .iter()
+                .any(|row| row.element.pid != snapshot.app_pid)
+        {
+            return Ok(DesktopOutput::failed(
+                "The accessibility provider returned a different target.",
+            ));
         }
+        Ok(render_reference_snapshot(snapshot, &read, &session))
     }
 }
 
@@ -642,6 +621,7 @@ mod tests {
         let out = tool
             .call(DesktopAxSnapshotArgs {
                 pid: None,
+                window_id: None,
                 max_depth: None,
                 max_elements: None,
                 max_nodes: None,
@@ -650,87 +630,6 @@ mod tests {
             .unwrap();
         assert!(!out.success);
         assert!(out.message.is_some());
-    }
-
-    #[test]
-    fn flatten_keeps_only_interactable_elements_with_bounds() {
-        let tree = AxElement {
-            role: "AXWindow".to_string(),
-            bounds: Some(rect(0.0, 0.0, 800.0, 600.0)),
-            pid: 7,
-            children: vec![
-                leaf(
-                    "AXButton",
-                    Some("Save"),
-                    Some(rect(100.0, 200.0, 80.0, 40.0)),
-                ),
-                // Decorative text — not interactable, dropped.
-                leaf(
-                    "AXStaticText",
-                    Some("label"),
-                    Some(rect(0.0, 0.0, 50.0, 20.0)),
-                ),
-                // Interactable role but no bounds — cannot be clicked, dropped.
-                leaf("AXTextField", None, None),
-                // Interactable role but degenerate rect — dropped.
-                leaf("AXButton", Some("ghost"), Some(rect(5.0, 5.0, 0.0, 0.0))),
-            ],
-            ..Default::default()
-        };
-        let (elements, truncated, total) = flatten_interactable(&tree, 200, "test");
-        assert!(!truncated);
-        assert_eq!(elements.len(), 1);
-        assert_eq!(total, 1);
-        assert_eq!(elements[0]["role"], "AXButton");
-        assert_eq!(elements[0]["name"], "Save");
-        assert_eq!(elements[0]["index"], 0);
-        // center = top-left + size/2 = (100+40, 200+20).
-        assert_eq!(elements[0]["center"], json!([140.0, 220.0]));
-        // Every listed element carries the token a later action references it by.
-        let token = elements[0]["token"].as_str().expect("token minted");
-        assert!(token.starts_with('s') && token.ends_with(":0"), "{token}");
-    }
-
-    #[test]
-    fn flatten_truncates_and_flags_at_limit() {
-        let children: Vec<AxElement> = (0..5)
-            .map(|i| {
-                leaf(
-                    "AXButton",
-                    Some("btn"),
-                    Some(rect(i as f64 * 10.0, 0.0, 10.0, 10.0)),
-                )
-            })
-            .collect();
-        let tree = AxElement {
-            role: "AXWindow".to_string(),
-            pid: 1,
-            children,
-            ..Default::default()
-        };
-        let (elements, truncated, total) = flatten_interactable(&tree, 3, "test");
-        assert!(truncated);
-        assert_eq!(elements.len(), 3);
-        assert_eq!(total, 5);
-        assert_eq!(elements[2]["index"], 2);
-    }
-
-    #[test]
-    fn flatten_reports_total_before_truncation() {
-        let root = AxElement {
-            role: "AXWindow".to_string(),
-            pid: 1,
-            children: vec![
-                leaf("AXButton", Some("a"), Some(rect(0.0, 0.0, 10.0, 10.0))),
-                leaf("AXButton", Some("b"), Some(rect(0.0, 0.0, 10.0, 10.0))),
-                leaf("AXButton", Some("c"), Some(rect(0.0, 0.0, 10.0, 10.0))),
-            ],
-            ..Default::default()
-        };
-        let (elements, truncated, total) = flatten_interactable(&root, 2, "test");
-        assert_eq!(elements.len(), 2);
-        assert!(truncated);
-        assert_eq!(total, 3);
     }
 
     #[test]
@@ -746,13 +645,7 @@ mod tests {
         );
         healthy.enabled = Some(true);
 
-        let tree = AxElement {
-            role: "AXWindow".to_string(),
-            pid: 1,
-            children: vec![disabled, healthy],
-            ..Default::default()
-        };
-        let (elements, _, _) = flatten_interactable(&tree, 200, "test");
+        let elements = [element_to_json(0, &disabled), element_to_json(1, &healthy)];
 
         // The greyed button says so, and lists the action names it accepts —
         // `ax_action` no longer has to guess one.

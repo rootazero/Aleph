@@ -1,62 +1,57 @@
-//! Element tokens — snapshot-scoped, staleness-checked element references.
+//! Session-bound AX tokens and native mutation admission.
 //!
-//! Ported from cua-driver's `element_token` (`docs/reference/FEATURE_LOCATOR.md`
-//! §7.3 keeps the porting notes). The problem they solve: `ax_snapshot` hands
-//! the model an indexed element list, but the index is only meaningful against
-//! the snapshot that produced it. Without a token the model re-typed `center`
-//! coordinates by hand — and a window that moved between snapshot and click
-//! turned those coordinates into a click on whatever happens to be there now.
-//! A token binds the reference to the snapshot that issued it, so acting on a
-//! superseded observation is a *named, closed-set error* instead of a silent
-//! mis-click.
-//!
-//! # Contract (mirrors cua-driver, adapted to Aleph's locator model)
-//!
-//! * Format `s{snapshot_id:08x}:{element_index}` — short, grep-able in logs,
-//!   the index legible inline. `snapshot_id` 0 never issues.
-//! * One live snapshot per `(session, pid)` lane: `ax_snapshot` is a
-//!   whole-app observation, so re-snapshotting the same app **supersedes the
-//!   previous snapshot immediately** — every token minted from it goes stale.
-//!   A global LRU cap bounds total lanes across sessions and pids.
-//! * Resolution is fail-closed: a stale token is never silently reinterpreted
-//!   as a bare index, and a token combined with explicit targeting arguments
-//!   (`pid` / `role` / `element_title` / `x` / `y`) is a conflict error, not a
-//!   precedence puzzle.
-//! * A resolved token is an *identity* (`pid`, `role`, `title`, last-seen
-//!   center), not a handle: every consumer re-resolves it against the live AX
-//!   tree at action time (the limbs re-walk per call already — see
-//!   `aleph_desktop::ax_rank`), so a moved window is found at its new position
-//!   and a vanished element is a named error, not a stale coordinate.
-//!
-//! The store is process-global state like the sibling ledgers
-//! (`session_lock`, `held_inputs`): one `Mutex`, poison-safe, no `unwrap`.
+//! Each `(session, pid)` lane holds its most recent observation. A published
+//! token names one of that observation's driver-owned handles. Admission and
+//! publication share a mutex, so an action cannot be queued using a token
+//! already superseded by a new observation.
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::LazyLock;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, LazyLock, Weak};
+use std::time::{Duration, Instant};
+
+use aleph_protocol::desktop_bridge::methods::ax::{
+    AxReferenceError, NativeAxReference, AX_REFERENCE_TTL_SECS, MAX_AX_REFERENCE_SNAPSHOTS,
+};
 
 use crate::sync_primitives::Mutex;
 
-/// Cap on live snapshot lanes across all sessions and pids. Snapshots are
-/// large only in the elements vector (bounded by the snapshot's own
-/// `max_elements` ≤ 500), so 32 lanes is a few hundred KB worst case — and far
-/// above any real interleaving of apps a single desktop operator drives.
-const MAX_LANES: usize = 32;
+use super::types::DesktopOutput;
 
-/// The snapshot-scoped identity of one element, recorded at issue time.
-///
-/// `center` is the *last observed* click point in global pixels: a tiebreak
-/// hint for re-resolution, never a coordinate to act on blindly.
-#[derive(Debug, Clone, PartialEq)]
+pub(super) fn token_error_output(error: &TokenError) -> DesktopOutput {
+    reference_error_output(error.code(), error.message())
+}
+
+pub(super) fn driver_error_output(error: aleph_desktop::DesktopError) -> DesktopOutput {
+    match error {
+        aleph_desktop::DesktopError::AxReference { code, message } => {
+            reference_error_output(code.code(), message)
+        }
+        other => DesktopOutput::failed(other.to_string()),
+    }
+}
+
+pub(super) fn reference_error_output(code: &str, message: impl Into<String>) -> DesktopOutput {
+    DesktopOutput {
+        success: false,
+        data: Some(serde_json::json!({ "code": code })),
+        message: Some(super::recovery::with_hint(message.into())),
+    }
+}
+
+const MAX_LANES: usize = MAX_AX_REFERENCE_SNAPSHOTS;
+
+/// Platform handle and safe target metadata from one published observation.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElementRecord {
     pub pid: i32,
-    pub role: String,
-    pub title: Option<String>,
-    pub center: [f64; 2],
+    pub window_id: Option<u64>,
+    pub reference: NativeAxReference,
 }
 
 /// One issued snapshot: the id tokens name, and the elements they index into.
 struct Snapshot {
     id: u32,
+    issued: Instant,
     elements: Vec<ElementRecord>,
 }
 
@@ -70,6 +65,8 @@ struct Store {
     lanes: HashMap<LaneKey, Snapshot>,
     /// Lane keys in issue order (most recent last), for the global LRU cap.
     lru: VecDeque<LaneKey>,
+    pending: HashSet<i32>,
+    observations: Vec<Weak<SnapshotRead>>,
 }
 
 static STORE: LazyLock<Mutex<Store>> = LazyLock::new(|| {
@@ -77,6 +74,8 @@ static STORE: LazyLock<Mutex<Store>> = LazyLock::new(|| {
         next_id: 1,
         lanes: HashMap::new(),
         lru: VecDeque::new(),
+        pending: HashSet::new(),
+        observations: Vec::new(),
     })
 });
 
@@ -91,16 +90,26 @@ pub enum TokenError {
     /// re-snapshotted), evicted (LRU), or never issued by this session.
     Stale,
     /// The snapshot is live but the index is past its element count.
-    IndexOutOfRange { index: usize, count: usize },
+    IndexOutOfRange {
+        index: usize,
+        count: usize,
+    },
     /// The token was combined with explicit targeting arguments
     /// (`pid`/`role`/`element_title`/`x`/`y`): ambiguous intent, refused.
     ConflictingTarget,
-    /// The token resolved, but a fresh look at the live AX tree found no
-    /// element matching its identity — the UI changed since the snapshot.
-    ElementGone,
+    ActionPending,
 }
 
 impl TokenError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidFormat | Self::IndexOutOfRange { .. } => "invalid_reference",
+            Self::Stale => AxReferenceError::StaleReference.code(),
+            Self::ConflictingTarget => "conflicting_reference_target",
+            Self::ActionPending => AxReferenceError::ActionPending.code(),
+        }
+    }
+
     /// The model-facing message. Staleness guidance is part of the contract:
     /// "stale" must read as "re-snapshot and retry", never as "click failed".
     #[must_use]
@@ -109,21 +118,18 @@ impl TokenError {
             Self::InvalidFormat => "element token has invalid format — use a `token` value \
                  exactly as returned by ax_snapshot (shaped like `s00000001:3`)"
                 .to_string(),
-            Self::Stale => "element token is stale — the snapshot that issued it was \
-                 superseded by a newer snapshot of the same app (or evicted). Take a fresh \
-                 ax_snapshot and act on one of its tokens"
+            Self::Stale => "element token is stale. Take a fresh desktop_ax_snapshot and \
+                 use one of the returned tokens"
                 .to_string(),
             Self::IndexOutOfRange { index, count } => format!(
                 "element token index {index} is out of range — its snapshot had {count} \
                  elements. Take a fresh ax_snapshot and use an index it actually returned"
             ),
-            Self::ConflictingTarget => "element token conflicts with explicit targeting \
-                 (pid / role / element_title / x / y) — pass the token alone; it carries its \
-                 own target"
+            Self::ConflictingTarget => "An element token carries its own app, window and element. \
+                 Pass it without other targeting fields or coordinates."
                 .to_string(),
-            Self::ElementGone => "the element this token names no longer matches anything in \
-                 the app's live accessibility tree — the UI changed since the snapshot. Take a \
-                 fresh ax_snapshot"
+            Self::ActionPending => "A native AX action is still pending for this target, or \
+                 overlapped this observation. Take a fresh desktop_ax_snapshot once it settles"
                 .to_string(),
         }
     }
@@ -144,8 +150,13 @@ fn parse(token: &str) -> Result<(u32, usize), TokenError> {
 /// Mint a new snapshot in `session`'s lane for `pid`, superseding whatever
 /// snapshot that lane held, and return its id. Token strings are rendered by
 /// the caller as [`render`] with this id and the element's list index.
+#[cfg(test)]
 pub fn issue(session: &str, pid: i32, elements: Vec<ElementRecord>) -> u32 {
     let mut store = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    issue_locked(&mut store, session, pid, elements)
+}
+
+fn issue_locked(store: &mut Store, session: &str, pid: i32, elements: Vec<ElementRecord>) -> u32 {
     let id = store.next_id;
     // Wrapping matters only after 4 billion snapshots; skip 0 so it never
     // becomes a valid id.
@@ -155,7 +166,14 @@ pub fn issue(session: &str, pid: i32, elements: Vec<ElementRecord>) -> u32 {
     // Same-scope replacement *is* the invalidation: the lane holds exactly one
     // live snapshot, so every token from a previous observation of this app is
     // stale from here on.
-    store.lanes.insert(key.clone(), Snapshot { id, elements });
+    store.lanes.insert(
+        key.clone(),
+        Snapshot {
+            id,
+            issued: Instant::now(),
+            elements,
+        },
+    );
     store.lru.retain(|k| k != &key);
     store.lru.push_back(key);
     while store.lru.len() > MAX_LANES {
@@ -178,22 +196,116 @@ pub fn render(snapshot_id: u32, index: usize) -> String {
 /// resolve in another, so two agents sharing one machine cannot act on each
 /// other's observations by guessing.
 pub fn resolve(session: &str, token: &str) -> Result<ElementRecord, TokenError> {
-    let (id, index) = parse(token)?;
     let store = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    resolve_locked(&store, session, token).cloned()
+}
+
+fn resolve_locked<'a>(
+    store: &'a Store,
+    session: &str,
+    token: &str,
+) -> Result<&'a ElementRecord, TokenError> {
+    let (id, index) = parse(token)?;
     let snapshot = store
         .lanes
         .iter()
         .find(|((lane_session, _), snap)| lane_session == session && snap.id == id)
         .map(|(_, snap)| snap)
+        .filter(|snap| snap.issued.elapsed() < Duration::from_secs(AX_REFERENCE_TTL_SECS))
         .ok_or(TokenError::Stale)?;
     snapshot
         .elements
         .get(index)
-        .cloned()
         .ok_or(TokenError::IndexOutOfRange {
             index,
             count: snapshot.elements.len(),
         })
+}
+
+/// Observe without holding the store lock during provider I/O. For an
+/// unresolved window or frontmost app, check the resolved PID at publication.
+pub(super) struct SnapshotRead {
+    pid: Option<i32>,
+    overlapped: Mutex<HashSet<i32>>,
+}
+
+impl SnapshotRead {
+    pub(super) fn begin(pid: Option<i32>) -> Result<Arc<Self>, TokenError> {
+        let mut store = STORE.lock().unwrap_or_else(|e| e.into_inner());
+        if pid.is_some_and(|pid| store.pending.contains(&pid)) {
+            return Err(TokenError::ActionPending);
+        }
+        let read = Arc::new(Self {
+            pid,
+            overlapped: Mutex::new(store.pending.clone()),
+        });
+        store.observations.retain(|read| read.strong_count() > 0);
+        store.observations.push(Arc::downgrade(&read));
+        Ok(read)
+    }
+
+    pub(super) fn publish(
+        &self,
+        session: &str,
+        pid: i32,
+        records: Vec<ElementRecord>,
+    ) -> Result<u32, TokenError> {
+        let mut store = STORE.lock().unwrap_or_else(|e| e.into_inner());
+        if store.pending.contains(&pid)
+            || self
+                .overlapped
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&pid)
+        {
+            return Err(TokenError::ActionPending);
+        }
+        Ok(issue_locked(&mut store, session, pid, records))
+    }
+}
+
+/// Owned by the dispatched task, so dropping its caller cannot reopen the
+/// observation boundary while driver I/O may still affect the app.
+pub(super) struct PendingAction(i32);
+
+impl PendingAction {
+    pub(super) fn admit(
+        session: &str,
+        token: &str,
+        expected: &ElementRecord,
+    ) -> Result<Self, TokenError> {
+        let mut store = STORE.lock().unwrap_or_else(|e| e.into_inner());
+        if resolve_locked(&store, session, token)? != expected {
+            return Err(TokenError::Stale);
+        }
+        let pid = expected.pid;
+        if !store.pending.insert(pid) {
+            return Err(TokenError::ActionPending);
+        }
+        store.observations.retain(|read| {
+            let Some(read) = read.upgrade() else {
+                return false;
+            };
+            if read.pid.is_none_or(|observed| observed == pid) {
+                read.overlapped
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(pid);
+            }
+            true
+        });
+        Ok(Self(pid))
+    }
+}
+
+impl Drop for PendingAction {
+    fn drop(&mut self) {
+        STORE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pending
+            .remove(&self.0);
+    }
 }
 
 /// Drop every lane — daemon shutdown and tests. Idempotent.
@@ -205,23 +317,25 @@ pub fn clear_all() {
 }
 
 #[cfg(test)]
+pub(super) static TEST_STORE_GUARD: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The store is process-global; serialize the tests that mutate it.
-    static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     fn guard() -> std::sync::MutexGuard<'static, ()> {
-        GUARD.lock().unwrap_or_else(|e| e.into_inner())
+        TEST_STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn records(n: usize) -> Vec<ElementRecord> {
         (0..n)
             .map(|i| ElementRecord {
                 pid: 42,
-                role: "AXButton".to_string(),
-                title: Some(format!("b{i}")),
-                center: [i as f64, 0.0],
+                window_id: None,
+                reference: NativeAxReference {
+                    lease: "driver-lease".into(),
+                    index: i as u32,
+                },
             })
             .collect()
     }
@@ -234,7 +348,7 @@ mod tests {
         let token = render(id, 1);
         assert_eq!(token, format!("s{id:08x}:1"));
         let rec = resolve("s1", &token).unwrap();
-        assert_eq!(rec.title.as_deref(), Some("b1"));
+        assert_eq!(rec.reference.index, 1);
         assert_eq!(rec.pid, 42);
     }
 
@@ -314,6 +428,47 @@ mod tests {
             Err(TokenError::Stale),
             "the eldest lane past the cap is evicted"
         );
+    }
+
+    #[test]
+    fn action_reservation_blocks_overlapping_reads_until_settled() {
+        let _g = guard();
+        clear_all();
+        let reference = records(1).pop().unwrap();
+        let token = render(issue("s1", 42, vec![reference.clone()]), 0);
+        let overlapping = SnapshotRead::begin(Some(42)).unwrap();
+        let unscoped = SnapshotRead::begin(None).unwrap();
+        let unrelated = SnapshotRead::begin(Some(99)).unwrap();
+        let pending = PendingAction::admit("s1", &token, &reference).unwrap();
+        assert!(matches!(
+            SnapshotRead::begin(Some(42)),
+            Err(TokenError::ActionPending)
+        ));
+        assert!(matches!(
+            PendingAction::admit("s1", &token, &reference),
+            Err(TokenError::ActionPending)
+        ));
+        assert!(unrelated.publish("s1", 99, vec![]).is_ok());
+        let unknown_during_action = SnapshotRead::begin(None).unwrap();
+        assert!(unknown_during_action.publish("s1", 99, vec![]).is_ok());
+        drop(pending);
+        assert_eq!(
+            unknown_during_action.publish("s1", 42, vec![]),
+            Err(TokenError::ActionPending)
+        );
+        assert_eq!(
+            overlapping.publish("s1", 42, vec![]),
+            Err(TokenError::ActionPending)
+        );
+        assert_eq!(
+            unscoped.publish("s1", 42, vec![]),
+            Err(TokenError::ActionPending)
+        );
+        assert!(SnapshotRead::begin(Some(42))
+            .unwrap()
+            .publish("s1", 42, vec![])
+            .is_ok());
+        assert_eq!(resolve("s1", &token), Err(TokenError::Stale));
     }
 
     #[test]
