@@ -518,6 +518,87 @@ pub(super) async fn gate_test_agent(
     Arc::new(AgentInstance::new(config, sm).unwrap())
 }
 
+pub(crate) async fn assert_exact_chat_worker_origin(expect_paired: bool) {
+    use crate::gateway::agent_instance::AgentRegistry;
+    use crate::gateway::busy_queue::{
+        paired_shell_owners_for_run, spawn_queued_chat_run, BusyQueueConfig, PanelShellOwners,
+    };
+    use crate::gateway::event_bus::GatewayEventBus;
+    use crate::gateway::handlers::agent::AgentRunManager;
+    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+
+    struct OriginEmitter {
+        request: RunRequest,
+        observed: tokio::sync::mpsc::UnboundedSender<bool>,
+        events: TestEmitter,
+    }
+
+    #[async_trait]
+    impl EventEmitter for OriginEmitter {
+        async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
+            if let StreamEvent::RunAccepted { .. } = &event {
+                let origin = paired_shell_owners_for_run(&self.request);
+                let mut other = self.request.clone();
+                other.run_id.push_str("-nested");
+                assert!(paired_shell_owners_for_run(&other).is_none());
+                other.run_id.clone_from(&self.request.run_id);
+                other.session_key = SessionKey::main("exact-chat-other");
+                assert!(paired_shell_owners_for_run(&other).is_none());
+                self.observed.send(origin.is_some()).unwrap();
+            }
+            self.events.emit(event).await
+        }
+
+        fn next_seq(&self) -> u64 {
+            self.events.next_seq()
+        }
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let agent_id = format!("exact-chat-{}", uuid::Uuid::new_v4());
+    let agent = gate_test_agent(&temp, &agent_id).await;
+    let request = gate_test_request(&SessionKey::main(&agent_id), "exact-chat");
+    let agents = Arc::new(AgentRegistry::new());
+    let manager = AgentRunManager::new(
+        Arc::new(crate::gateway::router::AgentRouter::new()),
+        Arc::new(GatewayEventBus::new()),
+        agents.clone(),
+        Arc::new(SimpleExecutionEngine::new(ExecutionEngineConfig::default())),
+    );
+    let owners = PanelShellOwners {
+        config: Arc::new(tokio::sync::RwLock::new(crate::Config::default())),
+        agents,
+        agent_manager: Arc::new(crate::AgentManager::new(
+            temp.path().join("aleph.toml"),
+            temp.path().join("workspaces"),
+            temp.path().join("agents"),
+            temp.path().join("trash"),
+        )),
+        sessions: Arc::new(FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: temp.path().join("sessions"),
+            ..Default::default()
+        }).unwrap()),
+        sandbox: Arc::new(crate::sandbox::NoopSandbox),
+    };
+    let (observed, mut observations) = tokio::sync::mpsc::unbounded_channel();
+    spawn_queued_chat_run(
+        Arc::new(test_engine()),
+        request.clone(),
+        agent,
+        Arc::new(OriginEmitter { request, observed, events: TestEmitter::new() }),
+        BusyQueueConfig::default(),
+        Locale::En,
+        "Exact chat provenance test",
+        &manager,
+        Some(owners),
+    )
+    .await;
+    let origin = tokio::time::timeout(std::time::Duration::from_secs(5), observations.recv())
+        .await
+        .expect("the exact Chat worker reached the engine");
+    assert_eq!(origin, Some(expect_paired), "exact Chat worker provenance");
+}
+
 /// Task 6 regression: the OLD gate (`agent.try_start_run`, flipping a single
 /// `AgentState` flag shared by the whole `AgentInstance`) rejected a second
 /// run of the SAME agent even on a completely different session — the two

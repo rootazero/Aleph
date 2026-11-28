@@ -56,6 +56,8 @@ mod unattended_redacting_sink;
 mod btw_wire_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) use tests::assert_exact_chat_worker_origin;
 
 pub(crate) use agent_trace_emit_sink::AgentTraceEmitSink;
 pub use concurrency::{AgentSlotUsage, ConcurrencySnapshot};
